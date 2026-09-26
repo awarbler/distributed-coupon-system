@@ -1,4 +1,4 @@
-package edu.utexas.ece382n.coupons; // Declare the package containing the distributed coupon-system classes.
+package coupons; // Declare the package containing the distributed coupon-system classes.
 
 /**
  * Represents a message sent from one distributed process to another.

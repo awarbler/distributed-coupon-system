@@ -1,4 +1,4 @@
-package edu.utexas.ece382n.coupons; // Declare the package containing the distributed coupon-system classes.
+package coupons; // Declare the package containing the distributed coupon-system classes.
 
 /**
  * Represent one event that occurs during a distributed computation.

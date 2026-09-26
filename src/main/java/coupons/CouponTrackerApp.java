@@ -1,4 +1,4 @@
-package edu.utexas.ece382n.coupons; // Declare the package that contains the coupon-system classes.
+package coupons; // Declare the package containing the distributed coupon-system classes.
 
 /**
  * Provides the entry point for the distributed coupon tracking application.

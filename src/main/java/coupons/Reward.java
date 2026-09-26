@@ -1,4 +1,4 @@
-package edu.utexas.ece382n.coupons; // Declare the package containing the coupon-system classes.
+package coupons; // Declare the package containing the distributed coupon-system classes.
 
 /**
  * Represents one reward, rebate, refund, or other value associated with a

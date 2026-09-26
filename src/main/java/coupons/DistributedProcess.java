@@ -1,4 +1,4 @@
-package edu.utexas.ece382n.coupons; // Declare the package that contains the coupon-system classes.
+package coupons; // Declare the package containing the distributed coupon-system classes.
 
 import java.util.ArrayList;
 import java.util.List;

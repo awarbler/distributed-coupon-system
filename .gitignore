@@ -1,0 +1,16 @@
+# Jave compiled files
+*.class
+
+# java build directories
+out/
+build/
+target/
+
+# VS code local workspace settings
+.vscode/
+
+# macOs Metadata
+.DS_Store
+
+# Generated Javadoc documentation
+docs/

@@ -1,146 +1,136 @@
-package coupons; // Declare the package containing the distributed coupon-system classes.
+package coupons;
 
-import java.util.ArrayList; // Provide a resizable collection for storing rewards associated with a transaction.
-import java.util.List; // Provide the List interface used to represent a collection of rewards.
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 
 /**
- * Represents a single coupon transaction and the rewards associated with it.
- *
- * <p>
- * A transaction stores the item's original price, sale price, coupon amount,
- * and a collection of rewards or rebates associated with the purchase.</p>
- *
- * <p>
- * The transaction can calculate checkout savings, cash-equivalent rebates,
- * non-cash rewards, net cash cost, and effective net cost.</p>
- *
- * <p>
- * This class begins as a local data model and will be extended as
- * distributed-systems concepts are introduced in ECE 382N.</p>
+ * Represents the data associated with one coupon transaction.
  */
-public class CouponTransaction { // Represent one coupon transaction and its associated rewards.
+public class CouponTransaction {
 
-    private final double originalPrice; // Store the item's price before sales or discounts.
-    private final double salePrice; // Store the item's sale price before applying the coupon.
-    private final double couponAmount; // Store the coupon amount applied at checkout.
-    private final List<Reward> rewards; // Store the rewards and rebates associated with this transaction.
-
-    /**
-     * Constructs a coupon transaction with its purchase prices and coupon.
-     *
-     * @param originalPrice the item's price before sales or discounts
-     * @param salePrice the item's sale price before applying the coupon
-     * @param couponAmount the coupon amount applied at checkout
-     */
-    public CouponTransaction( // Construct a coupon transaction with an initially empty reward collection.
-            double originalPrice, // Receive the item's original price.
-            double salePrice, // Receive the item's sale price.
-            double couponAmount // Receive the coupon amount applied at checkout.
-    ) { // Begin the constructor.
-        this.originalPrice = originalPrice; // Store the supplied original price.
-        this.salePrice = salePrice; // Store the supplied sale price.
-        this.couponAmount = couponAmount; // Store the supplied coupon amount.
-        this.rewards = new ArrayList<>(); // Create an empty collection for this transaction's rewards.
-    } // End the constructor.
+    private final List<PurchaseItem> purchaseItems; // Store the products purchased in this transaction.
+    private final List<Coupon> coupons; // Store the coupons applied to this transaction.
+    private final List<Promotion> promotions; // Store promotions associated with this transaction.
+    private final List<Payment> payments; // Store payments and reward redemptions used in this transaction.
+    private final List<Reward> rewards; // Store rewards earned from this transaction.
+    private final ReceiptTotals receiptTotals; // Store the final totals reported by the retailer.
 
     /**
-     * Adds a reward or rebate to this transaction.
+     * Creates an empty transaction with its retailer-reported receipt totals.
      *
-     * @param reward the reward or rebate to associate with this transaction
+     * @param receiptTotals totals reported on the retailer's receipt
+     * @throws NullPointerException if receiptTotals is null
      */
-    public void addReward(Reward reward) { // Associate one Reward object with this transaction.
-        rewards.add(reward); // Add the supplied reward to this transaction's reward collection.
-    } // End the addReward method.
+    public CouponTransaction(ReceiptTotals receiptTotals) {
+        this.receiptTotals = Objects.requireNonNull(
+                receiptTotals,
+                "Receipt totals cannot be null."
+        );
+
+        this.purchaseItems = new ArrayList<>();
+        this.coupons = new ArrayList<>();
+        this.promotions = new ArrayList<>();
+        this.payments = new ArrayList<>();
+        this.rewards = new ArrayList<>();
+    }
 
     /**
-     * Calculates the amount paid at checkout after applying the coupon.
+     * Adds a purchased product to this transaction.
      *
-     * @return the sale price minus the coupon amount
+     * @param item purchased product to add
+     * @throws NullPointerException if item is null
      */
-    public double calculateOutOfPocket() { // Calculate the amount paid at checkout.
-        return salePrice - couponAmount; // Subtract the coupon amount from the sale price.
-    } // End the calculateOutOfPocket method.
+    public void addPurchaseItem(PurchaseItem item) {
+        purchaseItems.add(
+                Objects.requireNonNull(
+                        item,
+                        "Purchase item cannot be null."
+                )
+        );
+    }
 
     /**
-     * Calculates the savings realized at checkout.
+     * Adds a coupon to this transaction.
      *
-     * <p>
-     * This value compares the original price with the amount paid at checkout
-     * and does not include later rebates or rewards earned.</p>
-     *
-     * @return the original price minus the checkout cost
+     * @param coupon coupon to add
+     * @throws NullPointerException if coupon is null
      */
-    public double calculateCheckoutSavings() { // Calculate savings already realized at checkout.
-        return originalPrice - calculateOutOfPocket(); // Compare the original price with the checkout payment.
-    } // End the calculateCheckoutSavings method.
+    public void addCoupon(Coupon coupon) {
+        coupons.add(
+                Objects.requireNonNull(
+                        coupon,
+                        "Coupon cannot be null."
+                )
+        );
+    }
 
     /**
-     * Calculates the total value of cash-equivalent rewards and rebates.
+     * Adds a promotion associated with this transaction.
      *
-     * @return the total cash-equivalent reward value
+     * @param promotion promotion to add
+     * @throws NullPointerException if promotion is null
      */
-    public double calculateCashRebates() { // Calculate the combined value of all cash-equivalent rewards.
-        double total = 0.0; // Begin with no cash-equivalent reward value counted.
-
-        for (Reward reward : rewards) { // Examine each Reward object associated with this transaction.
-            if (reward.isCashEquivalent()) { // Determine whether this reward should reduce net cash cost.
-                total += reward.getAmount(); // Add this cash-equivalent reward's amount to the running total.
-            } // End the cash-equivalent check.
-        } // End the traversal of the reward collection.
-
-        return total; // Return the combined cash-equivalent reward value.
-    } // End the calculateCashRebates method.
+    public void addPromotion(Promotion promotion) {
+        promotions.add(
+                Objects.requireNonNull(
+                        promotion,
+                        "Promotion cannot be null."
+                )
+        );
+    }
 
     /**
-     * Calculates the total value of non-cash rewards earned.
+     * Adds a payment or reward redemption to this transaction.
      *
-     * @return the total non-cash reward value
+     * @param payment payment to add
+     * @throws NullPointerException if payment is null
      */
-    public double calculateNonCashRewards() { // Calculate the combined value of all non-cash rewards.
-        double total = 0.0; // Begin with no non-cash reward value counted.
-
-        for (Reward reward : rewards) { // Examine each Reward object associated with this transaction.
-            if (!reward.isCashEquivalent()) { // Determine whether this reward represents non-cash value.
-                total += reward.getAmount(); // Add this non-cash reward's amount to the running total.
-            } // End the non-cash classification check.
-        } // End the traversal of the reward collection.
-
-        return total; // Return the combined non-cash reward value.
-    } // End the calculateNonCashRewards method.
+    public void addPayment(Payment payment) {
+        payments.add(
+                Objects.requireNonNull(
+                        payment,
+                        "Payment cannot be null."
+                )
+        );
+    }
 
     /**
-     * Calculates the net cash cost after all cash-equivalent rewards and
-     * rebates are received.
+     * Adds a reward earned from this transaction.
      *
-     * @return the checkout cost minus all cash-equivalent reward value
+     * @param reward reward to add
+     * @throws NullPointerException if reward is null
      */
-    public double calculateNetCashCost() { // Calculate the cash cost after receiving cash-equivalent rewards.
-        return calculateOutOfPocket() - calculateCashRebates(); // Subtract cash-equivalent rewards from checkout cost.
-    } // End the calculateNetCashCost method.
+    public void addReward(Reward reward) {
+        rewards.add(
+                Objects.requireNonNull(
+                        reward,
+                        "Reward cannot be null."
+                )
+        );
+    }
 
-    /**
-     * Calculates the effective net cost after both cash-equivalent and non-cash
-     * rewards are considered.
-     *
-     * <p>
-     * Non-cash rewards are treated as value received from the transaction, even
-     * though they do not necessarily reduce the amount of cash paid at
-     * checkout.</p>
-     *
-     * @return the net cash cost minus the value of non-cash rewards
-     */
-    public double calculateEffectiveNetCost() { // Calculate cost after accounting for both cash and non-cash value.
-        return calculateNetCashCost() - calculateNonCashRewards(); // Subtract non-cash rewards from the net cash cost.
-    } // End the calculateEffectiveNetCost method.
+    public List<PurchaseItem> getPurchaseItems() {
+        return List.copyOf(purchaseItems);
+    }
 
-    /**
-     * Returns an unmodifiable copy of the rewards associated with this
-     * transaction.
-     *
-     * @return the rewards associated with this transaction
-     */
-    public List<Reward> getRewards() { // Provide read-only access to the transaction's rewards.
-        return List.copyOf(rewards); // Return a copy that callers cannot modify directly.
-    } // End the getRewards method.
+    public List<Coupon> getCoupons() {
+        return List.copyOf(coupons);
+    }
 
-} // End the CouponTransaction class.
+    public List<Promotion> getPromotions() {
+        return List.copyOf(promotions);
+    }
+
+    public List<Payment> getPayments() {
+        return List.copyOf(payments);
+    }
+
+    public List<Reward> getRewards() {
+        return List.copyOf(rewards);
+    }
+
+    public ReceiptTotals getReceiptTotals() {
+        return receiptTotals;
+    }
+}

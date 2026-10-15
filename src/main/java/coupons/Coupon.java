@@ -52,6 +52,11 @@ public class Coupon { // Define the data and rules for one coupon.
                     "Coupon discount cannot be null." // Explain the violated rule.
             );
         }
+        if (discountAmount.signum() <= 0) { // Reject a non-positive discount amount.
+            throw new IllegalArgumentException( // Report invalid coupon data to the caller.
+                    "Coupon discount must be positive." // Explain the violated rule.
+            );
+        }
 
         if (requiredQuantity < 1) { // Require at least one qualifying product.
             throw new IllegalArgumentException( // Reject an impossible coupon quantity.

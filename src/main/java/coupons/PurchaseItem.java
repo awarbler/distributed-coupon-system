@@ -1,30 +1,22 @@
 package coupons;
-
 import java.math.BigDecimal;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Represents one product line in a purchase transaction.
  */
 public class PurchaseItem {
-
+    
     private final String productName; // Store the human-readable product name.
     private final String productCode; // Store the identifier used for the product.
     private final BigDecimal regularUnitPrice; // Store the regular price for one unit.
     private final BigDecimal saleUnitPrice; // Store the actual sale price for one unit.
     private final int quantity; // Store the number of units purchased.
-
+    private final UUID lineItemId;   // Store a unique identifier for this product line.
+    
     /**
-     * Creates a purchased product line.
-     *
-     * @param productName product's display name
-     * @param productCode product's identifier
-     * @param regularUnitPrice regular price for one unit
-     * @param saleUnitPrice sale price for one unit
-     * @param quantity number of units purchased
-     * @throws NullPointerException if a required string is null
-     * @throws IllegalArgumentException if a string is blank, a price is
-     * negative, or quantity is less than one
+     * Creates a new receipt line with a generated identifier.
      */
     public PurchaseItem(
             String productName,
@@ -32,6 +24,36 @@ public class PurchaseItem {
             BigDecimal regularUnitPrice,
             BigDecimal saleUnitPrice,
             int quantity) {
+        this (
+            UUID.randomUUID(),
+            productName,
+            productCode,
+            regularUnitPrice,
+            saleUnitPrice,
+            quantity
+        );
+    }
+
+    /**
+     * Creates a receipt line using an existing identifier.
+     * Use when loading or correcting an existing line.
+     *
+     * @throws NullPointerException if an ID, string, or price is null
+     * @throws IllegalArgumentException if a string is blank, a price
+     *         is negative, or quantity is less than one
+     */
+    public PurchaseItem(
+            UUID lineItemId,
+            String productName,
+            String productCode,
+            BigDecimal regularUnitPrice,
+            BigDecimal saleUnitPrice,
+            int quantity) {
+
+        this.lineItemId = Objects.requireNonNull(
+                lineItemId,
+                "Receipt line ID cannot be null."
+        );
 
         this.productName = requireText(
                 productName,
@@ -73,6 +95,10 @@ public class PurchaseItem {
         this.regularUnitPrice = regularUnitPrice;
         this.saleUnitPrice = saleUnitPrice;
         this.quantity = quantity;
+    }
+
+    public UUID getLineItemId() {
+        return lineItemId;
     }
 
     public String getProductName() {

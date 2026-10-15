@@ -5,16 +5,54 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * Represents the data associated with one coupon transaction.
+ * Represents the contents of one coupon transaction.
+ *
+ * <p>
+ * Receipt identity, status, and revision belong to ReceiptRecord. Receipt-ID
+ * consistency and cross-receipt reward redemption rules must be enforced by the
+ * receipt-aware service/repository.
  */
 public class CouponTransaction {
 
-    private final List<PurchaseItem> purchaseItems; // Store the products purchased in this transaction.
-    private final List<Coupon> coupons; // Store the coupons applied to this transaction.
-    private final List<Promotion> promotions; // Store promotions associated with this transaction.
-    private final List<Payment> payments; // Store payments and reward redemptions used in this transaction.
-    private final List<Reward> rewards; // Store rewards earned from this transaction.
-    private final ReceiptTotals receiptTotals; // Store the final totals reported by the retailer.
+    /**
+     * Purchase lines belonging to this transaction.
+     */
+    private final List<PurchaseItem> purchaseItems;
+
+    /**
+     * Coupon offers and terms associated with this transaction.
+     */
+    private final List<Coupon> coupons;
+
+    /**
+     * Reward-earning promotions associated with this transaction.
+     */
+    private final List<Promotion> promotions;
+
+    /**
+     * Payments, including legacy Register Reward payment entries.
+     */
+    private final List<Payment> payments;
+
+    /**
+     * Generic earned-value records pending reward-model migration.
+     */
+    private final List<Reward> rewards;
+
+    /**
+     * Totals reported by the retailer.
+     */
+    private final ReceiptTotals receiptTotals;
+
+    /**
+     * Actual ordinary coupon deductions recorded on the receipt.
+     */
+    private final List<CouponApplied> appliedCoupons;
+
+    /**
+     * Specific Register Reward redemptions recorded for this transaction.
+     */
+    private final List<RegisterRewardRedemption> registerRewardRedemptions;
 
     /**
      * Creates an empty transaction with its retailer-reported receipt totals.
@@ -33,27 +71,36 @@ public class CouponTransaction {
         this.promotions = new ArrayList<>();
         this.payments = new ArrayList<>();
         this.rewards = new ArrayList<>();
+        this.appliedCoupons = new ArrayList<>();
+        this.registerRewardRedemptions = new ArrayList<>();
     }
 
     /**
-     * Adds a purchased product to this transaction.
+     * Adds a receipt line whose ID is unique within this transaction.
      *
-     * @param item purchased product to add
      * @throws NullPointerException if item is null
+     * @throws IllegalArgumentException if the line ID already exists
      */
     public void addPurchaseItem(PurchaseItem item) {
-        purchaseItems.add(
-                Objects.requireNonNull(
-                        item,
-                        "Purchase item cannot be null."
-                )
-        );
+        Objects.requireNonNull(item, "Purchase item cannot be null.");
+
+        boolean duplicateId = purchaseItems.stream()
+                .anyMatch(existing
+                        -> existing.getLineItemId().equals(item.getLineItemId()));
+
+        if (duplicateId) {
+            throw new IllegalArgumentException(
+                    "Receipt line ID already exists in this transaction."
+            );
+        }
+
+        purchaseItems.add(item);
     }
 
     /**
-     * Adds a coupon to this transaction.
+     * Adds coupon offer information associated with this transaction.
      *
-     * @param coupon coupon to add
+     * @param coupon coupon offer to add
      * @throws NullPointerException if coupon is null
      */
     public void addCoupon(Coupon coupon) {
@@ -108,6 +155,110 @@ public class CouponTransaction {
                         "Reward cannot be null."
                 )
         );
+    }
+
+    /**
+     * Adds an actual coupon deduction.
+     *
+     * <p>
+     * Referenced purchase lines must already exist. An empty association list
+     * means the affected lines are unknown.
+     *
+     * @throws NullPointerException if applied is null
+     * @throws IllegalArgumentException if the application ID already exists or
+     * a referenced receipt line is missing
+     */
+    public void addAppliedCoupon(CouponApplied applied) {
+        Objects.requireNonNull(applied, "Applied coupon cannot be null.");
+
+        boolean duplicateId = appliedCoupons.stream()
+                .anyMatch(existing
+                        -> existing.getApplicationId()
+                                .equals(applied.getApplicationId()));
+
+        if (duplicateId) {
+            throw new IllegalArgumentException(
+                    "Coupon application ID already exists in this transaction."
+            );
+        }
+
+        for (var lineId : applied.getLineItemIds()) {
+            boolean exists = purchaseItems.stream()
+                    .anyMatch(item -> item.getLineItemId().equals(lineId));
+
+            if (!exists) {
+                throw new IllegalArgumentException(
+                        "Applied coupon references an unknown receipt line."
+                );
+            }
+        }
+
+        appliedCoupons.add(applied);
+    }
+
+    /**
+     * Adds the recorded use of a specific Register Reward.
+     *
+     * <p>
+     * Validates redemption-ID and reward-ID uniqueness within this transaction
+     * before adding anything.
+     *
+     * <p>
+     * Receipt-ID consistency and cross-receipt redemption checks belong to the
+     * receipt-aware service/repository.
+     *
+     * @param redemption redemption record to add
+     * @throws NullPointerException if redemption is null
+     * @throws IllegalArgumentException if its redemption ID or reward ID
+     * already exists in this transaction's redemptions
+     */
+    public void addRegisterRewardRedemption(
+            RegisterRewardRedemption redemption) {
+
+        Objects.requireNonNull(
+                redemption,
+                "Register Reward redemption cannot be null."
+        );
+
+        boolean duplicateRedemptionId = registerRewardRedemptions.stream()
+                .anyMatch(existing
+                        -> existing.getRedemptionId()
+                                .equals(redemption.getRedemptionId()));
+
+        if (duplicateRedemptionId) {
+            throw new IllegalArgumentException(
+                    "Redemption ID already exists in this transaction."
+            );
+        }
+
+        boolean duplicateRewardId = registerRewardRedemptions.stream()
+                .anyMatch(existing
+                        -> existing.getRewardId()
+                                .equals(redemption.getRewardId()));
+
+        if (duplicateRewardId) {
+            throw new IllegalArgumentException(
+                    "Register Reward is already redeemed in this transaction."
+            );
+        }
+
+        registerRewardRedemptions.add(redemption);
+    }
+
+    /**
+     * Returns the recorded Register Reward redemptions.
+     *
+     * @return an unmodifiable copy of the redemption list
+     */
+    public List<RegisterRewardRedemption> getRegisterRewardRedemptions() {
+        return List.copyOf(registerRewardRedemptions);
+    }
+
+    /**
+     * Returns an unmodifiable copy of actual coupon deductions.
+     */
+    public List<CouponApplied> getAppliedCoupons() {
+        return List.copyOf(appliedCoupons);
     }
 
     public List<PurchaseItem> getPurchaseItems() {

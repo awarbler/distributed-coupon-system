@@ -24,6 +24,12 @@ import coupons.CouponTransaction;
  * <p>
  * The application service manages user confirmation and approval before calling
  * operations that require them.
+ * 
+ *  <p>Before saving or updating, implementations must validate receipt
+ * relationships using ReceiptValidator or equivalent checks. Every
+ * Register Reward redemption must reference the transaction ID supplied
+ * to the operation. Invalid relationships must be rejected without
+ * changing stored data or history.
  *
  * <p>
  * All methods reject null arguments with NullPointerException.

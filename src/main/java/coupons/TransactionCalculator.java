@@ -52,10 +52,11 @@ public class TransactionCalculator {
     }
 
     /**
-     * Calculates the total value of all coupons applied to the transaction.
+     * Calculates actual ordinary coupon deductions.
      *
      * @param transaction transaction to calculate
-     * @return combined coupon discount
+     * @return total applied coupon deductions
+     * @throws NullPointerException if transaction is null
      */
     public BigDecimal calculateCouponTotal(
             CouponTransaction transaction) {
@@ -64,8 +65,8 @@ public class TransactionCalculator {
 
         BigDecimal total = BigDecimal.ZERO;
 
-        for (Coupon coupon : transaction.getCoupons()) {
-          total = total.add(coupon.getDiscountAmount());
+        for (CouponApplied applied : transaction.getAppliedCoupons()) {
+            total = total.add(applied.getAppliedAmount());
         }
 
         return total;
@@ -104,20 +105,27 @@ public class TransactionCalculator {
     }
 
     /**
-     * Calculates Register Rewards redeemed on the transaction.
+     * Calculates actual Register Reward redemption amounts.
+     *
+     * <p>
+     * Legacy Register Reward payment entries are not included.
      *
      * @param transaction transaction to calculate
-     * @return total Register Reward value redeemed
+     * @return total recorded Register Reward redemptions
+     * @throws NullPointerException if transaction is null
      */
     public BigDecimal calculateRegisterRewardsRedeemed(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
+        BigDecimal total = BigDecimal.ZERO;
 
-        return calculatePaymentsByType(
-                transaction,
-                PaymentType.REGISTER_REWARD
-        );
+        for (RegisterRewardRedemption redemption
+                : transaction.getRegisterRewardRedemptions()) {
+            total = total.add(redemption.getRedeemedAmount());
+        }
+
+        return total;
     }
 
     /**

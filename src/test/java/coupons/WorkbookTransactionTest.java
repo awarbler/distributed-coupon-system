@@ -1,22 +1,27 @@
 package coupons;
+
 import java.math.BigDecimal;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.Test;
 
-
 class WorkbookTransactionTest {
-    @Test 
-    void sheetOneTransactionPreserversRecordedItemsAndPayments(){
-        CouponTransaction transaction = 
-                new CouponTransaction(
-                    new ReceiptTotals(BigDecimal.valueOf(1.04), BigDecimal.valueOf(3.60))
+
+    @Test
+    void sheetOneTransactionPreserversRecordedItemsAndPayments() {
+        UUID receiptId = UUID.randomUUID();
+        UUID rewardId = UUID.randomUUID();
+
+        CouponTransaction transaction
+                = new CouponTransaction(
+                        new ReceiptTotals(BigDecimal.valueOf(1.04), BigDecimal.valueOf(3.60))
                 );
         transaction.addPurchaseItem(
                 new PurchaseItem(
                         "Neutrogena",
                         "07050111090",
-                        BigDecimal.valueOf(7.79)        ,
+                        BigDecimal.valueOf(7.79),
                         BigDecimal.valueOf(5.99),
                         2
                 )
@@ -30,8 +35,13 @@ class WorkbookTransactionTest {
                         2
                 )
         );
-        transaction.addPayment(
-                new Payment(PaymentType.REGISTER_REWARD, BigDecimal.valueOf(2.00  ))
+        transaction.addRegisterRewardRedemption(
+                new RegisterRewardRedemption(
+                        rewardId,
+                        receiptId,
+                        new BigDecimal("2.00"),
+                        null
+                )
         );
         transaction.addPayment(
                 new Payment(PaymentType.WALGREENS_CASH, BigDecimal.valueOf(10.00))
@@ -41,11 +51,11 @@ class WorkbookTransactionTest {
                 new Payment(PaymentType.CASH, BigDecimal.valueOf(3.60))
         );
 
-        PurchaseItem neutrogena =
-                transaction.getPurchaseItems().get(0);
+        PurchaseItem neutrogena
+                = transaction.getPurchaseItems().get(0);
 
-        PurchaseItem lysol =
-                transaction.getPurchaseItems().get(1);
+        PurchaseItem lysol
+                = transaction.getPurchaseItems().get(1);
 
         assertEquals(
                 "Neutrogena",
@@ -83,43 +93,41 @@ class WorkbookTransactionTest {
                 transaction.getReceiptTotals().getFinalTotal()
         );
 
+        assertEquals(1, transaction.getRegisterRewardRedemptions().size());
+
+        RegisterRewardRedemption redemption
+                = transaction.getRegisterRewardRedemptions().get(0);
+
+        assertEquals(rewardId, redemption.getRewardId());
+        assertEquals(receiptId, redemption.getRedeemedReceiptId());
         assertEquals(
-                3,
-                transaction.getPayments().size()
+                new BigDecimal("2.00"),
+                redemption.getRedeemedAmount()
         );
 
+        assertEquals(2, transaction.getPayments().size());
+
+
         assertEquals(
-                PaymentType.REGISTER_REWARD,
+                PaymentType.WALGREENS_CASH,
                 transaction.getPayments().get(0).getPaymentType()
         );
 
         assertEquals(
-                BigDecimal.valueOf(2.00),
+                BigDecimal.valueOf(10.00),
                 transaction.getPayments().get(0).getAmount()
         );
 
         assertEquals(
-                PaymentType.WALGREENS_CASH,
+                PaymentType.CASH,
                 transaction.getPayments().get(1).getPaymentType()
         );
 
         assertEquals(
-                BigDecimal.valueOf(10.00),
+                BigDecimal.valueOf(3.60),
                 transaction.getPayments().get(1).getAmount()
         );
 
-        assertEquals(
-                PaymentType.CASH,
-                transaction.getPayments().get(2).getPaymentType()
-        );
-
-        assertEquals(
-                BigDecimal.valueOf(3.60),
-                transaction.getPayments().get(2).getAmount()
-        );
-
-
-
     }
-    
+
 }

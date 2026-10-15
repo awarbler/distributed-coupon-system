@@ -1,5 +1,12 @@
 package coupons; // Place the CouponSystem class in the coupons package.
+
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.UUID;
+
+import coupons.repository.ReceiptRecord;
+import coupons.repository.ReceiptStatus;
+
 /**
  * Coordinates the coupon application's transaction and distributed-system
  * workflows.
@@ -19,25 +26,38 @@ public class CouponSystem { // Define the main application service for the coupo
      * Runs the current coupon-system demonstration.
      */
     public void run() { // Start the current application workflow.
-        CouponTransaction transaction = createWalgreensTransaction(); // Create the Walgreens transaction used by the current demonstration.
+        ReceiptRecord receipt = createWalgreensTransaction();
+        CouponTransaction transaction = receipt.transaction();
         displayTransaction(transaction); // Display the transaction calculations.
         runDistributedExample(); // Run the current distributed-system demonstration.
     } // End the run method.
 
     /**
-     * Creates the Walgreens transaction currently used by the application.
+     * Creates the sample receipt with one shared receipt identifier.
      *
-     * @return the completed Walgreens transaction used by the demonstration
+     * @return the sample receipt at its initial revision
      */
-    private CouponTransaction createWalgreensTransaction() { // Build the Walgreens transaction represented by the current receipt.
-        ReceiptTotals receiptTotals = new ReceiptTotals(BigDecimal.valueOf(1.31), BigDecimal.valueOf(7.28)); // Record the tax and final total printed on the receipt.
+    private ReceiptRecord createWalgreensTransaction() { // Build the Walgreens transaction represented by the current receipt.
+        UUID receiptId = UUID.randomUUID(); // Create a unique identifier for the current receipt.
+
+        ReceiptTotals receiptTotals = new ReceiptTotals(
+                BigDecimal.valueOf(1.31),
+                BigDecimal.valueOf(7.28)); // Record the tax and final total printed on the receipt.
+
         CouponTransaction transaction = new CouponTransaction(receiptTotals); // Create the transaction using the retailer-reported receipt totals.
 
         addPurchaseItems(transaction); // Add the products purchased during the transaction.
         addCoupons(transaction); // Add the coupons applied during the transaction.
+        addAppliedCoupons(transaction);
+        addRegisterRewardRedemptions(transaction, receiptId);
         addPayments(transaction); // Add the payments and redeemed rewards used during checkout.
 
-        return transaction; // Return the completed transaction to the caller.
+        return new ReceiptRecord(
+                receiptId, // Use the current receipt identifier.
+                ReceiptStatus.ACTIVE, // Record that this is the initial revision of the receipt.
+                1,
+                transaction
+        ); // Return the completed transaction to the caller.
     } // End the createWalgreensTransaction method.
 
     /**
@@ -48,29 +68,29 @@ public class CouponSystem { // Define the main application service for the coupo
     private void addPurchaseItems(CouponTransaction transaction) { // Add each purchased product to the transaction.
         transaction.addPurchaseItem( // Add the Gain product line.
                 new PurchaseItem(
-        "Gain",
-        "01234567890",
-        BigDecimal.valueOf(11.99),
-        BigDecimal.valueOf(9.99),
-        1
-) // Finish creating the Gain purchase record.
+                        "Gain",
+                        "01234567890",
+                        BigDecimal.valueOf(11.99),
+                        BigDecimal.valueOf(9.99),
+                        1
+                ) // Finish creating the Gain purchase record.
         ); // Finish adding the Gain purchase record.
         // Add the Tide product line. Create the Tide purchase record. Store the product's display name.Store the product identifier. Record the regular unit price. Record the sale unit price. Record that one unit was purchased.  Finish creating the Tide purchase record.
 
-        transaction.addPurchaseItem( 
-                new PurchaseItem( 
-                        "Tide Pods", 
-                        "03700000997", 
+        transaction.addPurchaseItem(
+                new PurchaseItem(
+                        "Tide Pods",
+                        "03700000997",
                         BigDecimal.valueOf(17.99),
-                        BigDecimal.valueOf(15.99), 
-                        1 
+                        BigDecimal.valueOf(15.99),
+                        1
                 )
         ); // Finish adding the Tide purchase record.
 
         transaction.addPurchaseItem( // Add the Dawn Platinum product line.
                 new PurchaseItem( // Create the Dawn Platinum purchase record.
                         "Dawn Platinum", // Store the product's display name.
-                                "DAWN-PLATINUM", // Store the product identifier.
+                        "DAWN-PLATINUM", // Store the product identifier.
                         BigDecimal.valueOf(7.49), // Record the regular unit price.
                         BigDecimal.valueOf(4.99), // Record the sale unit price.
                         1 // Record that one unit was purchased.
@@ -136,19 +156,6 @@ public class CouponSystem { // Define the main application service for the coupo
      * @param transaction transaction receiving the payment records
      */
     private void addPayments(CouponTransaction transaction) { // Add each payment or redeemed reward used during checkout.
-        transaction.addPayment( // Add the first Register Reward redemption.
-                new Payment( // Create the Register Reward payment record.
-                        PaymentType.REGISTER_REWARD, // Identify this payment as a Register Reward.
-                        BigDecimal.valueOf(7.00) // Record seven dollars of redeemed Register Reward value.
-                ) // Finish creating the Register Reward payment.
-        ); // Finish adding the first Register Reward payment.
-
-        transaction.addPayment( // Add the second Register Reward redemption.
-                new Payment( // Create the second Register Reward payment record.
-                        PaymentType.REGISTER_REWARD, // Identify this payment as a Register Reward.
-                        BigDecimal.valueOf(5.00) // Record five dollars of redeemed Register Reward value.
-                ) // Finish creating the Register Reward payment.
-        ); // Finish adding the second Register Reward payment.
 
         transaction.addPayment( // Add the Walgreens Cash redemption.
                 new Payment( // Create the Walgreens Cash payment record.
@@ -157,6 +164,85 @@ public class CouponSystem { // Define the main application service for the coupo
                 ) // Finish creating the Walgreens Cash payment.
         ); // Finish adding the Walgreens Cash payment.
     } // End the addPayments method.
+
+    /**
+     * Records actual ordinary coupon deductions in the existing sample.
+     *
+     * <p>
+     * Labels use sample descriptions rather than verified printed text. Item
+     * associations remain unknown.
+     *
+     * @param transaction transaction receiving the deductions
+     */
+    private void addAppliedCoupons(CouponTransaction transaction) {
+        transaction.addAppliedCoupon(new CouponApplied(
+                "$3 off Tide",
+                new BigDecimal("3.00"),
+                List.of()
+        ));
+
+        transaction.addAppliedCoupon(new CouponApplied(
+                "$2 off Gain",
+                new BigDecimal("2.00"),
+                List.of()
+        ));
+
+        transaction.addAppliedCoupon(new CouponApplied(
+                "$4 off 2 Dawn",
+                new BigDecimal("4.00"),
+                List.of()
+        ));
+    }
+
+    /**
+     * Records the sample's two Register Reward redemptions.
+     *
+     * <p>
+     * Instrument IDs are generated for this demonstration. Original earning
+     * details and redemption dates are unknown. This method does not persist or
+     * verify reward instruments.
+     *
+     * @param transaction transaction receiving the redemptions
+     * @param receiptId identifier of the enclosing receipt
+     */
+    private void addRegisterRewardRedemptions(
+            CouponTransaction transaction,
+            UUID receiptId) {
+
+        RegisterReward sevenDollarReward = new RegisterReward(
+                "Unknown source",
+                new BigDecimal("7.00"),
+                null,
+                null,
+                null
+        );
+
+        RegisterReward fiveDollarReward = new RegisterReward(
+                "Unknown source",
+                new BigDecimal("5.00"),
+                null,
+                null,
+                null
+        );
+
+        transaction.addRegisterRewardRedemption(
+                new RegisterRewardRedemption(
+                        sevenDollarReward.getRewardId(),
+                        receiptId,
+                        new BigDecimal("7.00"),
+                        null
+                )
+        );
+
+        transaction.addRegisterRewardRedemption(
+                new RegisterRewardRedemption(
+                        fiveDollarReward.getRewardId(),
+                        receiptId,
+                        new BigDecimal("5.00"),
+                        null
+                )
+        );
+    }
 
     /**
      * Displays the calculated and retailer-reported transaction totals.
@@ -169,7 +255,7 @@ public class CouponSystem { // Define the main application service for the coupo
 
         System.out.println( // Print the number of purchase lines.
                 "Purchase lines: " // Begin the purchase-line output.
-                        + transaction.getPurchaseItems().size() // Append the number of purchase lines.
+                + transaction.getPurchaseItems().size() // Append the number of purchase lines.
         ); // Finish printing the purchase-line count.
 
         System.out.printf( // Print the regular-price merchandise total.

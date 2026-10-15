@@ -1,5 +1,5 @@
 package coupons; // Place the Coupon class in the coupons package.
-
+import java.math.BigDecimal;
 import java.time.LocalDate; // Represent the coupon's stated calendar expiration date.
 import java.util.Objects; // Provide null checking for required object values.
 
@@ -9,7 +9,7 @@ import java.util.Objects; // Provide null checking for required object values.
 public class Coupon { // Define the data and rules for one coupon.
 
     private final String couponDescription; // Store the human-readable description of the coupon.
-    private final double discountAmount; // Store the total monetary discount provided by the coupon.
+    private final BigDecimal discountAmount; // Store the total monetary discount provided by the coupon.
     private final int requiredQuantity; // Store how many qualifying products are required.
     private final CouponType couponType; // Store whether this is a manufacturer or store coupon.
     private final LocalDate expirationDate; // Store the coupon's stated expiration date independently from whether it actually applied.
@@ -29,10 +29,12 @@ public class Coupon { // Define the data and rules for one coupon.
      */
     public Coupon( // Construct one valid coupon.
             String couponDescription, // Receive the coupon's description.
-            double discountAmount, // Receive the coupon's monetary discount.
+            BigDecimal discountAmount, // Receive the coupon's monetary discount.
             int requiredQuantity, // Receive the required product quantity.
             CouponType couponType, // Receive the coupon classification.
             LocalDate expirationDate) { // Receive the coupon's stated expiration date.
+
+
 
         Objects.requireNonNull( // Reject a missing coupon description immediately.
                 couponDescription, // Validate the supplied description.
@@ -45,9 +47,9 @@ public class Coupon { // Define the data and rules for one coupon.
             );
         }
 
-        if (!Double.isFinite(discountAmount) || discountAmount <= 0.0) { // Reject non-finite or non-positive discount amounts.
-            throw new IllegalArgumentException( // Reject an invalid monetary value.
-                    "Coupon discount must be a finite positive number." // Explain the violated rule.
+        if (discountAmount == null) { // Reject a missing discount amount.
+            throw new IllegalArgumentException( // Report invalid coupon data to the caller.
+                    "Coupon discount cannot be null." // Explain the violated rule.
             );
         }
 
@@ -83,7 +85,7 @@ public class Coupon { // Define the data and rules for one coupon.
      *
      * @return coupon discount
      */
-    public double getDiscountAmount() { // Provide read-only access to the discount value.
+    public BigDecimal getDiscountAmount() { // Provide read-only access to the discount value.
         return discountAmount; // Return the stored coupon discount.
     }
 

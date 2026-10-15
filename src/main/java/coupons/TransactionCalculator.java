@@ -1,5 +1,6 @@
 package coupons;
 
+import java.math.BigDecimal;
 import java.util.Objects;
 
 /**
@@ -13,15 +14,18 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return combined regular-price value of all purchased items
      */
-    public double calculateRegularMerchandiseTotal(
+    public BigDecimal calculateRegularMerchandiseTotal(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
-        double total = 0.0;
+        BigDecimal total = BigDecimal.ZERO;
 
         for (PurchaseItem item : transaction.getPurchaseItems()) {
-            total += item.getRegularUnitPrice() * item.getQuantity();
+            total = total.add(
+                    item.getRegularUnitPrice()
+                            .multiply(BigDecimal.valueOf(item.getQuantity()))
+            );
         }
 
         return total;
@@ -33,15 +37,15 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return combined sale-price value of all purchased items
      */
-    public double calculateSaleMerchandiseTotal(
+    public BigDecimal calculateSaleMerchandiseTotal(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
-        double total = 0.0;
+        BigDecimal total = BigDecimal.ZERO;
 
         for (PurchaseItem item : transaction.getPurchaseItems()) {
-            total += item.calculateLineTotal();
+            total = total.add(item.calculateLineTotal());
         }
 
         return total;
@@ -53,15 +57,15 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return combined coupon discount
      */
-    public double calculateCouponTotal(
+    public BigDecimal calculateCouponTotal(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
-        double total = 0.0;
+        BigDecimal total = BigDecimal.ZERO;
 
         for (Coupon coupon : transaction.getCoupons()) {
-            total += coupon.getDiscountAmount();
+          total = total.add(coupon.getDiscountAmount());
         }
 
         return total;
@@ -73,13 +77,13 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return sale merchandise total minus coupon discounts
      */
-    public double calculateAfterCouponTotal(
+    public BigDecimal calculateAfterCouponTotal(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
         return calculateSaleMerchandiseTotal(transaction)
-                - calculateCouponTotal(transaction);
+                .subtract(calculateCouponTotal(transaction));
     }
 
     /**
@@ -88,7 +92,7 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return total Walgreens Cash redeemed
      */
-    public double calculateWalgreensCashRedeemed(
+    public BigDecimal calculateWalgreensCashRedeemed(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
@@ -105,7 +109,7 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return total Register Reward value redeemed
      */
-    public double calculateRegisterRewardsRedeemed(
+    public BigDecimal calculateRegisterRewardsRedeemed(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
@@ -122,13 +126,13 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return combined Walgreens Cash and Register Reward redemptions
      */
-    public double calculateRewardRedemptionTotal(
+    public BigDecimal calculateRewardRedemptionTotal(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
         return calculateWalgreensCashRedeemed(transaction)
-                + calculateRegisterRewardsRedeemed(transaction);
+                .add(calculateRegisterRewardsRedeemed(transaction));
     }
 
     /**
@@ -138,13 +142,13 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return merchandise amount remaining after reward redemptions
      */
-    public double calculateAfterRewardRedemptions(
+    public BigDecimal calculateAfterRewardRedemptions(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
         return calculateAfterCouponTotal(transaction)
-                - calculateRewardRedemptionTotal(transaction);
+                .subtract(calculateRewardRedemptionTotal(transaction));
     }
 
     /**
@@ -154,13 +158,13 @@ public class TransactionCalculator {
      * @param transaction transaction to calculate
      * @return expected checkout amount
      */
-    public double calculateExpectedCheckoutAmount(
+    public BigDecimal calculateExpectedCheckoutAmount(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
         return calculateAfterRewardRedemptions(transaction)
-                + transaction.getReceiptTotals().getTaxAmount();
+                .add(transaction.getReceiptTotals().getTaxAmount());
     }
 
     /**
@@ -170,19 +174,19 @@ public class TransactionCalculator {
      * @param transaction transaction to compare
      * @return receipt total minus calculated checkout amount
      */
-    public double calculateReceiptDifference(
+    public BigDecimal calculateReceiptDifference(
             CouponTransaction transaction) {
 
         validateTransaction(transaction);
 
         return transaction.getReceiptTotals().getFinalTotal()
-                - calculateExpectedCheckoutAmount(transaction);
+                .subtract(calculateExpectedCheckoutAmount(transaction));
     }
 
     /**
      * Calculates the total amount recorded for a particular payment type.
      */
-    private double calculatePaymentsByType(
+    private BigDecimal calculatePaymentsByType(
             CouponTransaction transaction,
             PaymentType paymentType) {
 
@@ -191,11 +195,11 @@ public class TransactionCalculator {
                 "Payment type cannot be null."
         );
 
-        double total = 0.0;
+        BigDecimal total = BigDecimal.ZERO;
 
         for (Payment payment : transaction.getPayments()) {
             if (payment.getPaymentType() == paymentType) {
-                total += payment.getAmount();
+                total = total.add(payment.getAmount());
             }
         }
 

@@ -1,5 +1,5 @@
 package coupons; // Place the Payment class in the coupons package.
-
+import java.math.BigDecimal;
 import java.util.Objects; // Provide null checking for required object values.
 
 /**
@@ -8,7 +8,7 @@ import java.util.Objects; // Provide null checking for required object values.
 public class Payment { // Define the data and rules for one payment record.
 
     private final PaymentType paymentType; // Store the type of payment or reward redemption.
-    private final double amount; // Store the monetary amount applied to the transaction.
+    private final BigDecimal amount; // Store the monetary amount applied to the transaction.
 
     /**
      * Creates a payment or redeemed-value record.
@@ -18,16 +18,20 @@ public class Payment { // Define the data and rules for one payment record.
      * @throws NullPointerException if paymentType is null
      * @throws IllegalArgumentException if amount is not greater than zero
      */
-    public Payment(PaymentType paymentType, double amount) { // Create one valid payment record.
+    public Payment(PaymentType paymentType, BigDecimal amount) { // Create one valid payment record.
 
         this.paymentType = Objects.requireNonNull( // Require every payment to have a known type.
                 paymentType, // Validate the payment type supplied by the caller.
                 "Payment type cannot be null." // Explain why construction failed.
         );
 
-        if (!Double.isFinite(amount) || amount <= 0.0) { // Require a finite positive payment amount.
-            throw new IllegalArgumentException( // Prevent an invalid payment from being created.
-                    "Payment amount must be a finite positive number." // Explain the violated payment rule.
+        Objects.requireNonNull( // Require every payment to have a known amount.
+                amount, // Validate the payment amount supplied by the caller.
+                "Payment amount cannot be null." // Explain why construction failed.
+        );
+        if (amount.signum() <= 0) {
+            throw new IllegalArgumentException( // Reject any payment that is not greater than zero.
+                    "Payment amount must be greater than zero." // Explain why construction failed.
             );
         }
 
@@ -48,7 +52,7 @@ public class Payment { // Define the data and rules for one payment record.
      *
      * @return payment amount
      */
-    public double getAmount() { // Provide read-only access to the payment amount.
+    public BigDecimal getAmount() { // Provide read-only access to the payment amount.
         return amount; // Return the stored monetary amount.
     }
 }

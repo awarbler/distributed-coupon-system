@@ -1,5 +1,5 @@
 package coupons; // Place the CouponSystem class in the coupons package.
-
+import java.math.BigDecimal;
 /**
  * Coordinates the coupon application's transaction and distributed-system
  * workflows.
@@ -30,7 +30,7 @@ public class CouponSystem { // Define the main application service for the coupo
      * @return the completed Walgreens transaction used by the demonstration
      */
     private CouponTransaction createWalgreensTransaction() { // Build the Walgreens transaction represented by the current receipt.
-        ReceiptTotals receiptTotals = new ReceiptTotals(1.31, 7.28); // Record the tax and final total printed on the receipt.
+        ReceiptTotals receiptTotals = new ReceiptTotals(BigDecimal.valueOf(1.31), BigDecimal.valueOf(7.28)); // Record the tax and final total printed on the receipt.
         CouponTransaction transaction = new CouponTransaction(receiptTotals); // Create the transaction using the retailer-reported receipt totals.
 
         addPurchaseItems(transaction); // Add the products purchased during the transaction.
@@ -47,31 +47,32 @@ public class CouponSystem { // Define the main application service for the coupo
      */
     private void addPurchaseItems(CouponTransaction transaction) { // Add each purchased product to the transaction.
         transaction.addPurchaseItem( // Add the Gain product line.
-                new PurchaseItem( // Create the Gain purchase record.
-                        "Gain Laundry Detergent", // Store the product's display name.
-                        "GAIN", // Store the product identifier.
-                        11.99, // Record the regular unit price.
-                        9.99, // Record the sale unit price.
-                        1 // Record that one unit was purchased.
-                ) // Finish creating the Gain purchase record.
+                new PurchaseItem(
+        "Gain",
+        "01234567890",
+        BigDecimal.valueOf(11.99),
+        BigDecimal.valueOf(9.99),
+        1
+) // Finish creating the Gain purchase record.
         ); // Finish adding the Gain purchase record.
+        // Add the Tide product line. Create the Tide purchase record. Store the product's display name.Store the product identifier. Record the regular unit price. Record the sale unit price. Record that one unit was purchased.  Finish creating the Tide purchase record.
 
-        transaction.addPurchaseItem( // Add the Tide product line.
-                new PurchaseItem( // Create the Tide purchase record.
-                        "Tide Pods", // Store the product's display name.
-                        "TIDE", // Store the product identifier.
-                        17.99, // Record the regular unit price.
-                        15.99, // Record the sale unit price.
-                        1 // Record that one unit was purchased.
-                ) // Finish creating the Tide purchase record.
+        transaction.addPurchaseItem( 
+                new PurchaseItem( 
+                        "Tide Pods", 
+                        "03700000997", 
+                        BigDecimal.valueOf(17.99),
+                        BigDecimal.valueOf(15.99), 
+                        1 
+                )
         ); // Finish adding the Tide purchase record.
 
         transaction.addPurchaseItem( // Add the Dawn Platinum product line.
                 new PurchaseItem( // Create the Dawn Platinum purchase record.
                         "Dawn Platinum", // Store the product's display name.
-                        "DAWN-PLATINUM", // Store the product identifier.
-                        7.49, // Record the regular unit price.
-                        4.99, // Record the sale unit price.
+                                "DAWN-PLATINUM", // Store the product identifier.
+                        BigDecimal.valueOf(7.49), // Record the regular unit price.
+                        BigDecimal.valueOf(4.99), // Record the sale unit price.
                         1 // Record that one unit was purchased.
                 ) // Finish creating the Dawn Platinum purchase record.
         ); // Finish adding the Dawn Platinum purchase record.
@@ -80,8 +81,8 @@ public class CouponSystem { // Define the main application service for the coupo
                 new PurchaseItem( // Create the Dawn Powerwash purchase record.
                         "Dawn Powerwash", // Store the product's display name.
                         "DAWN-POWERWASH", // Store the product identifier.
-                        6.99, // Record the regular unit price.
-                        5.99, // Record the sale unit price.
+                        BigDecimal.valueOf(6.99), // Record the regular unit price.
+                        BigDecimal.valueOf(5.99), // Record the sale unit price.
                         1 // Record that one unit was purchased.
                 ) // Finish creating the Dawn Powerwash purchase record.
         ); // Finish adding the Dawn Powerwash purchase record.
@@ -101,7 +102,7 @@ public class CouponSystem { // Define the main application service for the coupo
         transaction.addCoupon( // Add the Tide coupon.
                 new Coupon( // Create the Tide coupon record.
                         "$3 off Tide", // Store the coupon description.
-                        3.00, // Record the coupon discount.
+                        BigDecimal.valueOf(3.00), // Record the coupon discount.
                         1, // Require one qualifying Tide product.
                         CouponType.MANUFACTURER, // Identify the coupon as a manufacturer coupon.
                         null // Record that the coupon's expiration date is currently unknown.
@@ -111,7 +112,7 @@ public class CouponSystem { // Define the main application service for the coupo
         transaction.addCoupon( // Add the Gain coupon.
                 new Coupon( // Create the Gain coupon record.
                         "$2 off Gain", // Store the coupon description.
-                        2.00, // Record the coupon discount.
+                        BigDecimal.valueOf(2.00), // Record the coupon discount.
                         1, // Require one qualifying Gain product.
                         CouponType.MANUFACTURER, // Identify the coupon as a manufacturer coupon.
                         null // Record that the coupon's expiration date is currently unknown.
@@ -121,7 +122,7 @@ public class CouponSystem { // Define the main application service for the coupo
         transaction.addCoupon( // Add the Dawn coupon.
                 new Coupon( // Create the Dawn coupon record.
                         "$4 off 2 Dawn", // Store the coupon description.
-                        4.00, // Record the coupon discount.
+                        BigDecimal.valueOf(4.00), // Record the coupon discount.
                         2, // Require two qualifying Dawn products.
                         CouponType.MANUFACTURER, // Identify the coupon as a manufacturer coupon.
                         null // Record that the coupon's expiration date is currently unknown.
@@ -138,21 +139,21 @@ public class CouponSystem { // Define the main application service for the coupo
         transaction.addPayment( // Add the first Register Reward redemption.
                 new Payment( // Create the Register Reward payment record.
                         PaymentType.REGISTER_REWARD, // Identify this payment as a Register Reward.
-                        7.00 // Record seven dollars of redeemed Register Reward value.
+                        BigDecimal.valueOf(7.00) // Record seven dollars of redeemed Register Reward value.
                 ) // Finish creating the Register Reward payment.
         ); // Finish adding the first Register Reward payment.
 
         transaction.addPayment( // Add the second Register Reward redemption.
                 new Payment( // Create the second Register Reward payment record.
                         PaymentType.REGISTER_REWARD, // Identify this payment as a Register Reward.
-                        5.00 // Record five dollars of redeemed Register Reward value.
+                        BigDecimal.valueOf(5.00) // Record five dollars of redeemed Register Reward value.
                 ) // Finish creating the Register Reward payment.
         ); // Finish adding the second Register Reward payment.
 
         transaction.addPayment( // Add the Walgreens Cash redemption.
                 new Payment( // Create the Walgreens Cash payment record.
                         PaymentType.WALGREENS_CASH, // Identify this payment as Walgreens Cash.
-                        10.00 // Record ten dollars of redeemed Walgreens Cash.
+                        BigDecimal.valueOf(10.00) // Record ten dollars of redeemed Walgreens Cash.
                 ) // Finish creating the Walgreens Cash payment.
         ); // Finish adding the Walgreens Cash payment.
     } // End the addPayments method.
@@ -173,57 +174,57 @@ public class CouponSystem { // Define the main application service for the coupo
 
         System.out.printf( // Print the regular-price merchandise total.
                 "Regular merchandise total: $%.2f%n", // Format the amount as currency with two decimal places.
-                calculator.calculateRegularMerchandiseTotal(transaction) // Calculate the regular-price merchandise total.
+                calculator.calculateRegularMerchandiseTotal(transaction).doubleValue() // Calculate the regular-price merchandise total.
         ); // Finish printing the regular-price merchandise total.
 
         System.out.printf( // Print the sale-price merchandise total.
                 "Sale merchandise total: $%.2f%n", // Format the amount as currency with two decimal places.
-                calculator.calculateSaleMerchandiseTotal(transaction) // Calculate the sale-price merchandise total.
+                calculator.calculateSaleMerchandiseTotal(transaction).doubleValue() // Calculate the sale-price merchandise total.
         ); // Finish printing the sale-price merchandise total.
 
         System.out.printf( // Print the total value of the coupons.
                 "Coupon total: $%.2f%n", // Format the coupon amount as currency.
-                calculator.calculateCouponTotal(transaction) // Calculate the combined coupon value.
+                calculator.calculateCouponTotal(transaction).doubleValue() // Calculate the combined coupon value.
         ); // Finish printing the coupon total.
 
         System.out.printf( // Print the merchandise total remaining after coupons.
                 "After coupons: $%.2f%n", // Format the remaining merchandise amount as currency.
-                calculator.calculateAfterCouponTotal(transaction) // Calculate the amount remaining after coupons.
+                calculator.calculateAfterCouponTotal(transaction).doubleValue() // Calculate the amount remaining after coupons.
         ); // Finish printing the after-coupon total.
 
         System.out.printf( // Print the Walgreens Cash redeemed.
                 "Walgreens Cash redeemed: $%.2f%n", // Format the Walgreens Cash amount as currency.
-                calculator.calculateWalgreensCashRedeemed(transaction) // Calculate the Walgreens Cash used during checkout.
+                calculator.calculateWalgreensCashRedeemed(transaction).doubleValue() // Calculate the Walgreens Cash used during checkout.
         ); // Finish printing the Walgreens Cash redemption.
 
         System.out.printf( // Print the Register Rewards redeemed.
                 "Register Rewards redeemed: $%.2f%n", // Format the Register Reward amount as currency.
-                calculator.calculateRegisterRewardsRedeemed(transaction) // Calculate the Register Rewards used during checkout.
+                calculator.calculateRegisterRewardsRedeemed(transaction).doubleValue() // Calculate the Register Rewards used during checkout.
         ); // Finish printing the Register Reward redemption.
 
         System.out.printf( // Print the merchandise amount remaining after reward redemptions.
                 "Remaining after reward redemptions: $%.2f%n", // Format the remaining amount as currency.
-                calculator.calculateAfterRewardRedemptions(transaction) // Calculate the amount remaining after redeemed rewards.
+                calculator.calculateAfterRewardRedemptions(transaction).doubleValue() // Calculate the amount remaining after redeemed rewards.
         ); // Finish printing the remaining amount.
 
         System.out.printf( // Print the tax reported on the receipt.
                 "Tax: $%.2f%n", // Format the tax as currency.
-                transaction.getReceiptTotals().getTaxAmount() // Read the retailer-reported tax.
+                transaction.getReceiptTotals().getTaxAmount().doubleValue() // Read the retailer-reported tax.
         ); // Finish printing the tax.
 
         System.out.printf( // Print the checkout amount predicted by the model.
                 "Calculated checkout amount: $%.2f%n", // Format the calculated checkout amount as currency.
-                calculator.calculateExpectedCheckoutAmount(transaction) // Calculate the expected checkout amount.
+                calculator.calculateExpectedCheckoutAmount(transaction).doubleValue() // Calculate the expected checkout amount.
         ); // Finish printing the calculated checkout amount.
 
         System.out.printf( // Print the actual final total from the receipt.
                 "Actual receipt total: $%.2f%n", // Format the retailer-reported amount as currency.
-                transaction.getReceiptTotals().getFinalTotal() // Read the final total printed on the receipt.
+                transaction.getReceiptTotals().getFinalTotal().doubleValue() // Read the final total printed on the receipt.
         ); // Finish printing the actual receipt total.
 
         System.out.printf( // Print the difference between the calculated and actual totals.
                 "Receipt difference: $%.2f%n", // Format the difference as currency.
-                calculator.calculateReceiptDifference(transaction) // Calculate the receipt discrepancy.
+                calculator.calculateReceiptDifference(transaction).doubleValue() // Calculate the receipt discrepancy.
         ); // Finish printing the receipt difference.
     } // End the displayTransaction method.
 

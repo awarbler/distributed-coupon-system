@@ -1,7 +1,8 @@
 package coupons;
+import java.math.BigDecimal;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.Test;
-
 
 
 class WorkbookTransactionTest {
@@ -9,14 +10,14 @@ class WorkbookTransactionTest {
     void sheetOneTransactionPreserversRecordedItemsAndPayments(){
         CouponTransaction transaction = 
                 new CouponTransaction(
-                    new ReceiptTotals(1.04, 3.60)
+                    new ReceiptTotals(BigDecimal.valueOf(1.04), BigDecimal.valueOf(3.60))
                 );
         transaction.addPurchaseItem(
                 new PurchaseItem(
                         "Neutrogena",
                         "07050111090",
-                        7.79,
-                        5.99,
+                        BigDecimal.valueOf(7.79)        ,
+                        BigDecimal.valueOf(5.99),
                         2
                 )
         );
@@ -24,20 +25,20 @@ class WorkbookTransactionTest {
                 new PurchaseItem(
                         "Lysol travel wipes",
                         "01920099717",
-                        3.29,
-                        3.29,
+                        BigDecimal.valueOf(3.29),
+                        BigDecimal.valueOf(3.29),
                         2
                 )
         );
         transaction.addPayment(
-                new Payment(PaymentType.REGISTER_REWARD, 2.00  )
+                new Payment(PaymentType.REGISTER_REWARD, BigDecimal.valueOf(2.00  ))
         );
         transaction.addPayment(
-                new Payment(PaymentType.WALGREENS_CASH, 10.00)
+                new Payment(PaymentType.WALGREENS_CASH, BigDecimal.valueOf(10.00))
         );
 
         transaction.addPayment(
-                new Payment(PaymentType.CASH, 3.60)
+                new Payment(PaymentType.CASH, BigDecimal.valueOf(3.60))
         );
 
         PurchaseItem neutrogena =
@@ -62,28 +63,24 @@ class WorkbookTransactionTest {
         );
 
         assertEquals(
-                15.58,
+                BigDecimal.valueOf(15.58),
                 neutrogena.getRegularUnitPrice()
-                        * neutrogena.getQuantity(),
-                0.001
+                        .multiply(BigDecimal.valueOf(neutrogena.getQuantity()))
         );
 
         assertEquals(
-                6.58,
-                lysol.calculateLineTotal(),
-                0.001
+                BigDecimal.valueOf(6.58),
+                lysol.calculateLineTotal()
         );
 
         assertEquals(
-                1.04,
-                transaction.getReceiptTotals().getTaxAmount(),
-                0.001
+                BigDecimal.valueOf(1.04),
+                transaction.getReceiptTotals().getTaxAmount()
         );
 
         assertEquals(
-                3.60,
-                transaction.getReceiptTotals().getFinalTotal(),
-                0.001
+                BigDecimal.valueOf(3.60),
+                transaction.getReceiptTotals().getFinalTotal()
         );
 
         assertEquals(
@@ -97,9 +94,8 @@ class WorkbookTransactionTest {
         );
 
         assertEquals(
-                2.00,
-                transaction.getPayments().get(0).getAmount(),
-                0.001
+                BigDecimal.valueOf(2.00),
+                transaction.getPayments().get(0).getAmount()
         );
 
         assertEquals(
@@ -108,9 +104,8 @@ class WorkbookTransactionTest {
         );
 
         assertEquals(
-                10.00,
-                transaction.getPayments().get(1).getAmount(),
-                0.001
+                BigDecimal.valueOf(10.00),
+                transaction.getPayments().get(1).getAmount()
         );
 
         assertEquals(
@@ -119,9 +114,8 @@ class WorkbookTransactionTest {
         );
 
         assertEquals(
-                3.60,
-                transaction.getPayments().get(2).getAmount(),
-                0.001
+                BigDecimal.valueOf(3.60),
+                transaction.getPayments().get(2).getAmount()
         );
 
 

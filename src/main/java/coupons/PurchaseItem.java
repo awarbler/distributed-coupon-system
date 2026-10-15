@@ -1,5 +1,6 @@
 package coupons;
 
+import java.math.BigDecimal;
 import java.util.Objects;
 
 /**
@@ -9,8 +10,8 @@ public class PurchaseItem {
 
     private final String productName; // Store the human-readable product name.
     private final String productCode; // Store the identifier used for the product.
-    private final double regularUnitPrice; // Store the regular price for one unit.
-    private final double saleUnitPrice; // Store the actual sale price for one unit.
+    private final BigDecimal regularUnitPrice; // Store the regular price for one unit.
+    private final BigDecimal saleUnitPrice; // Store the actual sale price for one unit.
     private final int quantity; // Store the number of units purchased.
 
     /**
@@ -23,13 +24,13 @@ public class PurchaseItem {
      * @param quantity number of units purchased
      * @throws NullPointerException if a required string is null
      * @throws IllegalArgumentException if a string is blank, a price is
-     *         negative, or quantity is less than one
+     * negative, or quantity is less than one
      */
     public PurchaseItem(
             String productName,
             String productCode,
-            double regularUnitPrice,
-            double saleUnitPrice,
+            BigDecimal regularUnitPrice,
+            BigDecimal saleUnitPrice,
             int quantity) {
 
         this.productName = requireText(
@@ -42,18 +43,27 @@ public class PurchaseItem {
                 "Product code"
         );
 
-        if (!Double.isFinite(regularUnitPrice) || regularUnitPrice < 0.0) { // Reject non-finite or negative regular prices.
+        Objects.requireNonNull(
+                regularUnitPrice,
+                "Regular unit price cannot be null."
+        );
+
+        Objects.requireNonNull(
+                saleUnitPrice,
+                "Sale unit price cannot be null."
+        );
+
+        if (regularUnitPrice.signum() < 0) {
             throw new IllegalArgumentException(
-                    "Regular unit price must be a finite non-negative number."
+                    "Regular unit price cannot be negative."
             );
         }
 
-        if (!Double.isFinite(saleUnitPrice) || saleUnitPrice < 0.0) { // Reject non-finite or negative sale prices.
+        if (saleUnitPrice.signum() < 0) {
             throw new IllegalArgumentException(
-                    "Sale unit price must be a finite non-negative number."
+                    "Sale unit price cannot be negative."
             );
         }
-
         if (quantity < 1) {
             throw new IllegalArgumentException(
                     "Quantity must be at least 1."
@@ -73,11 +83,11 @@ public class PurchaseItem {
         return productCode;
     }
 
-    public double getRegularUnitPrice() {
+    public BigDecimal getRegularUnitPrice() {
         return regularUnitPrice;
     }
 
-    public double getSaleUnitPrice() {
+    public BigDecimal getSaleUnitPrice() {
         return saleUnitPrice;
     }
 
@@ -90,8 +100,8 @@ public class PurchaseItem {
      *
      * @return sale unit price multiplied by quantity
      */
-    public double calculateLineTotal() {
-        return saleUnitPrice * quantity;
+    public BigDecimal calculateLineTotal() {
+        return saleUnitPrice.multiply(BigDecimal.valueOf(quantity));
     }
 
     /**

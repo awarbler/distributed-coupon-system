@@ -2,6 +2,12 @@ package coupons.repository;
 
 import coupons.CouponApplied;
 import coupons.CouponTransaction;
+import coupons.Coupon;
+import coupons.Payment;
+import coupons.Promotion;
+import coupons.PurchaseItem;
+import coupons.ReceiptTotals;
+import coupons.Reward;
 import coupons.RegisterRewardRedemption;
 import java.util.List;
 import java.util.Objects;
@@ -75,5 +81,59 @@ public record ReceiptSnapshot(
                 transaction.getRegisterRewardRedemptions(),
                 ReceiptTotalsSnap.from(transaction.getReceiptTotals())
         );
+    }
+
+    /**
+     * Restores recorded facts into a fresh, independently mutable transaction.
+     *
+     * <p>Immutable applied-coupon and redemption records may safely be shared.
+     * Receipt identity, lifecycle, metadata, and evidence remain in the enclosing
+     * revision. No totals are calculated, rounded, or reconciled here.
+     *
+     * <p>Reconstruction is optional. Historical snapshot components remain
+     * directly readable even when current constructors reject or normalize
+     * recorded values. Failure never modifies this snapshot or its evidence
+     * associations. No replacement identifiers are generated.
+     *
+     * @return a newly reconstructed transaction
+     * @throws IllegalArgumentException if recorded values or relationships
+     *         cannot be represented unchanged by the current domain model
+     */
+    public CouponTransaction toTransaction() {
+        CouponTransaction restored = new CouponTransaction(new ReceiptTotals(
+                receiptTotals.taxAmount(), receiptTotals.finalTotal()));
+        for (PurchaseLineSnap line : purchaseItems) {
+            restored.addPurchaseItem(new PurchaseItem(line.lineItemId(),
+                    line.productName(), line.productCode(), line.regularUnitPrice(),
+                    line.saleUnitPrice(), line.quantity()));
+        }
+        for (CouponSnap coupon : coupons) {
+            restored.addCoupon(new Coupon(coupon.description(), coupon.discountAmount(),
+                    coupon.requiredQuantity(), coupon.couponType(), coupon.expirationDate()));
+        }
+        for (CouponApplied applied : appliedCoupons) {
+            restored.addAppliedCoupon(applied);
+        }
+        for (PromotionSnap promotion : promotions) {
+            restored.addPromotion(new Promotion(promotion.description(),
+                    promotion.promotionType(), promotion.qualificationThreshold(),
+                    promotion.rewardType(), promotion.rewardAmount(),
+                    promotion.walgreensCashReducesQualifyingSpend(),
+                    promotion.couponsReduceQualifyingSpend()));
+        }
+        for (PaymentSnap payment : payments) {
+            restored.addPayment(new Payment(payment.paymentType(), payment.amount()));
+        }
+        for (RewardSnap reward : rewards) {
+            restored.addReward(new Reward(reward.source(), reward.amount(), reward.cashEquivalent()));
+        }
+        for (RegisterRewardRedemption redemption : registerRewardRedemptions) {
+            restored.addRegisterRewardRedemption(redemption);
+        }
+        if (!equals(ReceiptSnapshot.from(restored))) {
+            throw new IllegalArgumentException(
+                    "Recorded snapshot values cannot be restored unchanged.");
+        }
+        return restored;
     }
 }

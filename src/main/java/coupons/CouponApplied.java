@@ -96,6 +96,36 @@ public final class CouponApplied {
         this.lineItemIds = copiedIds;
     }
 
+    /**
+     * Compares all recorded values, including identity and monetary scale.
+     *
+     * @param other object to compare
+     * @return true if all recorded fields match
+     */
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof CouponApplied that)) {
+            return false;
+        }
+        return applicationId.equals(that.applicationId)
+                && printedLabel.equals(that.printedLabel)
+                && appliedAmount.equals(that.appliedAmount)
+                && lineItemIds.equals(that.lineItemIds);
+    }
+
+    /**
+     * Calculates a hash from all recorded values.
+     *
+     * @return a hash consistent with value equality
+     */
+    @Override
+    public int hashCode() {
+        return Objects.hash(applicationId, printedLabel, appliedAmount, lineItemIds);
+    }
+
     public UUID getApplicationId() {
         return applicationId;
     }

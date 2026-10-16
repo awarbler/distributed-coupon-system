@@ -23,9 +23,9 @@ public class Coupon { // Define the data and rules for one coupon.
      * @param requiredQuantity number of qualifying products required
      * @param couponType type of coupon
      * @param expirationDate stated expiration date of the coupon
-     * @throws NullPointerException if a required object is null
+     * @throws NullPointerException if couponDescription or couponType is null
      * @throws IllegalArgumentException if the description is blank,
-     *         discount is not positive, or quantity is less than one
+     *         discount is null or not positive, or quantity is less than one
      */
     public Coupon( // Construct one valid coupon.
             String couponDescription, // Receive the coupon's description.

@@ -79,6 +79,38 @@ public final class RegisterRewardRedemption {
         this.redeemedDate = redeemedDate;
     }
 
+    /**
+     * Compares all recorded values, including identity and monetary scale.
+     *
+     * @param other object to compare
+     * @return true if all recorded fields match
+     */
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof RegisterRewardRedemption that)) {
+            return false;
+        }
+        return redemptionId.equals(that.redemptionId)
+                && rewardId.equals(that.rewardId)
+                && redeemedReceiptId.equals(that.redeemedReceiptId)
+                && redeemedAmount.equals(that.redeemedAmount)
+                && Objects.equals(redeemedDate, that.redeemedDate);
+    }
+
+    /**
+     * Calculates a hash from all recorded values.
+     *
+     * @return a hash consistent with value equality
+     */
+    @Override
+    public int hashCode() {
+        return Objects.hash(redemptionId, rewardId, redeemedReceiptId,
+                redeemedAmount, redeemedDate);
+    }
+
     public UUID getRedemptionId() {
         return redemptionId;
     }

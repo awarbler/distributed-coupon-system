@@ -1,13 +1,17 @@
 package coupons; // Place the Payment class in the coupons package.
 import java.math.BigDecimal;
-import java.util.Objects; // Provide null checking for required object values.
+import java.util.Objects;
+import java.util.UUID; // Provide null checking for required object values.
 
 /**
  * Represents one payment or redeemed-value amount used in a transaction.
  */
 public class Payment { // Define the data and rules for one payment record.
 
+    /** Stable identity of this payment event, preserved during reconstruction. */
+    private final UUID id;
     private final PaymentType paymentType; // Store the type of payment or reward redemption.
+    private final String notes;
     private final BigDecimal amount; // Store the monetary amount applied to the transaction.
 
     /**
@@ -19,6 +23,24 @@ public class Payment { // Define the data and rules for one payment record.
      * @throws IllegalArgumentException if amount is not greater than zero
      */
     public Payment(PaymentType paymentType, BigDecimal amount) { // Create one valid payment record.
+        this(UUID.randomUUID(), paymentType, amount);
+    }
+
+    /**
+     * Reconstructs a payment using its existing event identity.
+     * @param paymentId stable payment identifier
+     * @param paymentType recorded payment classification
+     * @param amount positive recorded payment amount
+     */
+    public Payment(UUID paymentId, PaymentType paymentType, BigDecimal amount) {
+        this(paymentId, paymentType, amount, null);
+    }
+
+    /** Restores the event and its recorded explanation without changing its identity. */
+    public Payment(UUID paymentId, PaymentType paymentType, BigDecimal amount, String notes) {
+        if (notes != null && notes.isBlank()) throw new IllegalArgumentException("Notes must be nonblank or unknown.");
+        this.notes = notes;
+        this.id = Objects.requireNonNull(paymentId, "Payment ID cannot be null.");
 
         this.paymentType = Objects.requireNonNull( // Require every payment to have a known type.
                 paymentType, // Validate the payment type supplied by the caller.
@@ -36,6 +58,14 @@ public class Payment { // Define the data and rules for one payment record.
         }
 
         this.amount = amount; // Store the validated payment amount.
+    }
+
+    /** Recorded tender or redemption explanation; null means unknown. */
+    public String getNotes() { return notes; }
+
+    /** Returns the stable payment event identifier. */
+    public UUID getPaymentId() {
+        return id;
     }
 
     /**

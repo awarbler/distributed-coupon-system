@@ -13,7 +13,8 @@ import java.util.UUID;
  *
  * <p>Redemption and availability are tracked separately.
  */
-public final class RegisterReward {
+public final class RegisterReward implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
 
     private final UUID rewardId;
     private final String sourceDescription;

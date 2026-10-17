@@ -23,7 +23,7 @@ import java.util.Objects;
  *
  * @param kind recorded benefit form
  * @param amount positive quantity or monetary face value
- * @param currency denomination for cash or gift cards; null for points
+ * @param currency denomination for monetary face values; null for points
  * @param program recorded points or gift-card program; optional for cash
  */
 public record RebateBenefit(
@@ -31,7 +31,7 @@ public record RebateBenefit(
         BigDecimal amount,
         Currency currency,
         String program
-) {
+) implements java.io.Serializable {
     /**
      * Validates a quantified benefit without converting its value.
      *
@@ -40,7 +40,7 @@ public record RebateBenefit(
      *
      * @param kind recorded benefit form
      * @param amount positive quantity or monetary face value
-     * @param currency cash or gift-card currency; null for points
+     * @param currency monetary face-value currency; null for points
      * @param program recorded points or gift-card program; optional for cash
      * @throws NullPointerException if kind or amount is null
      * @throws IllegalArgumentException if amount is not positive,
@@ -62,7 +62,7 @@ public record RebateBenefit(
                         "Points require a program and must not have a currency.");
             }
         } else if (currency == null) {
-            throw new IllegalArgumentException("Cash and gift cards require a currency.");
+            throw new IllegalArgumentException("Monetary face values require a currency.");
         }
         if (kind == BenefitKind.GIFT_CARD && program == null) {
             throw new IllegalArgumentException("Gift cards require a recorded program.");

@@ -21,7 +21,7 @@ public record RewardSnap(
         String source,
         double amount,
         boolean cashEquivalent
-) {
+) implements java.io.Serializable {
 
     /**
      * Captures a generic reward's current values.

@@ -25,7 +25,7 @@ public record CouponSnap(
         int requiredQuantity,
         CouponType couponType,
         LocalDate expirationDate
-) {
+) implements java.io.Serializable {
 
     /**
      * Validates coupon snapshot values without altering them.

@@ -14,8 +14,8 @@ import coupons.PurchaseItem;
  *
  * @param lineItemId stable receipt-line identifier
  * @param productName recorded product name
- * @param productCode recorded product identifier
- * @param regularUnitPrice recorded regular price per unit
+ * @param productCode recorded product identifier, or null when unknown
+ * @param regularUnitPrice recorded regular price per unit, or null when unknown
  * @param saleUnitPrice recorded sale price per unit
  * @param quantity number of units on this receipt line
  */
@@ -26,7 +26,7 @@ public record PurchaseLineSnap(
         BigDecimal regularUnitPrice,
         BigDecimal saleUnitPrice,
         int quantity
-) {
+) implements java.io.Serializable {
 
     /**
      * Validates purchase-line snapshot values.
@@ -36,8 +36,8 @@ public record PurchaseLineSnap(
      *
      * @param lineItemId stable receipt-line identifier
      * @param productName recorded product name
-     * @param productCode recorded product identifier
-     * @param regularUnitPrice recorded regular unit price
+     * @param productCode recorded product identifier, or null when unknown
+     * @param regularUnitPrice recorded regular unit price, or null when unknown
      * @param saleUnitPrice recorded sale unit price
      * @param quantity number of units purchased
      * @throws NullPointerException if a required reference is null
@@ -47,29 +47,35 @@ public record PurchaseLineSnap(
     public PurchaseLineSnap {
         Objects.requireNonNull(lineItemId, "Line ID cannot be null.");
         Objects.requireNonNull(productName, "Product name cannot be null.");
-        Objects.requireNonNull(productCode, "Product code cannot be null.");
-        Objects.requireNonNull(
-                regularUnitPrice,
-                "Regular unit price cannot be null."
-        );
         Objects.requireNonNull(
                 saleUnitPrice,
                 "Sale unit price cannot be null."
         );
 
-        if (productName.isBlank() || productCode.isBlank()) {
+        if (productName.isBlank()) {
             throw new IllegalArgumentException(
-                    "Product name and code cannot be blank."
+                    "Product name cannot be blank."
             );
         }
 
-        if (regularUnitPrice.signum() < 0
-                || saleUnitPrice.signum() < 0) {
+        if (productCode != null && productCode.isBlank()) {
             throw new IllegalArgumentException(
-                    "Unit prices cannot be negative."
+                    "Product code must be null or nonblank."
             );
         }
 
+        if (regularUnitPrice != null
+                && regularUnitPrice.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Regular unit price cannot be negative."
+            );
+        }
+
+        if (saleUnitPrice.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Sale unit price cannot be negative."
+            );
+        }
         if (quantity < 1) {
             throw new IllegalArgumentException(
                     "Quantity must be at least 1."

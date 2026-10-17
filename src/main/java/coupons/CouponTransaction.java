@@ -14,6 +14,19 @@ import java.util.Objects;
  */
 public class CouponTransaction {
 
+    /** Immutable additional receipt facts; summaries do not create financial events. */
+    private ReceiptObservations observations = ReceiptObservations.empty();
+
+    /** Returns immutable recorded facts and confirmed relationships. */
+    public ReceiptObservations getObservations() {
+        return observations;
+    }
+
+    /** Replaces observations on this working transaction only. */
+    public void setObservations(ReceiptObservations observations) {
+        this.observations = Objects.requireNonNull(observations);
+    }
+
     /**
      * Purchase lines belonging to this transaction.
      */

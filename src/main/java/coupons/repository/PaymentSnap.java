@@ -4,19 +4,33 @@ import coupons.Payment;
 import coupons.PaymentType;
 import java.math.BigDecimal;
 import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Preserves a payment's recorded type and amount.
  *
  * <p>This snapshot does not reclassify legacy payment entries.
  *
+ * @param paymentId stable underlying event identifier
  * @param paymentType recorded payment classification
  * @param amount recorded payment amount
  */
 public record PaymentSnap(
+        UUID paymentId,
         PaymentType paymentType,
-        BigDecimal amount
-) {
+        BigDecimal amount,
+        String notes
+) implements java.io.Serializable {
+
+    /** Compatibility constructor for payments without notes. */
+    public PaymentSnap(UUID paymentId, PaymentType paymentType, BigDecimal amount) {
+        this(paymentId, paymentType, amount, null);
+    }
+
+    /** Creates a newly identified snapshot; restoration must supply its existing ID. */
+    public PaymentSnap(PaymentType paymentType, BigDecimal amount) {
+        this(UUID.randomUUID(), paymentType, amount);
+    }
 
     /**
      * Validates payment snapshot values without changing them.
@@ -27,6 +41,8 @@ public record PaymentSnap(
      * @throws IllegalArgumentException if amount is not positive
      */
     public PaymentSnap {
+        if (notes != null && notes.isBlank()) throw new IllegalArgumentException("Notes must be nonblank or unknown.");
+        Objects.requireNonNull(paymentId, "Payment ID cannot be null.");
         Objects.requireNonNull(
                 paymentType,
                 "Payment type cannot be null."
@@ -51,8 +67,10 @@ public record PaymentSnap(
         Objects.requireNonNull(payment, "Payment cannot be null.");
 
         return new PaymentSnap(
+                payment.getPaymentId(),
                 payment.getPaymentType(),
-                payment.getAmount()
+                payment.getAmount(),
+                payment.getNotes()
         );
     }
 }

@@ -13,6 +13,7 @@ public class TransactionCalculator {
      *
      * @param transaction transaction to calculate
      * @return combined regular-price value of all purchased items
+     * @throws IllegalStateException if a regular unit price is unknown
      */
     public BigDecimal calculateRegularMerchandiseTotal(
             CouponTransaction transaction) {
@@ -22,9 +23,19 @@ public class TransactionCalculator {
         BigDecimal total = BigDecimal.ZERO;
 
         for (PurchaseItem item : transaction.getPurchaseItems()) {
+            BigDecimal regularUnitPrice = item.getRegularUnitPrice();
+
+            if (regularUnitPrice == null) {
+                throw new IllegalStateException(
+                        "Regular merchandise total is unknown because "
+                        + "a receipt line has no regular unit price."
+                );
+            }
+
             total = total.add(
-                    item.getRegularUnitPrice()
-                            .multiply(BigDecimal.valueOf(item.getQuantity()))
+                    regularUnitPrice.multiply(
+                            BigDecimal.valueOf(item.getQuantity())
+                    )
             );
         }
 
@@ -109,6 +120,8 @@ public class TransactionCalculator {
      *
      * <p>
      * Legacy Register Reward payment entries are not included.
+     * Recorded unidentified-instrument deductions are included once, separately
+     * from identified redemptions. Printed savings and account summaries are not deductions.
      *
      * @param transaction transaction to calculate
      * @return total recorded Register Reward redemptions
@@ -123,6 +136,11 @@ public class TransactionCalculator {
         for (RegisterRewardRedemption redemption
                 : transaction.getRegisterRewardRedemptions()) {
             total = total.add(redemption.getRedeemedAmount());
+        }
+
+        for (ReceiptObservations.UnidentifiedRR deduction
+                : transaction.getObservations().unidentifiedRR()) {
+            total = total.add(deduction.amount());
         }
 
         return total;

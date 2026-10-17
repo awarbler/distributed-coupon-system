@@ -13,10 +13,12 @@ import java.util.UUID;
  * that was not redeemed does not have a CouponApplied record.
  *
  */
-public final class CouponApplied {
+public final class CouponApplied implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
 
     private final UUID applicationId; // Store a unique identifier for this coupon application.
     private final String printedLabel;
+    private final Integer requiredQuantity;
     private final BigDecimal appliedAmount; // Store the total deduction amount for this coupon.
     private final List<UUID> lineItemIds; // Store the identifiers of the receipt lines
 
@@ -49,6 +51,16 @@ public final class CouponApplied {
             BigDecimal appliedAmount,
             List<UUID> lineItemIds) {
 
+        this(applicationId, printedLabel, appliedAmount, lineItemIds, null);
+    }
+
+    /** Records a stated buy-quantity requirement without recalculating the actual deduction. */
+    public CouponApplied(UUID applicationId, String printedLabel, BigDecimal appliedAmount,
+            List<UUID> lineItemIds, Integer requiredQuantity) {
+        if (requiredQuantity != null && requiredQuantity < 1) {
+            throw new IllegalArgumentException("Required quantity must be positive or unknown.");
+        }
+        this.requiredQuantity = requiredQuantity;
         this.applicationId = Objects.requireNonNull(
                 applicationId,
                 "Application ID cannot be null."
@@ -113,7 +125,8 @@ public final class CouponApplied {
         return applicationId.equals(that.applicationId)
                 && printedLabel.equals(that.printedLabel)
                 && appliedAmount.equals(that.appliedAmount)
-                && lineItemIds.equals(that.lineItemIds);
+                && lineItemIds.equals(that.lineItemIds)
+                && Objects.equals(requiredQuantity, that.requiredQuantity);
     }
 
     /**
@@ -123,8 +136,11 @@ public final class CouponApplied {
      */
     @Override
     public int hashCode() {
-        return Objects.hash(applicationId, printedLabel, appliedAmount, lineItemIds);
+        return Objects.hash(applicationId, printedLabel, appliedAmount, lineItemIds, requiredQuantity);
     }
+
+    /** Products required by this coupon, not the number of coupon applications. */
+    public Integer getRequiredQuantity() { return requiredQuantity; }
 
     public UUID getApplicationId() {
         return applicationId;

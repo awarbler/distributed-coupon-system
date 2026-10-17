@@ -14,3 +14,6 @@ target/
 
 # Generated Javadoc documentation
 docs/
+
+# Local receipt checkpoints and locks
+.coupon-data/

@@ -24,7 +24,7 @@ public record ReceiptWriteResult(
         ReceiptChangeAction action,
         ReceiptStatus status,
         Instant committedAt
-) {
+) implements java.io.Serializable {
 
     /**
      * Validates committed-result fields and lifecycle consistency.

@@ -5,7 +5,11 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
+
+import coupons.repository.ReceiptSnapshot;
 
 /**
  * Tests the authoritative sources used for receipt deductions.
@@ -189,6 +193,54 @@ class TransactionCalculatorTest {
         assertEquals(
                 new BigDecimal("4.50"),
                 calculator.calculateRegisterRewardsRedeemed(transaction)
+        );
+    }
+
+    /**
+     * Verifies unavailable receipt details remain unknown after restoration.
+     */
+    @Test
+    void preservesUnknownProductCodeAndRegularPrice() {
+        CouponTransaction original = new CouponTransaction(
+                new ReceiptTotals(
+                        new BigDecimal("0.27"),
+                        new BigDecimal("5.28")
+                )
+        );
+
+        PurchaseItem line = new PurchaseItem(
+                "Recorded product",
+                null,
+                null,
+                new BigDecimal("5.00"),
+                1
+        );
+
+        original.addPurchaseItem(line);
+
+        ReceiptSnapshot snapshot = ReceiptSnapshot.from(original);
+        CouponTransaction restored = snapshot.toTransaction();
+
+        assertEquals(snapshot, ReceiptSnapshot.from(restored));
+        assertEquals(
+                line.getLineItemId(),
+                restored.getPurchaseItems().get(0).getLineItemId()
+        );
+        assertNull(restored.getPurchaseItems().get(0).getProductCode());
+        assertNull(restored.getPurchaseItems().get(0).getRegularUnitPrice());
+
+        TransactionCalculator calculator = new TransactionCalculator();
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> calculator.calculateRegularMerchandiseTotal(restored)
+        );
+
+        assertEquals(
+                0,
+                new BigDecimal("5.27").compareTo(
+                        calculator.calculateExpectedCheckoutAmount(restored)
+                )
         );
     }
 

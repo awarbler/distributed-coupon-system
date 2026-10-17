@@ -25,7 +25,7 @@ public record ReceiptHistoryEntry(
         ReceiptRevSnap after,
         ReceiptCreateCtx createCtx,
         ReceiptChangeContext changeCtx
-) {
+) implements java.io.Serializable {
     /**
      * Validates identity, revision, lifecycle, and context relationships.
      *

@@ -9,6 +9,7 @@ import coupons.PurchaseItem;
 import coupons.ReceiptTotals;
 import coupons.Reward;
 import coupons.RegisterRewardRedemption;
+import coupons.ReceiptObservations;
 import java.util.List;
 import java.util.Objects;
 
@@ -27,6 +28,7 @@ import java.util.Objects;
  * @param rewards captured legacy generic rewards
  * @param registerRewardRedemptions recorded reward redemptions
  * @param receiptTotals captured retailer-reported totals
+ * @param observations preserved earnings, account values, and savings relationships
  */
 public record ReceiptSnapshot(
         List<PurchaseLineSnap> purchaseItems,
@@ -36,8 +38,17 @@ public record ReceiptSnapshot(
         List<PaymentSnap> payments,
         List<RewardSnap> rewards,
         List<RegisterRewardRedemption> registerRewardRedemptions,
-        ReceiptTotalsSnap receiptTotals
-) {
+        ReceiptTotalsSnap receiptTotals,
+        ReceiptObservations observations
+) implements java.io.Serializable {
+    /** Preserves existing callers that have no additional receipt observations. */
+    public ReceiptSnapshot(List<PurchaseLineSnap> purchaseItems, List<CouponSnap> coupons,
+            List<CouponApplied> appliedCoupons, List<PromotionSnap> promotions,
+            List<PaymentSnap> payments, List<RewardSnap> rewards,
+            List<RegisterRewardRedemption> registerRewardRedemptions, ReceiptTotalsSnap receiptTotals) {
+        this(purchaseItems, coupons, appliedCoupons, promotions, payments, rewards,
+                registerRewardRedemptions, receiptTotals, ReceiptObservations.empty());
+    }
     /**
      * Copies collections without recalculating recorded values.
      *
@@ -60,6 +71,7 @@ public record ReceiptSnapshot(
         rewards = List.copyOf(rewards);
         registerRewardRedemptions = List.copyOf(registerRewardRedemptions);
         Objects.requireNonNull(receiptTotals, "Receipt totals cannot be null.");
+        Objects.requireNonNull(observations, "Receipt observations cannot be null.");
     }
 
     /**
@@ -79,7 +91,8 @@ public record ReceiptSnapshot(
                 transaction.getPayments().stream().map(PaymentSnap::from).toList(),
                 transaction.getRewards().stream().map(RewardSnap::from).toList(),
                 transaction.getRegisterRewardRedemptions(),
-                ReceiptTotalsSnap.from(transaction.getReceiptTotals())
+                ReceiptTotalsSnap.from(transaction.getReceiptTotals()),
+                transaction.getObservations()
         );
     }
 
@@ -122,7 +135,7 @@ public record ReceiptSnapshot(
                     promotion.couponsReduceQualifyingSpend()));
         }
         for (PaymentSnap payment : payments) {
-            restored.addPayment(new Payment(payment.paymentType(), payment.amount()));
+            restored.addPayment(new Payment(payment.paymentId(), payment.paymentType(), payment.amount(), payment.notes()));
         }
         for (RewardSnap reward : rewards) {
             restored.addReward(new Reward(reward.source(), reward.amount(), reward.cashEquivalent()));
@@ -130,6 +143,7 @@ public record ReceiptSnapshot(
         for (RegisterRewardRedemption redemption : registerRewardRedemptions) {
             restored.addRegisterRewardRedemption(redemption);
         }
+        restored.setObservations(observations);
         if (!equals(ReceiptSnapshot.from(restored))) {
             throw new IllegalArgumentException(
                     "Recorded snapshot values cannot be restored unchanged.");

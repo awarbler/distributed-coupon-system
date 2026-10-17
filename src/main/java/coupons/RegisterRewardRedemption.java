@@ -11,7 +11,8 @@ import java.util.UUID;
  * RegisterRewardRedemption
  * 
  */
-public final class RegisterRewardRedemption {
+public final class RegisterRewardRedemption implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
 
     private final UUID redemptionId;
     private final UUID rewardId;

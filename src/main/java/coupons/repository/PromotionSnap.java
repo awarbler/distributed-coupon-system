@@ -32,7 +32,7 @@ public record PromotionSnap(
         double rewardAmount,
         boolean walgreensCashReducesQualifyingSpend,
         boolean couponsReduceQualifyingSpend
-) {
+) implements java.io.Serializable {
 
     /**
      * Validates the fields supported by the current promotion model.

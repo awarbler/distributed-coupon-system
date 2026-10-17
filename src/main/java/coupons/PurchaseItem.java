@@ -38,7 +38,13 @@ public class PurchaseItem {
      * Creates a receipt line using an existing identifier.
      * Use when loading or correcting an existing line.
      *
-     * @throws NullPointerException if an ID, string, or price is null
+     * @param lineItemId existing receipt-line identifier
+     * @param productName recorded name
+     * @param productCode recorded identifier, or null when unknown
+     * @param regularUnitPrice regular price, or null when unknown
+     * @param saleUnitPrice recorded actual unit price
+     * @param quantity number of units on the line
+     * @throws NullPointerException if ID, name, or sale price is null
      * @throws IllegalArgumentException if a string is blank, a price
      *         is negative, or quantity is less than one
      */
@@ -60,22 +66,20 @@ public class PurchaseItem {
                 "Product name"
         );
 
-        this.productCode = requireText(
-                productCode,
-                "Product code"
-        );
+        if (productCode != null && productCode.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Product code must be null or nonblank."
+            );
+        }
 
-        Objects.requireNonNull(
-                regularUnitPrice,
-                "Regular unit price cannot be null."
-        );
+        this.productCode = productCode;
 
         Objects.requireNonNull(
                 saleUnitPrice,
                 "Sale unit price cannot be null."
         );
 
-        if (regularUnitPrice.signum() < 0) {
+        if (regularUnitPrice != null && regularUnitPrice.signum() < 0) {
             throw new IllegalArgumentException(
                     "Regular unit price cannot be negative."
             );

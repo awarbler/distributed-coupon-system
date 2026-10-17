@@ -16,7 +16,7 @@ import java.util.Objects;
 public record ReceiptTotalsSnap(
         BigDecimal taxAmount,
         BigDecimal finalTotal
-) {
+) implements java.io.Serializable {
 
     /**
      * Validates recorded receipt totals.

@@ -10,7 +10,8 @@ import java.util.UUID;
  * <p>Content is defensively copied. Media type describes the supplied
  * content but does not validate its actual format.
  */
-public final class ReceiptEvidence {
+public final class ReceiptEvidence implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
     /** Stable identifier of this source artifact. */
     private final UUID evidenceId;
     /** Identifier of the associated receipt. */

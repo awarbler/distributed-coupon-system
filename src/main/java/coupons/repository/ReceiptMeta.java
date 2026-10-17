@@ -21,7 +21,7 @@ public record ReceiptMeta(
         String receiptNumber,
         LocalDateTime purchasedAt,
         String storeReference
-) {
+) implements java.io.Serializable {
     /**
      * Validates metadata without normalizing recorded text.
      *

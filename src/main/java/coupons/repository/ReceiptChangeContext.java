@@ -15,7 +15,7 @@ public record ReceiptChangeContext(
         String reason,
         String approvedBy,
         Instant approvedAt
-) {
+) implements java.io.Serializable {
 
     /**
      * Validates required change and approval information.

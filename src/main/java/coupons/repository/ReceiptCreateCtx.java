@@ -11,7 +11,7 @@ import java.util.Objects;
  *
  * @param requestedBy stable identifier of the requesting user
  */
-public record ReceiptCreateCtx(String requestedBy) {
+public record ReceiptCreateCtx(String requestedBy) implements java.io.Serializable {
 
     /**
      * Validates the requesting user's identifier.

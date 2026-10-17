@@ -22,7 +22,7 @@ public record ReceiptRevSnap(
         ReceiptSnapshot contents,
         ReceiptMeta metadata,
         List<UUID> evidenceIds
-) {
+) implements java.io.Serializable {
 
     /**
      * Creates a revision snapshot with unknown metadata.
@@ -93,6 +93,7 @@ public record ReceiptRevSnap(
                 );
             }
         }
+        ReceiptObservationValidator.validate(contents, evidenceIds);
     }
 
     /**

@@ -19,7 +19,7 @@ import java.util.UUID;
 public record ReceiptWriteRequest(
         UUID requestId,
         Instant requestedAt
-) {
+) implements java.io.Serializable {
 
     /**
      * Validates required request metadata.

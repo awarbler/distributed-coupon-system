@@ -235,4 +235,16 @@ class CouponAppliedTest {
                 applied.getLineItemIds()
         );
     }
+    @Test
+    void preservesQualificationSeparatelyFromDiscountAndSupportsOldConstructors() {
+        UUID id = UUID.randomUUID();
+        CouponApplied applied = new CouponApplied(id, "MFG ECPN", new BigDecimal("4.00"), List.of(), 2);
+        CouponApplied unknown = new CouponApplied(id, "MFG ECPN", new BigDecimal("4.00"), List.of());
+        assertEquals(Integer.valueOf(2), applied.getRequiredQuantity());
+        assertEquals(new BigDecimal("4.00"), applied.getAppliedAmount());
+        org.junit.jupiter.api.Assertions.assertNull(unknown.getRequiredQuantity());
+        org.junit.jupiter.api.Assertions.assertNotEquals(applied, unknown);
+        assertThrows(IllegalArgumentException.class,
+                () -> new CouponApplied(id, "MFG ECPN", new BigDecimal("4.00"), List.of(), 0));
+    }
 }

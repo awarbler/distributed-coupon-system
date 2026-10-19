@@ -105,6 +105,18 @@ Dedicated transfer/conversion workflows and period reports remain unimplemented.
 The receipt CLI now supports local cross-session storage. The current receipt snapshots and printed WC
 account observations do not by themselves provide those features.
 
+### PostgreSQL provider ledger
+
+`PostgresProviderAccountRepository` implements the database-independent
+`ProviderAccountRepository` contract for provider openings, explicit
+adjustments, and redemption status revisions. Apply the additive
+`V3__provider_account_ledger.sql` migration through `PostgresSchema`; it does
+not read or migrate `.coupon-data`. Configure isolated integration tests with
+`COUPON_POSTGRES_TEST_URL`, `COUPON_POSTGRES_TEST_USER`, and
+`COUPON_POSTGRES_TEST_PASSWORD`. Reported openings remain separate from
+movement events, and redemption revisions are retained immutably with
+optimistic concurrency checks.
+
 Receipt dates accept month/day/year and year/month/day with slash, hyphen or dot
 separators, plus common English month names. Two-digit years mean 2000–2099;
 short dates use month/day/year by default. Year-first input starts with a
@@ -783,3 +795,61 @@ Online orders cannot earn or redeem Register Rewards under the configured rule.
 Both the CLI and repository enforce this; existing contradictory data is preserved
 for correction and cannot be saved as an online order. Old order types default to
 Unknown rather than being inferred. Import files accept receipt.channel.
+# Optional PostgreSQL receipt repository
+
+The CLI continues to use its existing local serialized receipt store by default.
+PostgreSQL is opt-in and does not migrate, open, or modify files under
+`.coupon-data`.
+
+Milestone 1 provides a PostgreSQL adapter for the complete
+`TransactionRepository` receipt contract, including receipt revisions, evidence,
+Register Rewards and redemptions, history, and idempotent write requests. The
+adapter currently rejects receipts containing gift-card promotion links until
+that related aggregate can be persisted atomically as well.
+
+The checked-in migration is:
+
+```text
+src/main/resources/db/migration/V1__receipt_repository.sql
+```
+
+Milestone 2 adds opt-in PostgreSQL implementations for source artifacts,
+inventory balances, advertised deals, and rebate claims. It uses the additive
+`V2__catalog_deal_rebate_inventory.sql` migration. Deal and rebate writes
+validate referenced source artifacts; deal, rebate, and inventory corrections
+use PostgreSQL transactions, immutable history, and optimistic revision checks.
+The CLI and local repositories remain unchanged.
+
+Milestone 3 adds additive PostgreSQL persistence for shopping plans, planned
+purchase lines, and clipped provider coupons through
+`PostgresShoppingPlanRepository`, `PostgresPlannedPurchaseRepository`, and
+`PostgresClippedCouponRepository`. Plans and editable records retain revisions
+and use optimistic concurrency. Coupon redemption checks expiration and is
+protected by database uniqueness constraints against duplicate use. These
+repositories do not change the CLI or local storage.
+
+The additive migration is:
+
+```text
+src/main/resources/db/migration/V4__shopping_plans_and_clipped_coupons.sql
+```
+
+The adapter requires explicit configuration:
+
+```text
+COUPON_POSTGRES_URL
+COUPON_POSTGRES_USER
+COUPON_POSTGRES_PASSWORD
+```
+
+The integration tests are isolated and disabled unless a dedicated test
+database is explicitly configured:
+
+```text
+COUPON_POSTGRES_TEST_URL
+COUPON_POSTGRES_TEST_USER
+COUPON_POSTGRES_TEST_PASSWORD
+```
+
+Use a disposable PostgreSQL database or container for those tests. Never point
+the test variables at a database containing real receipt data.

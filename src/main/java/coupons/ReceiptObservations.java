@@ -30,7 +30,28 @@ import java.util.UUID;
 public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
         List<Earning> earnings, List<UnidentifiedRR> unidentifiedRR,
         WalgreensCashAccount walgreensCash, List<SavingsCategory> savings,
-        Map<UUID, DiscountKind> discountKinds, BigDecimal receiptSavingValuePercent) implements java.io.Serializable {
+        Map<UUID, DiscountKind> discountKinds, BigDecimal receiptSavingValuePercent,
+        List<ReceiptPromotionLink> promotionLinks, ReceiptWorksheetData worksheet, FooterStatus footerStatus) implements java.io.Serializable {
+    public enum FooterStatus { UNKNOWN, PRINTED, NOT_PRINTED }
+    /** Existing snapshots do not assert whether a footer was printed. */
+    public ReceiptObservations(LocalDate purchaseDate, String printedTime, List<Earning> earnings,
+            List<UnidentifiedRR> unidentifiedRR, WalgreensCashAccount walgreensCash, List<SavingsCategory> savings,
+            Map<UUID, DiscountKind> discountKinds, BigDecimal receiptSavingValuePercent,
+            List<ReceiptPromotionLink> promotionLinks, ReceiptWorksheetData worksheet) {
+        this(purchaseDate,printedTime,earnings,unidentifiedRR,walgreensCash,savings,discountKinds,
+                receiptSavingValuePercent,promotionLinks,worksheet,FooterStatus.UNKNOWN);
+    }
+    public ReceiptObservations(LocalDate purchaseDate, String printedTime, List<Earning> earnings,
+            List<UnidentifiedRR> unidentifiedRR, WalgreensCashAccount walgreensCash, List<SavingsCategory> savings,
+            Map<UUID, DiscountKind> discountKinds, BigDecimal receiptSavingValuePercent, List<ReceiptPromotionLink> promotionLinks) {
+        this(purchaseDate,printedTime,earnings,unidentifiedRR,walgreensCash,savings,discountKinds,receiptSavingValuePercent,promotionLinks,ReceiptWorksheetData.empty());
+    }
+    public ReceiptObservations(LocalDate purchaseDate, String printedTime, List<Earning> earnings,
+            List<UnidentifiedRR> unidentifiedRR, WalgreensCashAccount walgreensCash, List<SavingsCategory> savings,
+            Map<UUID, DiscountKind> discountKinds, BigDecimal receiptSavingValuePercent) {
+        this(purchaseDate, printedTime, earnings, unidentifiedRR, walgreensCash, savings,
+                discountKinds, receiptSavingValuePercent, List.of());
+    }
     /** Preserves existing receipts with no printed savings percentage. */
     public ReceiptObservations(LocalDate purchaseDate, String printedTime, List<Earning> earnings,
             List<UnidentifiedRR> unidentifiedRR, WalgreensCashAccount walgreensCash, List<SavingsCategory> savings,
@@ -39,12 +60,16 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
     }
     /** Copies input and validates local structure without forcing reconciliation. */
     public ReceiptObservations {
+        worksheet=worksheet==null?ReceiptWorksheetData.empty():worksheet;
+        footerStatus=footerStatus==null?FooterStatus.UNKNOWN:footerStatus;
         optionalText(printedTime, "Printed time");
         nonnegative(receiptSavingValuePercent);
         earnings = List.copyOf(earnings);
         unidentifiedRR = List.copyOf(unidentifiedRR);
         savings = List.copyOf(savings);
         discountKinds = Map.copyOf(discountKinds);
+        promotionLinks = promotionLinks == null ? List.of() : List.copyOf(promotionLinks);
+        unique(promotionLinks.stream().map(ReceiptPromotionLink::promotionId).toList());
         unique(earnings.stream().map(Earning::earningId).toList());
         unique(unidentifiedRR.stream().map(UnidentifiedRR::eventId).toList());
         unique(savings.stream().map(SavingsCategory::categoryId).toList());
@@ -62,7 +87,7 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
     /** Refers to existing events instead of creating another financial entry. */
     public enum EventKind { COUPON_APPLIED, PAYMENT, REGISTER_REWARD_REDEMPTION, UNIDENTIFIED_RR, EARNING }
     /** Stores classification explicitly, rather than guessing from a printed label. */
-    public enum DiscountKind { STORE, MANUFACTURER, OTHER }
+    public enum DiscountKind { STORE, MANUFACTURER, OTHER, SALE_PROMOTION, STORE_COUPON }
 
     /**
      * One earning observation with optional expected and confirmed entitlement.
@@ -129,14 +154,24 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
         }
     }
 
-    /** Recorded qualification, not a calculation or a claim that eligibility was checked. */
-    public record OfferRequirement(PromotionType type, BigDecimal amount, String category) implements java.io.Serializable {
+    public enum SpendBasis { SALE_BEFORE_COUPONS, UNKNOWN }
+
+    /** Recorded requirement and explicit arithmetic basis; eligibility remains user-confirmed. */
+    public record OfferRequirement(PromotionType type, BigDecimal amount, String category,
+            SpendBasis spendBasis) implements java.io.Serializable {
+        /** Old receipts and callers have an unknown basis; do not infer it from notes. */
+        public OfferRequirement(PromotionType type, BigDecimal amount, String category) {
+            this(type, amount, category, SpendBasis.UNKNOWN);
+        }
         /** Preserves existing buy/spend qualification callers. */
         public OfferRequirement(PromotionType type, BigDecimal amount) {
             this(Objects.requireNonNull(type), amount, null);
         }
 
         public OfferRequirement {
+            spendBasis = spendBasis == null ? SpendBasis.UNKNOWN : spendBasis;
+            if (type != PromotionType.SPEND && spendBasis != SpendBasis.UNKNOWN)
+                throw new IllegalArgumentException("A spend basis applies only to spend requirements.");
             if (type == null) {
                 if (amount != null || !("Receipt".equals(category) || "Other".equals(category))) {
                     throw new IllegalArgumentException("Receipt/Other requirements have a category and no quantity or spend amount.");
@@ -162,7 +197,10 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
     }
 
     /** A recorded RR deduction, without pretending to know its issued instrument. */
-    public record UnidentifiedRR(UUID eventId, BigDecimal amount, String recordedDescription) implements java.io.Serializable {
+    public record UnidentifiedRR(UUID eventId, BigDecimal amount, String recordedDescription, String notes) implements java.io.Serializable {
+        public UnidentifiedRR(UUID eventId, BigDecimal amount, String recordedDescription) {
+            this(eventId, amount, recordedDescription, null);
+        }
         /** Requires a positive amount and preserves its original scale. */
         public UnidentifiedRR {
             Objects.requireNonNull(eventId);

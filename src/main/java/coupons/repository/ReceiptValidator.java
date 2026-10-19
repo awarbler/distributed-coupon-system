@@ -33,6 +33,7 @@ public final class ReceiptValidator {
      */
     public static void validate(ReceiptRecord receipt) {
         Objects.requireNonNull(receipt, "Receipt cannot be null.");
+        coupons.ReceiptIssues.validateOnlineRule(receipt.metadata(),receipt.transaction());
         ReceiptObservationValidator.validate(
                 ReceiptSnapshot.from(receipt.transaction()), receipt.evidenceIds());
 

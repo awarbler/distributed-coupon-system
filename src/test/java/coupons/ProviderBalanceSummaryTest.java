@@ -24,6 +24,22 @@ class ProviderBalanceSummaryTest {
                 status, null, null, null, List.of(), null, null, valuation);
     }
 
+    @Test void automaticCalendarWeekAndMonthToDateTables() {
+        var balances=new ProviderBalanceSummary();balances.recordOpening(LocalDate.of(2026,9,1),"Walgreens Cash",new BigDecimal("100"),true);
+        var records=List.of(
+                receipt(LocalDate.of(2026,9,30),List.of(earned(EarningKind.WALGREENS_CASH,"Walgreens",BenefitKind.STORE_REWARD,"2",RebateStatus.CREDITED,null)),false),
+                receipt(LocalDate.of(2026,10,1),List.of(earned(EarningKind.WALGREENS_CASH,"Walgreens",BenefitKind.STORE_REWARD,"3",RebateStatus.CREDITED,null)),false),
+                receipt(LocalDate.of(2026,10,4),List.of(earned(EarningKind.WALGREENS_CASH,"Walgreens",BenefitKind.STORE_REWARD,"5",RebateStatus.CREDITED,null)),false),
+                receipt(LocalDate.of(2026,10,5),List.of(earned(EarningKind.WALGREENS_CASH,"Walgreens",BenefitKind.STORE_REWARD,"10",RebateStatus.CREDITED,null)),false),
+                receipt(LocalDate.of(2026,10,10),List.of(earned(EarningKind.WALGREENS_CASH,"Walgreens",BenefitKind.STORE_REWARD,"20",RebateStatus.CREDITED,null)),false));
+        var bytes=new ByteArrayOutputStream();balances.printPeriods(LocalDate.of(2026,10,5),records,new PrintStream(bytes));String output=bytes.toString();
+        assertTrue(output.contains("WEEK 2 ACCOUNT BALANCES — 2026-10-04 through 2026-10-10"),output);
+        assertTrue(output.contains("MONTH TO DATE ACCOUNT BALANCES — 2026-10-01 through 2026-10-05"),output);
+        var rows=output.lines().filter(line->line.startsWith("Walgreens Cash")).map(line->java.util.Arrays.stream(line.split("\\|")).map(String::trim).toList()).toList();
+        assertEquals(List.of("Walgreens Cash","$105.00","$35.00","$0.00","$140.00"),rows.get(0));
+        assertEquals(List.of("Walgreens Cash","$102.00","$18.00","$0.00","$120.00"),rows.get(1));
+    }
+
     private ReceiptRecord receipt(LocalDate day, List<Earning> earnings, boolean used) {
         var tx = new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO, BigDecimal.ZERO));
         if (used) tx.addPayment(new Payment(PaymentType.WALGREENS_CASH, new BigDecimal("10.00")));
@@ -55,10 +71,10 @@ class ProviderBalanceSummaryTest {
                 earned(EarningKind.THIRD_PARTY_REBATE, "Fetch", BenefitKind.POINTS, "25", RebateStatus.CREDITED,
                         new RecordedValuation(new BigDecimal("0.025"), USD, "spreadsheet"))), true);
         String output = print(summary, List.of(record, record, receipt(DAY.plusDays(1), List.of(), true)));
-        assertTrue(output.contains("Walgreens Cash $240.00 $247.75 $238.55"), output);
-        assertTrue(output.contains("Register Rewards $2.00 $2.00 $12.00"), output);
-        assertTrue(output.contains("Fetch $33.59 $33.59 $33.62"), output);
-        assertTrue(output.contains("1 recorded receipt(s)"));
+        assertTrue(output.contains("Walgreens Cash | $240.00 | $247.75 | $238.55"), output);
+        assertTrue(output.contains("Register Rewards | $2.00 | $2.00 | $12.00"), output);
+        assertTrue(output.contains("Fetch | $33.59 | $33.59 | $33.62"), output);
+        assertFalse(output.contains("Opening source:"));
         assertEquals(output, print(summary, List.of(record, record, receipt(DAY.plusDays(1), List.of(), true))));
     }
 
@@ -70,9 +86,9 @@ class ProviderBalanceSummaryTest {
         String output = print(summary, List.of(receipt(DAY, List.of(
                 earned(EarningKind.THIRD_PARTY_REBATE, "Fetch", BenefitKind.POINTS, "25", RebateStatus.CREDITED, null),
                 earned(EarningKind.THIRD_PARTY_REBATE, "Ibotta", BenefitKind.CASH, "3.05", RebateStatus.APPROVED, null)), false)));
-        assertTrue(output.contains("Fetch not entered $1.00 not entered"), output);
-        assertTrue(output.contains("Ibotta not entered $10.00 $10.00"), output);
-        assertTrue(output.contains("Expected/pending/approved benefits excluded from balances: 1"));
+        assertTrue(output.contains("Fetch | Missing data | $1.00 | Missing data"), output);
+        assertTrue(output.contains("Ibotta | Missing data | $10.00 | $10.00"), output);
+        assertEquals(new BigDecimal("10"),summary.balance(DAY,"Ibotta",List.of()).endUsd());
         assertTrue(output.contains("partial"));
     }
 
@@ -83,7 +99,7 @@ class ProviderBalanceSummaryTest {
         summary.recordOpening(DAY, "Swagbucks", new BigDecimal("9.95"), false);
         assertEquals(2, summary.openingHistory().size());
         assertEquals(BigDecimal.ONE, summary.openingHistory().get(0).value());
-        assertTrue(print(summary, List.of()).contains("Swagbucks not entered $9.95 $9.95"));
+        assertTrue(print(summary, List.of()).contains("Swagbucks | Missing data | $9.95 | $9.95"));
         assertThrows(UnsupportedOperationException.class, () -> summary.openingHistory().clear());
     }
 }

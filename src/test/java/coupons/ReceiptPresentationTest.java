@@ -48,8 +48,8 @@ class ReceiptPresentationTest {
         assertTrue(output.contains("Manufacturer Coupon"));
         assertTrue(output.contains("SKU / UPC: AB00123"));
         assertTrue(output.contains("Time: 9:40 AM"));
-        assertTrue(output.replaceAll(" +", " ").contains("Total Register Rewards Earned 12.00 RR"));
-        assertTrue(output.replaceAll(" +", " ").contains("Total Walgreens Cash Earned 0.80 WC"));
+        assertTrue(output.replaceAll(" +", " ").contains("Register Rewards earned | 12.00 RR"));
+        assertTrue(output.replaceAll(" +", " ").contains("Walgreens Cash earned | 0.80 WC"));
         assertEquals(before, ReceiptSnapshot.from(tx));
         assertEquals("lysol travel wipes", item.getProductName());
         assertEquals("ab00123", item.getProductCode());
@@ -80,7 +80,7 @@ class ReceiptPresentationTest {
         assertFalse(output.contains("Expected:"));
         assertFalse(output.contains("Status: Register Reward Printed"));
         assertFalse(output.contains("Recorded Earned: 0.80 Walgreens Cash"));
-        assertTrue(output.replaceAll(" +", " ").contains("Total Walgreens Cash Earned 0.80 WC"));
+        assertTrue(output.replaceAll(" +", " ").contains("Walgreens Cash earned | 0.80 WC"));
         assertFalse(output.contains("Attached Receipt Files: 0"));
         assertEquals(before, ReceiptSnapshot.from(tx));
     }

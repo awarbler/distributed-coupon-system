@@ -135,7 +135,7 @@ public record ReceiptSnapshot(
                     promotion.couponsReduceQualifyingSpend()));
         }
         for (PaymentSnap payment : payments) {
-            restored.addPayment(new Payment(payment.paymentId(), payment.paymentType(), payment.amount(), payment.notes()));
+            restored.addPayment(new Payment(payment.paymentId(), payment.paymentType(), payment.amount(), payment.notes(), payment.accountName()));
         }
         for (RewardSnap reward : rewards) {
             restored.addReward(new Reward(reward.source(), reward.amount(), reward.cashEquivalent()));

@@ -31,13 +31,13 @@ class ReceiptRestartTest {
         Path data = directory.resolve("receipts.bin");
         String entry = String.join("\n", "Restart-receipt", "25:99", "940 am", "10/4/26", "Walgreens", "aj", "", "Milk",
                 "5.00", "1", "0", "0", "n", "n", "0", "0", "0", "1", "5.00", "n", "5.00",
-                "n", "3.60", "6.00", "9.60", "43%", "247.75", "0.80", "10.00", "238.55", "n", "SAVE", "6") + "\n";
+                "n", "y", "3.60", "6.00", "9.60", "43%", "247.75", "0.80", "10.00", "238.55", "n", "SAVE", "9") + "\n";
         String first = run(data, entry, "first");
         assertTrue(first.contains("Save result:"), first);
         assertTrue(first.contains("Time: 9:40 AM"), first);
         assertTrue(first.contains("Enter a valid time"), first);
-        String second = run(data, "2\n#1\n4\n#1\n3\n4\n#1\n6\n", "second");
-        assertTrue(second.contains("Loaded saved receipts: 1"), second);
+        String second = run(data, "2\n#1\nFULL\nBACK\n8\nHISTORY\n1\n8\nRETRY\n8\nHISTORY\n1\n9\n", "second");
+        assertTrue(second.contains("Saved receipts : 1"), second);
         assertTrue(second.contains("Time: 9:40 AM"), second);
         assertTrue(second.contains("Original result:"), second);
         assertTrue(second.replaceAll(" +", " ").contains("Receipt Saving Value 43%"), second);

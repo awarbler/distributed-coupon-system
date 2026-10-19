@@ -13,12 +13,14 @@ import java.util.UUID;
 import coupons.repository.InMemoryStore.CommittedWrite;
 import coupons.repository.InMemoryStore.CreateInput;
 import coupons.repository.InMemoryStore.State;
+import coupons.repository.InMemoryStore.UpdateInput;
+import coupons.repository.InMemoryStore.DeleteInput;
 
 /**
  * Process-local receipt persistence for one application/user scope.
  *
- * <p>All adapters share one store and monitor. Save and lookups are implemented;
- * updates, deletion, and restoration explicitly remain pending later checkpoints.
+ * <p>All adapters share one store and monitor. Save, revision-aware updates, and lookups are implemented;
+ * soft deletion preserves history; restoration remains pending.
  * Authentication and approval belong to the calling service. Default constructors
  * are memory-only; openLocal explicitly enables a versioned local checkpoint. A lookup returns a fresh working transaction; history is
  * available directly even if working reconstruction is no longer possible.
@@ -62,6 +64,144 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         return store.disk == null ? Optional.empty() : Optional.of(store.disk.path);
     }
 
+    public AccountBalanceState accountBalances() { return snapshot().balances(); }
+
+    public void recordAccountOpening(AccountOpening opening) {
+        Objects.requireNonNull(opening);
+        synchronized (store) {
+            var existing = store.state.balances();
+            var duplicate = existing.openings().stream().filter(o -> o.observationId().equals(opening.observationId())).findFirst();
+            if (duplicate.isPresent()) {
+                if (!duplicate.orElseThrow().equals(opening)) throw new IllegalArgumentException("Opening ID already used.");
+                return;
+            }
+            var effective = existing.openings().stream().filter(o -> o.provider().equals(opening.provider())
+                    && o.date().equals(opening.date()) && o.monthStart() == opening.monthStart()).reduce((a,b) -> b);
+            if (effective.isPresent()) {
+                var old = effective.orElseThrow();
+                if (Objects.equals(old.originalUnits(), opening.originalUnits()) && Objects.equals(old.usdValue(), opening.usdValue())
+                        && old.valuationBasis().equals(opening.valuationBasis()) && old.sourceNote().equals(opening.sourceNote())) return;
+            }
+            var values = new java.util.ArrayList<>(existing.openings()); values.add(opening);
+            publishBalances(new AccountBalanceState(values, existing.adjustments(), existing.redemptionHistory()));
+        }
+    }
+
+    public void recordAccountAdjustment(AccountAdjustment adjustment) {
+        Objects.requireNonNull(adjustment);
+        synchronized (store) {
+            var existing = store.state.balances();
+            var duplicate = existing.adjustments().stream().filter(a -> a.eventId().equals(adjustment.eventId())).findFirst();
+            if (duplicate.isPresent()) {
+                if (!duplicate.orElseThrow().equals(adjustment)) throw new IllegalArgumentException("Adjustment ID already used.");
+                return;
+            }
+            var values = new java.util.ArrayList<>(existing.adjustments()); values.add(adjustment);
+            publishBalances(new AccountBalanceState(existing.openings(), values, existing.redemptionHistory()));
+        }
+    }
+
+    public List<ProviderRedemption> providerRedemptions() {
+        var latest=new java.util.LinkedHashMap<UUID,ProviderRedemption>();
+        accountBalances().redemptionHistory().forEach(r->latest.put(r.redemptionId(),r));
+        return List.copyOf(latest.values());
+    }
+    public ProviderRedemption recordProviderRedemption(ProviderRedemption event,AccountOpening destinationOpening) {
+        Objects.requireNonNull(event);
+        synchronized(store) {
+            var current=store.state.balances();
+            var existing=providerRedemptions().stream().filter(r->r.redemptionId().equals(event.redemptionId())).findFirst();
+            if(existing.isPresent()) {
+                var prior=existing.orElseThrow(); if(prior.equals(event)) return prior;
+                if(prior.status()!=ProviderRedemption.Status.REQUESTED || event.status()==ProviderRedemption.Status.REQUESTED || !prior.sameTerms(event))
+                    throw new IllegalArgumentException("Only an unchanged pending redemption can be received or cancelled.");
+            } else {
+                if(event.status()==ProviderRedemption.Status.CANCELLED) throw new IllegalArgumentException("Request a redemption before cancelling it.");
+                var receipts=creationHistory().stream().map(h->findById(h.after().transactionId()).orElse(null)).filter(Objects::nonNull).toList();
+                var balance=new coupons.ProviderBalanceSummary(this).balance(event.requestedDate(),event.provider(),receipts);
+                if(balance.endUsd()==null || balance.endUsd().compareTo(event.sourceUsdValue())<0) throw new IllegalArgumentException("Record a sufficient confirmed source balance before redeeming.");
+                if(event.originalUnitsUsed()!=null && (balance.endPoints()==null || balance.endPoints().compareTo(event.originalUnitsUsed())<0))
+                    throw new IllegalArgumentException("Record sufficient original points before redeeming.");
+                for(UUID id:event.sourceEarningIds()) if(receipts.stream().flatMap(r->r.transaction().getObservations().earnings().stream()).noneMatch(e->e.earningId().equals(id) && e.provider().equalsIgnoreCase(event.provider())))
+                    throw new IllegalArgumentException("Source earning must belong to the selected provider.");
+            }
+            var openings=new java.util.ArrayList<>(current.openings());
+            if(destinationOpening!=null) {
+                if(event.status()!=ProviderRedemption.Status.RECEIVED || event.destination()==ProviderRedemption.Destination.PURCHASE
+                        || !destinationOpening.provider().equals(event.destinationAccount()) || !destinationOpening.date().equals(event.completedDate())
+                        || openings.stream().anyMatch(o->o.provider().equals(destinationOpening.provider()))) throw new IllegalArgumentException("Destination opening must describe a newly confirmed receiving account.");
+                openings.add(destinationOpening);
+            }
+            var history=new java.util.ArrayList<>(current.redemptionHistory());history.add(event);
+            publishBalances(new AccountBalanceState(openings,current.adjustments(),history));
+            return event;
+        }
+    }
+
+    private void publishBalances(AccountBalanceState balances) {
+        var current = store.state;
+        var replacement = new State(current.receipts(), current.rewards(), current.redemptions(), current.evidence(),
+                current.history(), current.requests(), current.rewardVoids(), current.giftCardPromotions(), balances, current.rrUsageLinks());
+        if (store.disk != null) {
+            try { store.disk.save(replacement); }
+            catch (java.io.IOException failure) { throw new IllegalStateException("Could not save account settings; nothing committed.", failure); }
+        }
+        store.state = replacement;
+    }
+
+    public List<GiftCardPromotion> giftCardPromotions() {
+        return snapshot().giftCardPromotions().values().stream()
+                .sorted(java.util.Comparator.comparing(GiftCardPromotion::name).thenComparing(GiftCardPromotion::id)).toList();
+    }
+
+    /** Publishes offer settings and receipt links using the existing locked atomic checkpoint. */
+    public void saveGiftCardPromotion(GiftCardPromotion promotion) {
+        Objects.requireNonNull(promotion);
+        synchronized (store) {
+            State current = store.state;
+            var previous = current.giftCardPromotions().get(promotion.id());
+            for (var link : promotion.contributions().values()) {
+                if (previous != null && link.equals(previous.contributions().get(link.receiptId()))) continue;
+                var receipt = current.receipts().get(link.receiptId());
+                if (receipt == null || receipt.revision() != link.reviewedRevision()
+                        || !receipt.contents().purchaseItems().stream().map(PurchaseLineSnap::lineItemId).toList().containsAll(link.lineIds()))
+                    throw new IllegalArgumentException("Receipt changed or eligible products are missing; review the link again.");
+            }
+            var promotions = new HashMap<>(current.giftCardPromotions());
+            promotions.put(promotion.id(), promotion);
+            State replacement = new State(current.receipts(), current.rewards(), current.redemptions(), current.evidence(),
+                    current.history(), current.requests(), current.rewardVoids(), promotions, current.balances(), current.rrUsageLinks());
+            if (store.disk != null) {
+                try { store.disk.save(replacement); }
+                catch (java.io.IOException failure) { throw new IllegalStateException("Could not save gift-card promotion; nothing committed.", failure); }
+            }
+            store.state = replacement;
+        }
+    }
+
+    private java.util.Map<UUID, GiftCardPromotion> receiptPromotions(State current, ReceiptRevSnap receipt, ReceiptRevSnap previous) {
+        var promotions = new HashMap<>(current.giftCardPromotions());
+        var lineIds = receipt.contents().purchaseItems().stream().map(PurchaseLineSnap::lineItemId).toList();
+        if(previous!=null) {
+            var retained=receipt.contents().observations().promotionLinks().stream().map(coupons.ReceiptPromotionLink::promotionId).collect(java.util.stream.Collectors.toSet());
+            for(var old:previous.contents().observations().promotionLinks())if(!retained.contains(old.promotionId())) {
+                var offer=promotions.get(old.promotionId());
+                if(offer!=null){var contributions=new HashMap<>(offer.contributions());contributions.remove(receipt.transactionId());
+                    promotions.put(offer.id(),new GiftCardPromotion(offer.id(),offer.name(),offer.threshold(),offer.giftCardValue(),offer.start(),offer.end(),offer.basis(),offer.terms(),offer.status(),contributions));}
+            }
+        }
+        for (var link : receipt.contents().observations().promotionLinks()) {
+            if (!lineIds.containsAll(link.eligibleLineIds())) throw new IllegalArgumentException("Promotion links reference missing products.");
+            var offer = promotions.get(link.promotionId());
+            if (offer == null) throw new IllegalArgumentException("Online promotion not found; create it in menu 7 first.");
+            if (previous != null && previous.contents().observations().promotionLinks().contains(link)) continue;
+            var contribution = new GiftCardPromotion.Contribution(receipt.transactionId(), receipt.revision(),
+                    link.eligibleLineIds(), link.reviewedEligibleAmount(), link.eligibilityNote());
+            promotions.put(offer.id(), offer.withContribution(contribution));
+        }
+        return promotions;
+    }
+
     /** Creation history also restores receipt selection and the original last retry input. */
     public List<ReceiptHistoryEntry> creationHistory() {
         return snapshot().history().values().stream()
@@ -90,7 +230,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             ReceiptRevSnap receipt = new ReceiptRevSnap(transactionId, 1,
                     ReceiptStatus.ACTIVE, input.contents(), metadata,
                     input.evidence().stream().map(ReceiptEvidence::getEvidenceId).toList());
-            validateCreation(current, receipt, input.evidence());
+            validateWrite(current, receipt, input.evidence(), null);
             ReceiptWriteResult result = new ReceiptWriteResult(request.requestId(), transactionId,
                     1, ReceiptChangeAction.CREATED, ReceiptStatus.ACTIVE, clock.instant());
             ReceiptHistoryEntry historyEntry = new ReceiptHistoryEntry(UUID.randomUUID(),
@@ -111,7 +251,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             history.put(historyEntry.historyId(), historyEntry);
             requests.put(request.requestId(), new CommittedWrite(input, result));
             State replacement = new State(receipts, current.rewards(), redemptions,
-                    evidence, history, requests, current.rewardVoids());
+                    evidence, history, requests, current.rewardVoids(), receiptPromotions(current, receipt, null), current.balances(), current.rrUsageLinks());
             if (store.disk != null) {
                 try { store.disk.save(replacement); }
                 catch (java.io.IOException failure) {
@@ -124,13 +264,16 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
     }
 
     /** Checks references and uniqueness before any committed state changes. */
-    private void validateCreation(State current, ReceiptRevSnap receipt,
-            List<ReceiptEvidence> evidence) {
-        if (current.receipts().containsKey(receipt.transactionId())) {
+    private void validateWrite(State current, ReceiptRevSnap receipt,
+            List<ReceiptEvidence> evidence, ReceiptRevSnap previous) {
+        if (previous == null && current.receipts().containsKey(receipt.transactionId())) {
             throw new IllegalArgumentException("Receipt ID already exists.");
         }
+        if(coupons.ReceiptIssues.online(receipt.metadata()))
+            coupons.ReceiptIssues.validateOnlineRule(receipt.metadata(),receipt.contents().toTransaction());
         var incomingEventIds = ReceiptObservationValidator.eventIds(receipt.contents());
         for (var existing : current.receipts().values()) {
+            if (existing.transactionId().equals(receipt.transactionId())) continue;
             if (ReceiptObservationValidator.eventIds(existing.contents()).stream().anyMatch(incomingEventIds::contains)) {
                 throw new IllegalArgumentException("A financial event already belongs to another receipt.");
             }
@@ -148,9 +291,23 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
                 throw new IllegalArgumentException("Invalid applied-coupon relationship.");
             }
         }
+        if (previous != null && !receipt.contents().registerRewardRedemptions()
+                .containsAll(previous.contents().registerRewardRedemptions())) {
+            throw new IllegalArgumentException("Existing redemptions cannot be removed or altered.");
+        }
         var redemptionIds = new HashSet<UUID>();
         var rewardIds = new HashSet<UUID>();
         for (var redemption : receipt.contents().registerRewardRedemptions()) {
+            if (current.rrUsageLinks().containsKey(redemption.getRewardId())
+                    || current.receipts().values().stream().flatMap(r -> r.contents().observations().earnings().stream())
+                            .anyMatch(e -> redemption.getRewardId().equals(e.instrumentId()) && current.rrUsageLinks().containsKey(e.earningId())))
+                throw new IllegalArgumentException("RR already consumed by a confirmed receipt-reported deduction.");
+            if (previous != null && previous.contents().registerRewardRedemptions().contains(redemption)) {
+                if (!redemptionIds.add(redemption.getRedemptionId()) || !rewardIds.add(redemption.getRewardId())) {
+                    throw new IllegalArgumentException("Duplicate redemption or reward.");
+                }
+                continue;
+            }
             if (!redemptionIds.add(redemption.getRedemptionId())
                     || current.redemptions().containsKey(redemption.getRedemptionId())) {
                 throw new IllegalArgumentException("Redemption ID already exists.");
@@ -172,7 +329,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         }
         for (var unidentified : receipt.contents().observations().unidentifiedRR()) {
             boolean duplicate = current.redemptions().containsKey(unidentified.eventId())
-                    || current.receipts().values().stream().anyMatch(existing ->
+                    || current.receipts().values().stream().filter(existing -> !existing.transactionId().equals(receipt.transactionId())).anyMatch(existing ->
                     existing.contents().observations().unidentifiedRR().stream()
                             .anyMatch(value -> value.eventId().equals(unidentified.eventId())));
             if (duplicate) {
@@ -180,7 +337,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             }
         }
         for (var redemption : receipt.contents().registerRewardRedemptions()) {
-            boolean duplicate = current.receipts().values().stream().anyMatch(existing ->
+            boolean duplicate = current.receipts().values().stream().filter(existing -> !existing.transactionId().equals(receipt.transactionId())).anyMatch(existing ->
                     existing.contents().observations().unidentifiedRR().stream()
                             .anyMatch(value -> value.eventId().equals(redemption.getRedemptionId())));
             if (duplicate) {
@@ -269,6 +426,66 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
                 || (a.purchasedAt() != null && a.purchasedAt().equals(b.purchasedAt()));
     }
 
+    public List<RRUsageLink> rrUsageLinks() {
+        return snapshot().rrUsageLinks().values().stream().sorted(java.util.Comparator.comparing(RRUsageLink::confirmedAt).thenComparing(RRUsageLink::sourceId)).toList();
+    }
+    public boolean rrUsageNeedsReview(RRUsageLink link) {
+        try { validateUsageLink(snapshot(), link); return false; }
+        catch (IllegalArgumentException failure) { return true; }
+    }
+    private void validateUsageLink(State current, RRUsageLink link) {
+        var spent = current.receipts().get(link.spentReceiptId());
+        if (spent == null || spent.status() != ReceiptStatus.ACTIVE) throw new IllegalArgumentException("Spending receipt not found.");
+        var usage = spent.contents().observations().unidentifiedRR().stream().filter(u -> u.eventId().equals(link.usageEventId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Receipt-reported RR deduction not found."));
+        if (usage.amount().compareTo(link.amount()) != 0) throw new IllegalArgumentException("Recorded deduction amount changed; review association.");
+        java.time.LocalDate earnedDate = null;
+        java.math.BigDecimal face;
+        if (link.receiptEarning()) {
+            var origin = current.receipts().values().stream().filter(r -> r.contents().observations().earnings().stream()
+                    .anyMatch(e -> e.earningId().equals(link.sourceId()))).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("Original receipt earning not found."));
+            if (origin.transactionId().equals(link.spentReceiptId())) throw new IllegalArgumentException("Choose an RR from an earlier purchase, not earned on the spending receipt.");
+            var earning = origin.contents().observations().earnings().stream().filter(e -> e.earningId().equals(link.sourceId())).findFirst().orElseThrow();
+            if (earning.kind() != coupons.ReceiptObservations.EarningKind.REGISTER_REWARD || earning.confirmed() == null
+                    || earning.status() != coupons.RebateStatus.PAID) throw new IllegalArgumentException("Only a confirmed printed RR can be matched.");
+            if (earning.instrumentId() != null && current.redemptions().values().stream().anyMatch(r -> r.getRewardId().equals(earning.instrumentId())))
+                throw new IllegalArgumentException("This earning is already redeemed through its issued instrument.");
+            face = earning.confirmed().amount(); earnedDate = origin.contents().observations().purchaseDate();
+        } else {
+            var reward = current.rewards().get(link.sourceId());
+            if (reward == null || current.rewardVoids().containsKey(link.sourceId())) throw new IllegalArgumentException("Active physical RR not found.");
+            if (current.redemptions().values().stream().anyMatch(r -> r.getRewardId().equals(link.sourceId()))) throw new IllegalArgumentException("This instrument is already redeemed.");
+            if (current.receipts().values().stream().anyMatch(r -> r.contents().observations().earnings().stream()
+                    .anyMatch(e -> link.sourceId().equals(e.instrumentId())))) throw new IllegalArgumentException("Match the original receipt earning for this instrument.");
+            face = reward.getFaceValue(); earnedDate = reward.getEarnedDate();
+        }
+        if (face.compareTo(link.amount()) != 0) throw new IllegalArgumentException("Coupon face value must match the recorded deduction exactly.");
+        var spentDate = spent.contents().observations().purchaseDate();
+        if (earnedDate != null && spentDate != null && earnedDate.isAfter(spentDate)) throw new IllegalArgumentException("RR cannot be used before it was earned.");
+    }
+    public RRUsageLink linkRRUsage(RRUsageLink link) {
+        Objects.requireNonNull(link);
+        synchronized(store) {
+            var current=store.state; var previous=current.rrUsageLinks().get(link.sourceId());
+            if(previous != null) {
+                if(!previous.equals(link)) throw new IllegalArgumentException("This coupon is already matched; review its existing usage.");
+                return previous;
+            }
+            if(current.rrUsageLinks().values().stream().anyMatch(l -> l.usageEventId().equals(link.usageEventId())))
+                throw new IllegalArgumentException("This deduction is already matched to another coupon.");
+            validateUsageLink(current,link);
+            var links=new HashMap<>(current.rrUsageLinks()); links.put(link.sourceId(),link);
+            var replacement=new State(current.receipts(),current.rewards(),current.redemptions(),current.evidence(),
+                    current.history(),current.requests(),current.rewardVoids(),current.giftCardPromotions(),current.balances(),links);
+            if(store.disk != null) {
+                try { store.disk.save(replacement); }
+                catch(java.io.IOException failure) { throw new IllegalStateException("Could not save RR association; nothing committed.",failure); }
+            }
+            store.state=replacement;return link;
+        }
+    }
+
     /** Lists individually registered immutable coupons without asserting their availability. */
     public List<RegisterReward> recordedRewards() {
         State current = snapshot();
@@ -285,7 +502,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             if (previous != null) return previous;
             RegisterReward reward = current.rewards().get(id);
             if (reward == null) throw new IllegalArgumentException("RR coupon not found.");
-            boolean linked = reward.getEarnedReceiptId() != null
+            boolean linked = current.rrUsageLinks().containsKey(id) || reward.getEarnedReceiptId() != null
                     || current.redemptions().values().stream().anyMatch(r -> r.getRewardId().equals(id))
                     || current.receipts().values().stream().anyMatch(r -> r.contents().observations().earnings().stream()
                             .anyMatch(e -> id.equals(e.instrumentId())));
@@ -294,7 +511,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             var removals = new HashMap<>(current.rewardVoids());
             removals.put(id, removal);
             State replacement = new State(current.receipts(), current.rewards(), current.redemptions(), current.evidence(),
-                    current.history(), current.requests(), removals);
+                    current.history(), current.requests(), removals, current.giftCardPromotions(), current.balances(), current.rrUsageLinks());
             if (store.disk != null) {
                 try { store.disk.save(replacement); }
                 catch (java.io.IOException failure) { throw new IllegalStateException("Could not save RR removal; nothing changed.", failure); }
@@ -327,7 +544,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
                     var rewards = new HashMap<>(current.rewards());
                     rewards.put(reward.getRewardId(), reward);
                     State replacement = new State(current.receipts(), rewards,
-                            current.redemptions(), current.evidence(), current.history(), current.requests(), current.rewardVoids());
+                            current.redemptions(), current.evidence(), current.history(), current.requests(), current.rewardVoids(), current.giftCardPromotions(), current.balances(), current.rrUsageLinks());
                     if (store.disk != null) {
                         try { store.disk.save(replacement); }
                         catch (java.io.IOException failure) {
@@ -432,19 +649,85 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         };
     }
 
-    /** Revision-aware updates belong to Checkpoint 3. */
+    /** Commits an approved replacement and its historical before/after snapshots atomically. */
     @Override
     public ReceiptWriteResult update(UUID id, long revision, CouponTransaction transaction,
             ReceiptMeta metadata, List<ReceiptEvidence> evidence, ReceiptWriteRequest request,
             ReceiptChangeContext context) {
-        throw new UnsupportedOperationException("Receipt updates are pending Checkpoint 3.");
+        UpdateInput input = new UpdateInput(id, revision, ReceiptSnapshot.from(transaction),
+                metadata, evidence, request, context);
+        synchronized (store) {
+            State current = store.state;
+            CommittedWrite committed = current.requests().get(request.requestId());
+            if (committed != null) return committed.resultForMatching(input);
+            ReceiptRevSnap before = current.receipts().get(id);
+            if (before == null || before.status() != ReceiptStatus.ACTIVE) {
+                throw new IllegalArgumentException("Active receipt not found.");
+            }
+            if (before.revision() != revision) {
+                throw new java.util.ConcurrentModificationException("Receipt revision has changed.");
+            }
+            var evidenceIds = new java.util.ArrayList<>(before.evidenceIds());
+            input.evidence().forEach(artifact -> evidenceIds.add(artifact.getEvidenceId()));
+            long nextRevision = Math.addExact(revision, 1);
+            ReceiptRevSnap after = new ReceiptRevSnap(id, nextRevision, ReceiptStatus.ACTIVE,
+                    input.contents(), metadata, evidenceIds);
+            validateWrite(current, after, input.evidence(), before);
+            ReceiptWriteResult result = new ReceiptWriteResult(request.requestId(), id,
+                    nextRevision, ReceiptChangeAction.UPDATED, ReceiptStatus.ACTIVE, clock.instant());
+            ReceiptHistoryEntry entry = new ReceiptHistoryEntry(UUID.randomUUID(), request,
+                    result, before, after, null, context);
+            var receipts = new HashMap<>(current.receipts());
+            var redemptions = new HashMap<>(current.redemptions());
+            var artifacts = new HashMap<>(current.evidence());
+            var history = new HashMap<>(current.history());
+            var requests = new HashMap<>(current.requests());
+            receipts.put(id, after);
+            input.contents().registerRewardRedemptions().forEach(value -> redemptions.put(value.getRedemptionId(), value));
+            input.evidence().forEach(value -> artifacts.put(value.getEvidenceId(), value));
+            history.put(entry.historyId(), entry);
+            requests.put(request.requestId(), new CommittedWrite(input, result));
+            State replacement = new State(receipts, current.rewards(), redemptions, artifacts,
+                    history, requests, current.rewardVoids(), receiptPromotions(current, after, before), current.balances(), current.rrUsageLinks());
+            if (store.disk != null) {
+                try { store.disk.save(replacement); }
+                catch (java.io.IOException failure) {
+                    throw new IllegalStateException("Could not write receipt update; nothing committed.", failure);
+                }
+            }
+            store.state = replacement;
+            return result;
+        }
     }
 
     /** Soft deletion belongs to the lifecycle checkpoint. */
     @Override
     public ReceiptWriteResult softDelete(UUID id, long revision, ReceiptWriteRequest request,
             ReceiptChangeContext context) {
-        throw new UnsupportedOperationException("Receipt deletion is not implemented yet.");
+        var input = new DeleteInput(id, revision, request, context);
+        synchronized (store) {
+            var current = store.state;
+            var committed = current.requests().get(request.requestId());
+            if (committed != null) return committed.resultForMatching(input);
+            var before = current.receipts().get(id);
+            if (before == null || before.status() != ReceiptStatus.ACTIVE) throw new IllegalArgumentException("Active receipt not found.");
+            if (before.revision() != revision) throw new java.util.ConcurrentModificationException("Receipt revision has changed.");
+            var after = new ReceiptRevSnap(id, Math.addExact(revision, 1), ReceiptStatus.DELETED,
+                    before.contents(), before.metadata(), before.evidenceIds());
+            var result = new ReceiptWriteResult(request.requestId(), id, after.revision(), ReceiptChangeAction.DELETED, ReceiptStatus.DELETED, clock.instant());
+            var entry = new ReceiptHistoryEntry(UUID.randomUUID(), request, result, before, after, null, context);
+            var receipts = new HashMap<>(current.receipts()); receipts.put(id, after);
+            var history = new HashMap<>(current.history()); history.put(entry.historyId(), entry);
+            var requests = new HashMap<>(current.requests()); requests.put(request.requestId(), new CommittedWrite(input, result));
+            var replacement = new State(receipts, current.rewards(), current.redemptions(), current.evidence(), history, requests,
+                    current.rewardVoids(), current.giftCardPromotions(), current.balances(), current.rrUsageLinks());
+            if (store.disk != null) {
+                try { store.disk.save(replacement); }
+                catch (java.io.IOException failure) { throw new IllegalStateException("Could not delete receipt; nothing committed.", failure); }
+            }
+            store.state = replacement;
+            return result;
+        }
     }
 
     /** Restoration belongs to the lifecycle checkpoint. */

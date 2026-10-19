@@ -20,7 +20,7 @@ class ReceiptHistoryDisplayTest {
         repo.save(id, tx, new ReceiptMeta("Walgreens", "000123", null, null), List.of(),
                 new ReceiptWriteRequest(UUID.randomUUID(), Instant.now()), new ReceiptCreateCtx("aj"));
         var bytes = new ByteArrayOutputStream();
-        new ReceiptEntryApp(new Scanner("4\n#1\n3\n4\n#1\n6\n"), new PrintStream(bytes), repo).run();
+        new ReceiptEntryApp(new Scanner("8\nHISTORY\n1\n8\nRETRY\n8\nHISTORY\n1\n9\n"), new PrintStream(bytes), repo).run();
         String output = bytes.toString();
         assertTrue(output.contains("Version 1 — Receipt Saved"), output);
         assertTrue(output.contains("Entered By: Aj"));
@@ -38,12 +38,12 @@ class ReceiptHistoryDisplayTest {
     @Test void registeredCouponMenuCanBeViewedOrCancelledAndRequiresSaveConfirmation() {
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
-        String script = "5\n1\n2\nBACK\n2\nneutrogena\n7\n\n\nn\n3\n6\n";
+        String script = "5\n1\n2\nBACK\n2\nneutrogena\n7\n\n\nn\n3\n9\n";
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
         assertTrue(repo.recordedRewards().isEmpty());
         assertTrue(bytes.toString().contains("Cancelled — No RR Coupon Added."));
         bytes.reset();
-        new ReceiptEntryApp(new Scanner("5\n2\nneutrogena\n7\n\n\ny\n1\n3\n6\n"), new PrintStream(bytes), repo).run();
+        new ReceiptEntryApp(new Scanner("5\n2\nneutrogena\n7\n\n\ny\n1\n5\n9\n"), new PrintStream(bytes), repo).run();
         assertEquals(1, repo.recordedRewards().size());
         assertEquals("neutrogena", repo.recordedRewards().get(0).getSourceDescription());
         assertTrue(bytes.toString().contains("Neutrogena — 7.00 RR"));

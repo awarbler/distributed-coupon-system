@@ -16,12 +16,12 @@ class ReceiptWorkflowTest {
     void entersWalgreensReceiptAndRetrievesEveryRecordedSection() {
         String script = String.join("\n",
                 "1115-13212274126100403", "9:40 am", "", "Walgreens", "receipt-owner",
-                "07050111090", "Neutrogenta", "7.79", "2", "3.60", "1", "4.00", "2", "y", "Register Reward", "Neutrogena offer", "1", "2", "7.00", "5", "", "", "", "n", "y",
-                "01920099717", "Lysol travel wipes", "3.29", "2", "0", "0", "y", "Register Reward", "Lysol offer", "1", "2", "5.00", "5", "", "", "expired", "n", "n",
+                "07050111090", "Neutrogenta", "7.79", "2", "3.60", "1", "1", "4.00", "2", "y", "Register Reward", "Neutrogena offer", "1", "2", "1", "7.00", "5", "", "", "", "n", "y",
+                "01920099717", "Lysol travel wipes", "3.29", "2", "0", "0", "y", "Register Reward", "Lysol offer", "1", "2", "1", "5.00", "5", "", "", "expired", "n", "n",
                 "1.04", "1", "2.00", "Palmolive", "10.00", "", "n", "3.60",
                 "y", "Walgreens Cash", "Receipt earning", "3", "0", "0.80", "4", "", "", "", "n",
-                "10.80", "6.00", "16.80", "43%", "247.75", "0.80", "10.00", "238.55",
-                "n", "SAVE", "2", "1115-13212274126100403", "4", "#1", "3", "6") + "\n";
+                "y", "10.80", "6.00", "16.80", "43%", "247.75", "0.80", "10.00", "238.55",
+                "n", "SAVE", "2", "1115-13212274126100403", "8", "HISTORY", "1", "8", "RETRY", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -45,12 +45,12 @@ class ReceiptWorkflowTest {
         assertFalse(formatted.contains("Receipt UUID"));
         assertFalse(formatted.contains("scope="));
         assertFalse(formatted.contains("confirmed entitlement"));
-        assertEquals(2, formatted.lines().filter(line -> line.equals("Register Reward — Printed Coupon")).count());
+        assertEquals(2, formatted.lines().filter(line -> line.contains("Status") && line.contains("Register Reward Printed")).count());
         assertTrue(formatted.contains("Requires 2 products per coupon"));
         assertTrue(formatted.replaceAll(" +", " ").contains("SUBTOTAL (Calculated) 12.56"));
         assertTrue(formatted.replaceAll(" +", " ").contains("TOTAL Before Walgreens Cash 13.60"));
         assertFalse(formatted.contains("Status: Register Reward Printed"));
-        assertTrue(formatted.contains("Recorded Earned: 7.00 RR"));
+        assertTrue(formatted.matches("(?s).*Recorded Earned +\\| 7.00 RR .*"));
         assertFalse(formatted.contains("  Offer:"));
         assertFalse(formatted.contains("  Requires:"));
         assertFalse(formatted.contains("Explained amount"));
@@ -83,8 +83,8 @@ class ReceiptWorkflowTest {
         String script = String.join("\n", "NEW", "Receipt-A", "", "", "Store", "owner",
                 "", "Item", "5.00", "1", "0", "0", "n", "n",
                 "0", "0", "0", "n", "4.00", "n", "n", "n", "n",
-                "EDIT", "ITEM", "1", "", "Item corrected", "4.00", "1", "0", "0",
-                "SAVE", "6") + "\n";
+                "EDIT", "ITEM", "ALL", "1", "", "Item corrected", "4.00", "1", "0", "0",
+                "SAVE", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -100,10 +100,10 @@ class ReceiptWorkflowTest {
     void entersCoverGirlWithDistinctCashOffers() {
         String script = String.join("\n", "CoverGirl-Receipt", "", "", "Store", "owner",
                 "61630453095", "covergirl", "9.29", "1", "0", "1", "2.00", "",
-                "y", "Ibotta", "CoverGirl offer", "3", "3.05", "1", "", "",
-                "y", "PayPal", "Separate promotional offer", "3", "1.90", "1", "", "", "n", "n",
+                "y", "Ibotta", "CoverGirl offer", "3", "1", "3.05", "1", "", "",
+                "y", "PayPal", "Separate promotional offer", "3", "1", "1.90", "1", "", "", "n", "n",
                 "0", "0", "0", "n", "7.29", "n",
-                "n", "n", "n", "SAVE", "2", "#1", "6") + "\n";
+                "n", "n", "n", "SAVE", "2", "#1", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();

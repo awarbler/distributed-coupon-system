@@ -44,7 +44,27 @@ final class InMemoryStore {
             Map<UUID, RegisterRewardRedemption> redemptions,
             Map<UUID, ReceiptEvidence> evidence,
             Map<UUID, ReceiptHistoryEntry> history,
-            Map<UUID, CommittedWrite> requests, Map<UUID, RewardVoid> rewardVoids) implements java.io.Serializable {
+            Map<UUID, CommittedWrite> requests, Map<UUID, RewardVoid> rewardVoids,
+            Map<UUID, GiftCardPromotion> giftCardPromotions, AccountBalanceState balances, Map<UUID, RRUsageLink> rrUsageLinks) implements java.io.Serializable {
+        State(Map<UUID, ReceiptRevSnap> receipts, Map<UUID, RegisterReward> rewards,
+                Map<UUID, RegisterRewardRedemption> redemptions, Map<UUID, ReceiptEvidence> evidence,
+                Map<UUID, ReceiptHistoryEntry> history, Map<UUID, CommittedWrite> requests,
+                Map<UUID, RewardVoid> rewardVoids, Map<UUID, GiftCardPromotion> giftCardPromotions, AccountBalanceState balances) {
+            this(receipts, rewards, redemptions, evidence, history, requests, rewardVoids, giftCardPromotions, balances, Map.of());
+        }
+        State(Map<UUID, ReceiptRevSnap> receipts, Map<UUID, RegisterReward> rewards,
+                Map<UUID, RegisterRewardRedemption> redemptions, Map<UUID, ReceiptEvidence> evidence,
+                Map<UUID, ReceiptHistoryEntry> history, Map<UUID, CommittedWrite> requests,
+                Map<UUID, RewardVoid> rewardVoids, Map<UUID, GiftCardPromotion> giftCardPromotions) {
+            this(receipts, rewards, redemptions, evidence, history, requests, rewardVoids, giftCardPromotions, AccountBalanceState.empty());
+        }
+        State(Map<UUID, ReceiptRevSnap> receipts, Map<UUID, RegisterReward> rewards,
+                Map<UUID, RegisterRewardRedemption> redemptions, Map<UUID, ReceiptEvidence> evidence,
+                Map<UUID, ReceiptHistoryEntry> history, Map<UUID, CommittedWrite> requests,
+                Map<UUID, RewardVoid> rewardVoids) {
+            this(receipts, rewards, redemptions, evidence, history, requests, rewardVoids, Map.of());
+        }
+
         /** Preserves existing builders and pre-void checkpoint files. */
         State(Map<UUID, ReceiptRevSnap> receipts, Map<UUID, RegisterReward> rewards,
                 Map<UUID, RegisterRewardRedemption> redemptions, Map<UUID, ReceiptEvidence> evidence,
@@ -61,11 +81,14 @@ final class InMemoryStore {
             history = Map.copyOf(history);
             requests = Map.copyOf(requests);
             rewardVoids = rewardVoids == null ? Map.of() : Map.copyOf(rewardVoids);
+            giftCardPromotions = giftCardPromotions == null ? Map.of() : Map.copyOf(giftCardPromotions);
+            balances = balances == null ? AccountBalanceState.empty() : balances;
+            rrUsageLinks = rrUsageLinks == null ? Map.of() : Map.copyOf(rrUsageLinks);
         }
     }
 
     /** Typed operation values; later operation types share the same request map. */
-    sealed interface WriteInput extends java.io.Serializable permits CreateInput { }
+    sealed interface WriteInput extends java.io.Serializable permits CreateInput, UpdateInput, DeleteInput { }
 
     /** Original immutable creation input, compared by value on retries. */
     record CreateInput(UUID transactionId, ReceiptSnapshot contents,
@@ -78,6 +101,28 @@ final class InMemoryStore {
             Objects.requireNonNull(request);
             Objects.requireNonNull(context);
             evidence = EvidenceBatchValidator.validateAndCopy(transactionId, evidence);
+        }
+    }
+
+    /** Immutable approved replacement, including the revision originally reviewed. */
+    record UpdateInput(UUID transactionId, long expectedRevision, ReceiptSnapshot contents,
+            ReceiptMeta metadata, List<ReceiptEvidence> evidence,
+            ReceiptWriteRequest request, ReceiptChangeContext context) implements WriteInput {
+        UpdateInput {
+            Objects.requireNonNull(transactionId);
+            Objects.requireNonNull(contents);
+            Objects.requireNonNull(request);
+            Objects.requireNonNull(context);
+            if (expectedRevision < 1) throw new IllegalArgumentException("Revision must be positive.");
+            evidence = EvidenceBatchValidator.validateAndCopy(transactionId, evidence);
+        }
+    }
+
+    record DeleteInput(UUID transactionId, long expectedRevision, ReceiptWriteRequest request,
+            ReceiptChangeContext context) implements WriteInput {
+        DeleteInput {
+            Objects.requireNonNull(transactionId); Objects.requireNonNull(request); Objects.requireNonNull(context);
+            if (expectedRevision < 1) throw new IllegalArgumentException("Revision must be positive.");
         }
     }
 

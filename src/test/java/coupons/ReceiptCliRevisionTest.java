@@ -17,7 +17,7 @@ class ReceiptCliRevisionTest {
     @Test
     void itemBackChangesQuantityWithoutDroppingItsNameOrCode() {
         String script = String.join("\n", "Back-item", "", "", "Walgreens", "aj", "000123", "Milk", "5.00", "2",
-                "BACK", "1", "0", "0", "n", "n", "0", "0", "0", "n", "5.00", "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "6") + "\n";
+                "BACK", "1", "0", "0", "n", "n", "0", "0", "0", "n", "5.00", "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -52,8 +52,8 @@ class ReceiptCliRevisionTest {
     @Test
     void otherGiftCardDoesNotBecomeCashOrASecondEarning() {
         String script = String.join("\n", "Gift-receipt", "", "", "Walgreens", "aj", "", "Item", "5.00", "1", "0", "0",
-                "y", "Other", "3", "Different provider", "Gift card offer", "2", "35.00", "5.00", "1",
-                "4.50", "my conservative valuation", "", "", "n", "n", "0", "0", "0", "n", "5.00", "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "6") + "\n";
+                "y", "Other", "3", "Different provider", "Gift card offer", "2", "35.00", "2", "1", "5.00", "1",
+                "4.50", "my conservative valuation", "", "", "n", "n", "0", "0", "0", "n", "5.00", "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -73,7 +73,7 @@ class ReceiptCliRevisionTest {
         for (String pathAnswers : new String[]{"", "/does/not/exist/receipt.png\nBACK"}) {
             String script = String.join("\n", "Savings-test", "", "", "Walgreens", "aj", "", "Milk", "5.00", "1", "0", "0",
                     "n", "n", "0", "0", "0", "n", "5.00", "n",
-                    "10.80", "0", "10.80", "43%", "0", "0", "0", "0", "y", pathAnswers, "SAVE", "2", "#1", "6") + "\n";
+                    "y", "10.80", "0", "10.80", "43%", "0", "0", "0", "0", "y", pathAnswers, "SAVE", "2", "#1", "9") + "\n";
             var repo = new InMemoryTransactionRepository();
             var bytes = new ByteArrayOutputStream();
             new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -107,7 +107,7 @@ class ReceiptCliRevisionTest {
     @Test
     void acknowledgesChosenShortDateAndPreservesItOnRetrieval() {
         String script = String.join("\n", "Date-short", "", "10/4/26", "Walgreens", "aj", "", "Milk", "5.00", "1", "0", "0",
-                "n", "n", "0", "0", "0", "n", "5.00", "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "6") + "\n";
+                "n", "n", "0", "0", "0", "n", "5.00", "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -120,8 +120,8 @@ class ReceiptCliRevisionTest {
     @Test
     void recordsEveryTenderChoiceAndRestoresOtherPaymentNotes() {
         String script = String.join("\n", "Tender-test", "", "", "Walgreens", "aj", "", "Item", "3.60", "1", "0", "0", "n", "n",
-                "0", "0", "0", "y", "1", "1.00", "y", "2", "1.00", "y", "3", "1.00", "y", "4", "0.60", "Store credit", "n",
-                "3.60", "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "6") + "\n";
+                "0", "0", "0", "y", "1", "1.00", "y", "2", "1.00", "y", "3", "1.00", "", "y", "4", "0.60", "Store credit", "", "n",
+                "3.60", "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -144,7 +144,7 @@ class ReceiptCliRevisionTest {
     void redemptionSourceAndPurposeSurviveSaveRetrievalAndHistory() {
         String script = String.join("\n", "Used-test", "", "", "Walgreens", "aj", "", "Item", "15.60", "1", "0", "0", "n", "n",
                 "0", "1", "2.00", "Palmolive", "10.00", "This shopping trip", "y", "1", "3.60", "n", "3.60",
-                "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "6") + "\n";
+                "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -163,7 +163,7 @@ class ReceiptCliRevisionTest {
     void threeRegisterRewardsRetainSeparateAmountsSourcesAndIdsAfterRetry() {
         String script = String.join("\n", "Three-RR", "", "", "Walgreens", "aj", "", "Item", "20.00", "1", "0", "0", "n", "n",
                 "0", "3", "2.00", "Palmolive", "7.00", "Neutrogena", "5.00", "Lysol",
-                "0", "n", "6.00", "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "6") + "\n";
+                "0", "n", "6.00", "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -189,12 +189,12 @@ class ReceiptCliRevisionTest {
     void exitFromReceiptReviewCanBeConfirmedOrDeclinedWithoutSavingAccidentally() {
         for (boolean confirm : new boolean[]{true, false}) {
             String script = String.join("\n", "Exit-test", "", "", "Walgreens", "aj", "", "Item", "5.00", "1", "0", "0", "n", "n",
-                    "0", "0", "0", "n", "5.00", "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "EXIT", confirm ? "y" : "n") + "\n"
-                    + (confirm ? "" : "SAVE\n6\n");
+                    "0", "0", "0", "n", "5.00", "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "EXIT", confirm ? "y" : "n") + "\n"
+                    + (confirm ? "" : "SAVE\n9\n");
             var repo = new InMemoryTransactionRepository();
             var bytes = new ByteArrayOutputStream();
             new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
-            assertTrue(bytes.toString().contains("SAVE / EDIT / CANCEL / EXIT"));
+            assertTrue(bytes.toString().contains("1. Save\n2. Edit\n3. Itemized\n4. Totals\n5. Accounts\n6. Issues\n7. Keep draft — return to main menu (resume later)\n8. Cancel draft — return to main menu (discard unsaved changes)\n9. Exit program"));
             assertEquals(confirm ? 0 : 1, repo.findPossibleDuplicates(new ReceiptMeta("Walgreens", "Exit-test", null, null)).size(), bytes.toString());
             if (confirm) {
                 assertTrue(bytes.toString().contains("CLI closed."));
@@ -204,11 +204,11 @@ class ReceiptCliRevisionTest {
     }
     @Test
     void directlySelectsPaymentWithoutAutomaticallyPrintingProviderBalances() {
-        String script = String.join("\n", "7", "10/4/26", "3", "1", "247.75", "3", "2", "2.00", "5",
+        String script = String.join("\n", "BALANCE SETTINGS", "10/4/26", "3", "1", "247.75", "3", "2", "2.00", "9",
                 "Balance-receipt", "9:40 am", "10/4/26", "Walgreens", "aj", "", "Item", "15.60", "1", "0", "0", "n", "n",
                 "0", "1", "2.00", "Palmolive", "10.00", "", "1", "3.60", "n", "3.60",
                 "y", "Walgreens Cash", "Receipt earning", "3", "0", "0.80", "4", "", "", "", "n",
-                "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "6") + "\n";
+                "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "2", "#1", "3", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -223,7 +223,7 @@ class ReceiptCliRevisionTest {
     @Test
     void clearerMqPromptsAcceptFourOffTwoWithoutRepeatingTheQuestion() {
         String script = String.join("\n", "MQ-labels", "", "", "Walgreens", "aj", "", "Item", "10.00", "2", "0", "1", "4.00", "4 off 2",
-                "n", "n", "0", "0", "0", "5", "16.00", "n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "6") + "\n";
+                "n", "n", "0", "0", "0", "5", "16.00", "n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -233,7 +233,7 @@ class ReceiptCliRevisionTest {
         assertEquals(Integer.valueOf(2), coupon.getRequiredQuantity());
         assertEquals(new BigDecimal("4.00"), coupon.getAppliedAmount());
         String output = bytes.toString();
-        assertTrue(output.contains("Total Store Coupons and Promos:"));
+        assertTrue(output.contains("Separately entered sale/promotion reductions and store coupons"));
         assertTrue(output.contains("Quantity of MQs (0 if none):"));
         assertTrue(output.contains("Value of MQs:"));
         assertTrue(output.contains("Add rebate for current item [y/N; VIEW lists rewards already entered]:"));

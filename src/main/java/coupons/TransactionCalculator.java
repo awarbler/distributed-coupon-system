@@ -157,8 +157,11 @@ public class TransactionCalculator {
 
         validateTransaction(transaction);
 
-        return calculateWalgreensCashRedeemed(transaction)
-                .add(calculateRegisterRewardsRedeemed(transaction));
+        BigDecimal other = transaction.getPayments().stream().filter(p -> {
+            var use=transaction.getObservations().worksheet().uses().get(p.getPaymentId());
+            return use!=null && use.checkoutDeduction();
+        }).map(Payment::getAmount).reduce(BigDecimal.ZERO,BigDecimal::add);
+        return calculateWalgreensCashRedeemed(transaction).add(calculateRegisterRewardsRedeemed(transaction)).add(other);
     }
 
     /**

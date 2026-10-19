@@ -9,7 +9,7 @@ import java.util.UUID;
 /**
  * CouponApplied Represents a coupon discount actually deducted on a receipt.
  * The amount is the total deduction, not a per-unit amount. An empty
- * lineItemIds list means the affected lines are unknown. An advertised coupon
+ * lineItemIds list means the affected lines are unknown unless wholeReceipt is true. An advertised coupon
  * that was not redeemed does not have a CouponApplied record.
  *
  */
@@ -20,6 +20,7 @@ public final class CouponApplied implements java.io.Serializable {
     private final String printedLabel;
     private final Integer requiredQuantity;
     private final BigDecimal appliedAmount; // Store the total deduction amount for this coupon.
+    private final boolean wholeReceipt;
     private final List<UUID> lineItemIds; // Store the identifiers of the receipt lines
 
     /**
@@ -57,6 +58,13 @@ public final class CouponApplied implements java.io.Serializable {
     /** Records a stated buy-quantity requirement without recalculating the actual deduction. */
     public CouponApplied(UUID applicationId, String printedLabel, BigDecimal appliedAmount,
             List<UUID> lineItemIds, Integer requiredQuantity) {
+        this(applicationId,printedLabel,appliedAmount,lineItemIds,requiredQuantity,false);
+    }
+    /** Explicit receipt-wide application, distinct from legacy unknown product links. */
+    public CouponApplied(UUID applicationId,String printedLabel,BigDecimal appliedAmount,
+            List<UUID> lineItemIds,Integer requiredQuantity,boolean wholeReceipt) {
+        if(wholeReceipt && !lineItemIds.isEmpty())throw new IllegalArgumentException("A whole-receipt discount does not select individual lines.");
+        this.wholeReceipt=wholeReceipt;
         if (requiredQuantity != null && requiredQuantity < 1) {
             throw new IllegalArgumentException("Required quantity must be positive or unknown.");
         }
@@ -126,7 +134,8 @@ public final class CouponApplied implements java.io.Serializable {
                 && printedLabel.equals(that.printedLabel)
                 && appliedAmount.equals(that.appliedAmount)
                 && lineItemIds.equals(that.lineItemIds)
-                && Objects.equals(requiredQuantity, that.requiredQuantity);
+                && Objects.equals(requiredQuantity, that.requiredQuantity)
+                && wholeReceipt==that.wholeReceipt;
     }
 
     /**
@@ -136,10 +145,12 @@ public final class CouponApplied implements java.io.Serializable {
      */
     @Override
     public int hashCode() {
-        return Objects.hash(applicationId, printedLabel, appliedAmount, lineItemIds, requiredQuantity);
+        return Objects.hash(applicationId, printedLabel, appliedAmount, lineItemIds, requiredQuantity,wholeReceipt);
     }
 
     /** Products required by this coupon, not the number of coupon applications. */
+    public boolean isWholeReceipt() {return wholeReceipt;}
+
     public Integer getRequiredQuantity() { return requiredQuantity; }
 
     public UUID getApplicationId() {

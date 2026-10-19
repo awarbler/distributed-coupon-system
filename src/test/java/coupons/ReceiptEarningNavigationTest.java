@@ -16,7 +16,7 @@ class ReceiptEarningNavigationTest {
         String prefix = String.join("\n", "Nav-Receipt", "9:40 am", "10/4/2026", "Walgreens", "aj",
                 "", "neutrogena", "5.00", "2", "0", "0", "n", "n", "0", "0", "0", "n", "10.00");
         String script = prefix + "\n" + String.join("\n", answers)
-                + "\n" + String.join("\n", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "3", "6") + "\n";
+                + "\n" + String.join("\n", "y", "0", "0", "0", "0%", "0", "0", "0", "0", "n", "SAVE", "8", "RETRY", "9") + "\n";
         var repo = new InMemoryTransactionRepository();
         var bytes = new ByteArrayOutputStream();
         new ReceiptEntryApp(new Scanner(script), new PrintStream(bytes), repo).run();
@@ -32,6 +32,9 @@ class ReceiptEarningNavigationTest {
         Session s = enter("y", "Register Reward", "Buy 2 get 7 RR", "1", "2", "U", "BACK", "1",
                 "7.00", "5", "", "", "", "n");
         var earning = s.receipt().transaction().getObservations().earnings().get(0);
+        assertTrue(s.output().contains("REGISTER REWARD STATUS — choose 5 if the coupon printed."),s.output());
+        assertTrue(s.output().contains("5. Register Reward Printed"),s.output());
+        assertEquals(RebateStatus.PAID,earning.status());
         assertEquals(ReceiptObservations.Scope.ITEM, earning.scope());
         assertEquals("Walgreens", earning.provider());
         assertEquals(PromotionType.BUY, earning.requirement().type());
@@ -75,7 +78,7 @@ class ReceiptEarningNavigationTest {
     @Test
     void viewListsExistingRewardsWithoutCreatingAnotherEarning() {
         Session s = enter("y", "Register Reward", "Buy 2 get 7", "1", "2", "1", "7.00", "5", "", "", "",
-                "VIEW", "y", "Fetch", "Receipt scan", "3", "0", "25", "4", "", "", "", "", "2", "n");
+                "VIEW", "y", "Fetch", "Receipt scan", "3", "0", "25", "4", "", "0.025", "Spreadsheet", "", "", "2", "n");
         assertEquals(2, s.receipt().transaction().getObservations().earnings().size());
         assertTrue(s.output().contains("REWARDS ALREADY ENTERED — 1"));
         assertTrue(s.output().contains("REWARDS ALREADY ENTERED — 2"));
@@ -85,13 +88,13 @@ class ReceiptEarningNavigationTest {
     @Test
     void receiptAndOtherRequirementsKeepTheirExplicitMeaningInHistory() {
         for (String choice : java.util.List.of("3", "4")) {
-            Session s = enter("y", "Fetch", "Receipt scan", choice, "0", "25", "4", "", "", "", "", "n");
+            Session s = enter("y", "Fetch", "Receipt scan", choice, "0", "25", "4", "", "0.025", "Spreadsheet", "", "", "n");
             var earning = s.receipt().transaction().getObservations().earnings().get(0);
             assertEquals(choice.equals("3") ? "Receipt" : "Other", earning.requirement().category());
             assertNull(earning.requirement().amount());
             assertEquals(earning, s.repository().history().findByRevision(s.receipt().transactionId(), 1)
                     .orElseThrow().after().contents().observations().earnings().get(0));
-            assertTrue(s.output().contains("3. Receipt | 4. Other"));
+            assertTrue(s.output().contains("3. Receipt\n4. Other"));
             assertFalse(s.output().contains("Unknown / no stated requirement"));
         }
     }

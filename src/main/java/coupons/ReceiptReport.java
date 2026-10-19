@@ -10,6 +10,19 @@ import java.util.List;
 
 /** Presents recorded facts and independent reconciliations without mutating either. */
 public final class ReceiptReport {
+    static String earningStatusText(Earning e) {
+        var benefit=e.confirmed()==null?e.expected():e.confirmed();
+        return switch(e.status()) {
+            case EXPECTED -> "Expected, not confirmed";
+            case SUBMITTED -> "Submitted, awaiting result";
+            case PENDING -> "Pending";
+            case APPROVED -> "Approved / earned";
+            case CREDITED -> benefit!=null && benefit.kind()==BenefitKind.POINTS?"Points added to account":"Added to program account";
+            case PAID -> e.kind()==EarningKind.REGISTER_REWARD?"Register Reward Printed":"Received / delivered";
+            case REJECTED -> e.kind()==EarningKind.REGISTER_REWARD?"Rejected / not issued":"Rejected";
+        };
+    }
+
     private static final Currency USD = Currency.getInstance("USD");
 
     /** Utility class. */
@@ -28,7 +41,7 @@ public final class ReceiptReport {
             String items = snapshot.purchaseItems().stream()
                     .filter(line -> coupon.getLineItemIds().contains(line.lineItemId()))
                     .map(line -> title(line.productName())).reduce((a, b) -> a + ", " + b).orElse("association unknown");
-            result.add(new Source(ref, events.get(ref), title(coupon.getPrintedLabel()) + " | " + items));
+            result.add(new Source(ref, events.get(ref), title(coupon.getPrintedLabel()) + " | " + (coupon.isWholeReceipt()?"Whole receipt":items)));
         }
         for (var payment : snapshot.payments()) {
             var ref = new EventReference(EventKind.PAYMENT, payment.paymentId());
@@ -57,14 +70,16 @@ public final class ReceiptReport {
         CouponTransaction transaction = receipt.transaction();
         ReceiptObservations observations = transaction.getObservations();
         TransactionCalculator calculator = new TransactionCalculator();
+        ReceiptIssues.summary(receipt,output);
         rule(output);
         output.println(receipt.metadata() == null ? "RECEIPT" : title(receipt.metadata().retailer()));
         output.println("Receipt: " + (receipt.metadata() == null ? "unknown" : receipt.metadata().receiptNumber()));
         output.println("Date: " + (observations.purchaseDate() == null ? "unknown" : observations.purchaseDate())
                 + " | Time: " + ReceiptTimeInput.display(observations.printedTime()));
         rule(output);
+        int receiptLine = 0;
         for (PurchaseItem item : transaction.getPurchaseItems()) {
-            output.println(title(item.getProductName()));
+            output.println("Line " + (++receiptLine) + ": " + title(item.getProductName()));
             output.println("  SKU / UPC: " + (item.getProductCode() == null ? "Unknown" : item.getProductCode().toUpperCase(java.util.Locale.ROOT)));
             row(output, "  " + item.getQuantity() + " @ " + money(item.getSaleUnitPrice()), item.calculateLineTotal());
             if (item.getRegularUnitPrice() != null) row(output, "  Regular unit price", item.getRegularUnitPrice());
@@ -74,16 +89,23 @@ public final class ReceiptReport {
                     .map(CouponApplied::getAppliedAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
             if (store.signum() != 0) row(output, "  Store discount", store.negate());
             if (store.signum() != 0) row(output, "  After store discounts", item.calculateLineTotal().subtract(store));
+            BigDecimal sale = transaction.getAppliedCoupons().stream()
+                    .filter(c -> c.getLineItemIds().equals(List.of(item.getLineItemId()))
+                            && observations.discountKinds().get(c.getApplicationId()) == DiscountKind.SALE_PROMOTION)
+                    .map(CouponApplied::getAppliedAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (sale.signum() != 0) {
+                row(output, "  Sale/promotion reduction", sale.negate());
+                row(output, "  After sale/promotion reductions", item.calculateLineTotal().subtract(sale));
+            }
             output.println();
         }
         output.println("COUPONS APPLIED");
         for (CouponApplied coupon : transaction.getAppliedCoupons()) {
-            if (observations.discountKinds().get(coupon.getApplicationId()) == DiscountKind.STORE) continue;
+            if (observations.discountKinds().get(coupon.getApplicationId()) == DiscountKind.STORE
+                    || observations.discountKinds().get(coupon.getApplicationId()) == DiscountKind.SALE_PROMOTION
+                    && coupon.getLineItemIds().size() == 1) continue;
             row(output, coupon.getPrintedLabel(), coupon.getAppliedAmount().negate());
-            String products = transaction.getPurchaseItems().stream()
-                    .filter(item -> coupon.getLineItemIds().contains(item.getLineItemId()))
-                    .map(item -> title(item.getProductName())).reduce((a, b) -> a + ", " + b).orElse("Products unknown");
-            output.println("  " + products);
+            output.println("  " + (coupon.isWholeReceipt()?"Whole receipt":RegisterRewardLabel.products(transaction,coupon.getLineItemIds())));
             if (coupon.getRequiredQuantity() != null) output.println("  Requires " + coupon.getRequiredQuantity() + " products per coupon");
         }
         BigDecimal rr = calculator.calculateRegisterRewardsRedeemed(transaction);
@@ -121,8 +143,10 @@ public final class ReceiptReport {
         if (tenders.isEmpty()) output.println("Cash / card / gift-card payment not recorded.");
         else tenders.forEach(p -> {
             row(output, p.getPaymentType().name().replace('_', ' '), p.getAmount());
-            if (p.getNotes() != null) output.println("  " + title(p.getNotes()));
+            if (p.getAccountName() != null) output.println("  Redeemed Account: " + p.getAccountName());
         });
+        if (observations.footerStatus() == FooterStatus.NOT_PRINTED)
+            output.println("Walgreens savings/rewards footer: Not printed.");
         if (!observations.savings().isEmpty()) {
             rule(output);
             output.println("PRINTED SAVINGS");
@@ -167,14 +191,20 @@ public final class ReceiptReport {
             rule(output);
             output.println("REWARDS & REBATES EARNED");
             output.println("Separate from the amount due above.");
-            for (Earning earning : observations.earnings()) {
+            for (var kind : List.of(EarningKind.REGISTER_REWARD, EarningKind.WALGREENS_CASH, EarningKind.THIRD_PARTY_REBATE)) {
+                var group = observations.earnings().stream().filter(e -> e.kind() == kind).toList();
+                if (group.isEmpty()) continue;
+                output.println("\n" + switch (kind) { case REGISTER_REWARD -> "REGISTER REWARDS"; case WALGREENS_CASH -> "WALGREENS CASH"; default -> "OTHER REBATES"; });
+            for (Earning earning : group) {
                 boolean alreadyInAccount = earning.kind() == EarningKind.WALGREENS_CASH && earning.scope() == Scope.RECEIPT
                         && earning.confirmed() != null && earning.status() != RebateStatus.REJECTED
                         && earning.offerReference() == null && earning.recordedLifecycle() == null
+                        && (earning.requirement() == null || earning.requirement().type() != PromotionType.SPEND)
                         && account != null && account.earned() != null
                         && observations.earnings().stream().filter(e -> e.kind() == EarningKind.WALGREENS_CASH).count() == 1
                         && earning.confirmed().amount().compareTo(account.earned()) == 0;
                 if (!alreadyInAccount) printEarning(earning, transaction, output);
+            }
             }
             for (PurchaseItem item : transaction.getPurchaseItems()) {
                 List<Earning> cash = observations.earnings().stream()
@@ -196,50 +226,68 @@ public final class ReceiptReport {
         if (walgreens || rrEarned || wcEarned || account != null) {
             rule(output);
             output.println("REWARDS EARNED TOTALS");
-            if (walgreens || rrEarned) output.printf("%-39s %10s%n", "Total Register Rewards Earned",
-                    money(confirmedTotal(observations, EarningKind.REGISTER_REWARD)) + " RR");
+            output.println("+--------------------------+--------------------------------------------------------------------+");
+            if (walgreens || rrEarned) detail(output, "Register Rewards earned", money(confirmedTotal(observations, EarningKind.REGISTER_REWARD)) + " RR");
             if (walgreens || wcEarned || account != null) {
                 BigDecimal earned = account != null && account.earned() != null ? account.earned()
                         : confirmedTotal(observations, EarningKind.WALGREENS_CASH);
-                output.printf("%-39s %10s%n", "Total Walgreens Cash Earned", money(earned) + " WC");
+                detail(output, "Walgreens Cash earned", money(earned) + " WC");
+            }
+            output.println("+--------------------------+--------------------------------------------------------------------+");
+        }
+        SavingsReport.printReceiptTotals(receipt, output);
+        rule(output);
+        if (!observations.promotionLinks().isEmpty()) {
+            output.println("ONLINE REBATE ELIGIBILITY — progress only; no gift card received or used");
+            for (var link : observations.promotionLinks()) {
+                output.println("  Eligibility note: " + link.eligibilityNote());
+                output.println("  Eligible products: " + RegisterRewardLabel.products(transaction,link.eligibleLineIds()));
+                if (link.reviewedEligibleAmount() != null) output.println("  Reviewed eligible USD: " + link.reviewedEligibleAmount());
             }
         }
-        rule(output);
         if (!receipt.evidenceIds().isEmpty()) output.println("Attached Receipt Files: " + receipt.evidenceIds().size());
     }
 
     /** One block per benefit; expected and received values are never added together. */
     private static void printEarning(Earning e, CouponTransaction transaction, PrintStream output) {
-        String title = e.kind() == EarningKind.REGISTER_REWARD
-                ? (e.status() == RebateStatus.PAID ? "Register Reward — printed coupon" : "Register Reward")
-                : e.kind() == EarningKind.WALGREENS_CASH ? "Walgreens Cash" : e.provider();
-        output.println();
-        output.println(title(title));
-        String products = e.scope() == Scope.RECEIPT ? "Whole receipt" : e.scope() == Scope.UNKNOWN ? "Products unknown"
-                : transaction.getPurchaseItems().stream().filter(item -> e.lineItemIds().contains(item.getLineItemId()))
-                    .map(item -> title(item.getProductName())).reduce((a, b) -> a + ", " + b).orElse("Products unknown");
-        output.println("  For: " + title(products));
-        if (e.expected() != null && (e.confirmed() == null || !sameBenefit(e.expected(), e.confirmed()))) {
-            output.println("  Expected: " + earningValue(e, e.expected()));
+        String name = e.kind() == EarningKind.REGISTER_REWARD ? "Register Reward" : e.kind() == EarningKind.WALGREENS_CASH ? "Walgreens Cash" : e.provider();
+        output.println("+--------------------------+--------------------------------------------------------------------+");
+        detail(output, "Offer", e.kind() == EarningKind.REGISTER_REWARD ? RegisterRewardLabel.offer(transaction,e)
+                : name + (e.offerReference() == null ? "" : " — " + e.offerReference()));
+        String products = RegisterRewardLabel.products(transaction,e);
+        if (e.kind() == EarningKind.REGISTER_REWARD) detail(output,"Receipt lines",RegisterRewardLabel.lines(transaction,e));
+        else detail(output, "Products", products);
+        if (e.expected() != null && (e.confirmed() == null || !sameBenefit(e.expected(), e.confirmed()))) detail(output, "Expected", earningValue(e, e.expected()));
+        if (e.confirmed() != null) detail(output, "Recorded Earned", earningValue(e, e.confirmed()));
+        detail(output, "Status", earningStatusText(e));
+        if (e.kind() == EarningKind.REGISTER_REWARD || e.expirationDate() != null) detail(output, "Expires", e.expirationDate() == null ? "unknown" : e.expirationDate().toString());
+        if (e.requirement() != null && e.requirement().type() == PromotionType.SPEND) {
+            var check = RewardSpendCheck.evaluate(e, transaction);
+            detail(output, "Required spend", "$" + money(check.requiredSpend()));
+            detail(output, "Basis", e.requirement().spendBasis() == SpendBasis.SALE_BEFORE_COUPONS ? "After sale/promotion reductions, before coupons" : "Other / unknown");
+            if (check.status() == RewardSpendCheck.Status.CANNOT_VERIFY) detail(output, "Cannot verify", check.reason());
+            else {
+                detail(output, "Qualifying spend", "$" + money(check.qualifyingSpend()));
+                detail(output, "Spend requirement", check.status() == RewardSpendCheck.Status.MET ? "Met — $" + money(check.qualifyingSpend().subtract(check.requiredSpend())) + " above threshold" : "Not met — $" + money(check.requiredSpend().subtract(check.qualifyingSpend())) + " short");
+            }
         }
-        if (e.confirmed() != null) output.println("  Recorded Earned: " + earningValue(e, e.confirmed()));
-        if (!(e.kind() == EarningKind.REGISTER_REWARD && e.status() == RebateStatus.PAID)) output.println("  Status: " + switch (e.status()) {
-            case EXPECTED -> "Expected, not confirmed";
-            case SUBMITTED -> "Submitted, awaiting result";
-            case PENDING -> "Pending";
-            case APPROVED -> "Earned / approved";
-            case CREDITED -> "Added to program account";
-            case PAID -> e.kind() == EarningKind.REGISTER_REWARD ? "Register Reward Printed" : "Received";
-            case REJECTED -> "Rejected / not issued";
-        });
-        if (e.kind() == EarningKind.REGISTER_REWARD || e.expirationDate() != null) {
-            output.println("  Expires: " + (e.expirationDate() == null ? "unknown" : e.expirationDate()));
+        if (e.recordedLifecycle() != null) detail(output, "Note", e.recordedLifecycle());
+        if (e.valuation() != null) detail(output, "Recorded Value", e.valuation().amount().toPlainString() + " " + e.valuation().currency() + " (" + e.valuation().basis() + ")");
+        output.println("+--------------------------+--------------------------------------------------------------------+");
+    }
+    private static void detail(PrintStream out, String label, String text) {
+        text = text == null || text.isEmpty() ? "unknown" : text;
+        boolean first = true;
+        while (!text.isEmpty()) {
+            int end = Math.min(66, text.length());
+            if (end < text.length()) { int space = text.lastIndexOf(' ', end); if (space > 0) end = space; }
+            out.printf("| %-24s | %-66s |%n", first ? label : "", text.substring(0,end));
+            text = text.substring(end).stripLeading(); first = false;
         }
-        if (e.recordedLifecycle() != null) output.println("  Note: " + title(e.recordedLifecycle()));
-        if (e.valuation() != null) output.println("  Recorded Value: " + e.valuation().amount().toPlainString()
-                + " " + e.valuation().currency() + " (" + e.valuation().basis() + ")");
     }
 
+    private static boolean earned(Earning e) { return SavingsReport.earned(e); }
+    private static BigDecimal earnedDollars(Earning e) { return SavingsReport.earnedDollars(e); }
     private static boolean sameBenefit(RebateBenefit a, RebateBenefit b) {
         return a.kind() == b.kind() && a.amount().compareTo(b.amount()) == 0
                 && java.util.Objects.equals(a.currency(), b.currency()) && java.util.Objects.equals(a.program(), b.program());
@@ -253,7 +301,7 @@ public final class ReceiptReport {
 
     /** Count each confirmed earning once; expected and rejected amounts are not earned totals. */
     private static BigDecimal confirmedTotal(ReceiptObservations observations, EarningKind kind) {
-        return observations.earnings().stream().filter(e -> e.kind() == kind && e.confirmed() != null && e.status() != RebateStatus.REJECTED)
+        return observations.earnings().stream().filter(e -> e.kind() == kind && earned(e))
                 .map(e -> e.confirmed().amount()).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 

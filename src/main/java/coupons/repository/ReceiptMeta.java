@@ -20,8 +20,13 @@ public record ReceiptMeta(
         String retailer,
         String receiptNumber,
         LocalDateTime purchasedAt,
-        String storeReference
+        String storeReference,
+        PurchaseChannel purchaseChannel
 ) implements java.io.Serializable {
+    public enum PurchaseChannel { IN_STORE, ONLINE, UNKNOWN }
+    public ReceiptMeta(String retailer,String receiptNumber,LocalDateTime purchasedAt,String storeReference) {
+        this(retailer,receiptNumber,purchasedAt,storeReference,PurchaseChannel.UNKNOWN);
+    }
     /**
      * Validates metadata without normalizing recorded text.
      *
@@ -37,6 +42,7 @@ public record ReceiptMeta(
      *         optional text field is blank
      */
     public ReceiptMeta {
+        purchaseChannel=purchaseChannel==null?PurchaseChannel.UNKNOWN:purchaseChannel;
         Objects.requireNonNull(retailer, "Retailer cannot be null.");
         if (retailer.isBlank()) {
             throw new IllegalArgumentException("Retailer cannot be blank.");

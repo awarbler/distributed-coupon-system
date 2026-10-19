@@ -2272,12 +2272,17 @@ public final class ReceiptEntryApp {
         var day = records.stream().map(r -> r.transaction().getObservations().purchaseDate()).filter(Objects::nonNull).max(LocalDate::compareTo).orElse(LocalDate.now(java.time.ZoneId.of("America/Chicago")));
         printBalanceOverview(day,records);
         while (true) {
-            String action=menuText("BALANCES / SAVINGS / SETTINGS / BACK").trim().toUpperCase(Locale.ROOT);
+            String action=menuText("BALANCES / SAVINGS / SETTINGS / REPORTED / BACK").trim().toUpperCase(Locale.ROOT);
             if(action.equals("BACK") || action.equals("CANCEL")) return;
             if(action.equals("BALANCES")) printBalanceOverview(day,records);
             else if(action.equals("SETTINGS")) balanceSettings();
             else if(action.equals("SAVINGS")) savingsReports();
-            else output.println("Choose BALANCES, SAVINGS, SETTINGS or BACK.");
+            else if(action.equals("REPORTED")) {
+                var all = repository.creationHistory().stream().map(h -> h.after().transactionId())
+                        .map(id -> repository.findById(id).or(() -> repository.findDeletedById(id)).orElseThrow()).toList();
+                balances.printReported(all, output);
+            }
+            else output.println("Choose BALANCES, SAVINGS, SETTINGS, REPORTED or BACK.");
         }
     }
     private void printBalanceOverview(LocalDate day,List<ReceiptRecord> records) {
@@ -2339,8 +2344,66 @@ public final class ReceiptEntryApp {
         }
     }
 
-    private void historyActions() {
-        String action = menuText("HISTORY / RETRY / BACK").trim().toUpperCase(Locale.ROOT);
+    private void restoreReceipt() throws IOException {
+        var deleted = repository.findDeleted();
+        if (deleted.isEmpty()) { output.println("No deleted receipts available."); return; }
+        output.println("\nDELETED RECEIPTS — original contents and history retained");
+        for (int i = 0; i < deleted.size(); i++) {
+            var r = deleted.get(i); var o = r.transaction().getObservations();
+            output.println((i + 1) + ". " + Objects.toString(o.purchaseDate(), "Date not recorded")
+                    + " | " + ReceiptTimeInput.display(o.printedTime()) + " | " + receiptNumber(r)
+                    + " | revision " + r.revision());
+        }
+        int selected = questions(() -> integer("Deleted receipt number (0 returns)", 0, deleted.size()));
+        if (selected == 0) return;
+        var receipt = deleted.get(selected - 1);
+        display(receipt);
+        String reason = questions(() -> required("Restoration reason"));
+        if (!questions(() -> yes("Restore this receipt? Calculated balances will include its activity once; provider-reported observations remain unchanged", false))) return;
+        var request = new ReceiptWriteRequest(UUID.randomUUID(), Instant.now());
+        var context = new ReceiptChangeContext("Local owner", reason, "Local owner", request.requestedAt());
+        while (true) {
+            try {
+                repository.restore(receipt.transactionId(), receipt.revision(), request, context);
+                if (!savedIds.contains(receipt.transactionId())) savedIds.add(receipt.transactionId());
+                var restored = repository.findById(receipt.transactionId()).orElseThrow();
+                output.println("Receipt restored successfully: " + receiptNumber(restored) + " | revision " + restored.revision());
+                displayHistory(restored);
+                displayAccountCarry(receipt, restored);
+                return;
+            } catch (java.util.ConcurrentModificationException | IllegalArgumentException failure) {
+                output.println("Restoration not saved: " + failure.getMessage()); return;
+            } catch (IllegalStateException failure) {
+                output.println("Restoration not saved: " + failure.getMessage());
+                if (!questions(() -> yes("Retry the same restoration request?", false))) return;
+            }
+        }
+    }
+
+    private void lookupReceiptDuplicates() {
+        var metadata = questions(() -> {
+            String retailer = required("Retailer (exact recorded spelling)");
+            String number = optional("Printed receipt number (blank unknown)");
+            LocalDate day = date("Purchase date (blank unknown)");
+            String time = day == null ? null : receiptTime();
+            var purchased = day == null ? null : ReceiptTimeInput.parse(time).map(day::atTime).orElse(null);
+            return new ReceiptMeta(retailer, number, purchased, optional("Store reference (blank unknown)"));
+        });
+        var matches = repository.findPossibleDuplicates(metadata);
+        if (matches.isEmpty()) { output.println("No possible duplicates found."); return; }
+        output.println("\nPOSSIBLE DUPLICATES — includes deleted receipts; no records changed");
+        for (var r : matches) {
+            var o = r.transaction().getObservations();
+            output.println(Objects.toString(o.purchaseDate(), "Date not recorded") + " | "
+                    + ReceiptTimeInput.display(o.printedTime()) + " | " + receiptNumber(r)
+                    + " | " + r.status() + " | revision " + r.revision());
+        }
+    }
+
+    private void historyActions() throws IOException {
+        String action = menuText("HISTORY / RETRY / RESTORE / DUPLICATES / BACK").trim().toUpperCase(Locale.ROOT);
+        if (action.equals("RESTORE")) { restoreReceipt(); return; }
+        if (action.equals("DUPLICATES")) { lookupReceiptDuplicates(); return; }
         if (action.equals("RETRY")) {
             if (last == null) output.println("No captured save request.");
             else {

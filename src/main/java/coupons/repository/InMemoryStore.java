@@ -88,7 +88,7 @@ final class InMemoryStore {
     }
 
     /** Typed operation values; later operation types share the same request map. */
-    sealed interface WriteInput extends java.io.Serializable permits CreateInput, UpdateInput, DeleteInput { }
+    sealed interface WriteInput extends java.io.Serializable permits CreateInput, UpdateInput, DeleteInput, RestoreInput { }
 
     /** Original immutable creation input, compared by value on retries. */
     record CreateInput(UUID transactionId, ReceiptSnapshot contents,
@@ -122,6 +122,16 @@ final class InMemoryStore {
             ReceiptChangeContext context) implements WriteInput {
         DeleteInput {
             Objects.requireNonNull(transactionId); Objects.requireNonNull(request); Objects.requireNonNull(context);
+            if (expectedRevision < 1) throw new IllegalArgumentException("Revision must be positive.");
+        }
+    }
+
+    record RestoreInput(UUID transactionId, long expectedRevision,
+            ReceiptWriteRequest request, ReceiptChangeContext context) implements WriteInput {
+        RestoreInput {
+            Objects.requireNonNull(transactionId);
+            Objects.requireNonNull(request);
+            Objects.requireNonNull(context);
             if (expectedRevision < 1) throw new IllegalArgumentException("Revision must be positive.");
         }
     }

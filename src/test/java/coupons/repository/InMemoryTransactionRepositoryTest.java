@@ -386,12 +386,12 @@ class InMemoryTransactionRepositoryTest {
         assertSame(before, store.state);
     }
 
-    /** Verifies deletion rejects missing approval context and restoration remains unimplemented. */
+    /** Verifies deletion and restoration reject missing approval context. */
     @Test
-    void lifecycleOperationsValidateContextAndRestorationRemainsUnsupported() {
+    void lifecycleOperationsRequireApprovalContext() {
         var repo = new InMemoryTransactionRepository(CLOCK);
         UUID id = UUID.randomUUID();
         assertThrows(NullPointerException.class, () -> repo.softDelete(id, 1, request(), null));
-        assertThrows(UnsupportedOperationException.class, () -> repo.restore(id, 1, request(), null));
+        assertThrows(NullPointerException.class, () -> repo.restore(id, 1, request(), null));
     }
 }

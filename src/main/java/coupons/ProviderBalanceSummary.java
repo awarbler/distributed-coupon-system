@@ -223,8 +223,38 @@ public final class ProviderBalanceSummary {
         return new Balance(month, at(day, provider, false, false, events), at(day, provider, true, false, events),
                 at(day, provider, false, true, events), at(day, provider, true, true, events), baseline(day, provider));
     }
+    /** Report source observations, including deleted receipts, without treating them as movements. */
+    public void printReported(List<ReceiptRecord> records, PrintStream out) {
+        out.println("\nPROVIDER-REPORTED BALANCES — preserved receipt observations");
+        out.println("Date | Time | Receipt | Receipt status | Provider | Reported opening | Reported earned | Reported used | Reported close");
+        var latest = new LinkedHashMap<UUID, ReceiptRecord>();
+        records.forEach(r -> latest.merge(r.transactionId(), r, (a, b) -> a.revision() >= b.revision() ? a : b));
+        boolean found = false;
+        var ordered = latest.values().stream().sorted(Comparator
+                .comparing((ReceiptRecord r) -> r.transaction().getObservations().purchaseDate(), Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(r -> ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).orElse(java.time.LocalTime.MAX))
+                .thenComparing(ReceiptRecord::transactionId)).toList();
+        for (var r : ordered) {
+            var o = r.transaction().getObservations(); var a = o.walgreensCash();
+            if (a == null) continue;
+            found = true;
+            String number = r.metadata() == null || r.metadata().receiptNumber() == null ? r.transactionId().toString() : r.metadata().receiptNumber();
+            out.println(Objects.toString(o.purchaseDate(), "Not recorded") + " | " + ReceiptTimeInput.display(o.printedTime())
+                    + " | " + number + " | " + r.status() + " | Walgreens Cash | "
+                    + reportedValue(a.startingBalance()) + " | " + reportedValue(a.earned()) + " | "
+                    + reportedValue(a.used()) + " | " + reportedValue(a.endingBalance()));
+        }
+        if (!found) out.println("No provider-reported receipt balances recorded.");
+        out.println("These are source observations, not calculated balances. Deletion/restoration does not rewrite them. Earlier corrected observations remain in receipt history.");
+    }
+
+    private String reportedValue(BigDecimal value) {
+        return value == null ? "Not recorded" : "$" + value.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+
     public void print(LocalDate day, List<ReceiptRecord> records, PrintStream out) {
         out.println("\nACCOUNT BALANCES — " + day);
+        out.println("Calculated from active receipts and recorded account activity. REPORTED shows preserved provider observations.");
         if (day == null) return;
         out.printf("%-20s | %14s | %14s | %14s%n", "Provider", "Month start", "Day start", "Day close");
         out.println("---------------------+----------------+----------------+----------------");

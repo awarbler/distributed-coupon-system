@@ -17,3 +17,19 @@ docs/
 
 # Local receipt checkpoints and locks
 .coupon-data/
+
+# Local Checkpoint 4 review package (if copied into the project)
+checkpoint4-review/
+checkpoint4.patch
+checkpoint4-review.zip
+/proposed-files/
+/IMPLEMENTATION.md
+/files.json
+
+# Keep Markdown documentation local, except README.md
+*.[mM][dD]
+!README.md
+
+# Private design document and its Microsoft Word lock file
+/Distributed_Coupon_System_Design_and_Plan.docx
+/~$stributed_Coupon_System_Design_and_Plan.docx

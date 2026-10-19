@@ -15,12 +15,13 @@ import coupons.repository.InMemoryStore.CreateInput;
 import coupons.repository.InMemoryStore.State;
 import coupons.repository.InMemoryStore.UpdateInput;
 import coupons.repository.InMemoryStore.DeleteInput;
+import coupons.repository.InMemoryStore.RestoreInput;
 
 /**
  * Process-local receipt persistence for one application/user scope.
  *
  * <p>All adapters share one store and monitor. Save, revision-aware updates, and lookups are implemented;
- * soft deletion preserves history; restoration remains pending.
+ * soft deletion and restoration preserve history and financial identities.
  * Authentication and approval belong to the calling service. Default constructors
  * are memory-only; openLocal explicitly enables a versioned local checkpoint. A lookup returns a fresh working transaction; history is
  * available directly even if working reconstruction is no longer possible.
@@ -269,6 +270,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         if (previous == null && current.receipts().containsKey(receipt.transactionId())) {
             throw new IllegalArgumentException("Receipt ID already exists.");
         }
+        validateStoredReferences(current, receipt, evidence, previous);
         if(coupons.ReceiptIssues.online(receipt.metadata()))
             coupons.ReceiptIssues.validateOnlineRule(receipt.metadata(),receipt.contents().toTransaction());
         var incomingEventIds = ReceiptObservationValidator.eventIds(receipt.contents());
@@ -358,6 +360,116 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         }
     }
 
+    /** Validate existing references too; unchanged financial events are not new redemptions. */
+    private void validateStoredReferences(State current, ReceiptRevSnap receipt,
+            List<ReceiptEvidence> incoming, ReceiptRevSnap previous) {
+        var artifacts = new HashMap<>(current.evidence());
+        for (var artifact : EvidenceBatchValidator.validateAndCopy(receipt.transactionId(), incoming)) {
+            if (artifacts.putIfAbsent(artifact.getEvidenceId(), artifact) != null)
+                throw new IllegalArgumentException("Evidence ID already exists.");
+        }
+        for (var id : receipt.evidenceIds()) {
+            var artifact = artifacts.get(id);
+            if (artifact == null || !receipt.transactionId().equals(artifact.getTransactionId()))
+                throw new IllegalArgumentException("Receipt evidence is missing or belongs to another receipt.");
+        }
+        for (var redemption : receipt.contents().registerRewardRedemptions()) {
+            var reward = current.rewards().get(redemption.getRewardId());
+            if (reward == null || current.rewardVoids().containsKey(redemption.getRewardId()))
+                throw new IllegalArgumentException("Referenced reward is missing or voided.");
+            validateRewardOrigin(current, receipt, reward);
+            if (previous != null && previous.contents().registerRewardRedemptions().contains(redemption)
+                    && !redemption.equals(current.redemptions().get(redemption.getRedemptionId())))
+                throw new IllegalArgumentException("Stored redemption is missing or inconsistent.");
+        }
+        for (var earning : receipt.contents().observations().earnings()) {
+            if (earning.instrumentId() != null) {
+                var reward = current.rewards().get(earning.instrumentId());
+                if (reward == null || current.rewardVoids().containsKey(earning.instrumentId())
+                        || !receipt.transactionId().equals(reward.getEarnedReceiptId()))
+                    throw new IllegalArgumentException("Earning instrument is missing, voided, or owned by another receipt.");
+            }
+            if (earning.claimId() != null)
+                throw new IllegalArgumentException("Claim references require rebate repository integration.");
+        }
+        // Historical RR matches remain reserved when corrections require review.
+        // Restoration must not activate a use while its earning receipt is deleted.
+        if (receipt.status() == ReceiptStatus.ACTIVE) {
+            for (var link : current.rrUsageLinks().values()) {
+                if (!receipt.transactionId().equals(link.spentReceiptId())) continue;
+                if (link.receiptEarning()) {
+                    var source = earningReceipt(current, link.sourceId());
+                    if (source == null || source.status() != ReceiptStatus.ACTIVE)
+                        throw new IllegalArgumentException("Restore the RR earning receipt before its spending receipt.");
+                } else {
+                    var reward = current.rewards().get(link.sourceId());
+                    if (reward == null || current.rewardVoids().containsKey(link.sourceId()))
+                        throw new IllegalArgumentException("Matched physical RR is missing or voided.");
+                    validateRewardOrigin(current, receipt, reward);
+                }
+            }
+        }
+    }
+
+    private ReceiptRevSnap earningReceipt(State current, UUID earningId) {
+        for (var r : current.receipts().values())
+            if (r.contents().observations().earnings().stream().anyMatch(e -> e.earningId().equals(earningId))) return r;
+        // A correction can remove an earning from the current revision without erasing its match history.
+        return current.history().values().stream()
+                .filter(h -> h.after().contents().observations().earnings().stream().anyMatch(e -> e.earningId().equals(earningId)))
+                .map(h -> current.receipts().get(h.after().transactionId())).filter(Objects::nonNull).findFirst().orElse(null);
+    }
+
+    private void validateRewardOrigin(State current, ReceiptRevSnap spending, RegisterReward reward) {
+        UUID sourceId = reward.getEarnedReceiptId();
+        if (sourceId == null) return; // An explicitly recorded pre-existing physical coupon.
+        var source = sourceId.equals(spending.transactionId()) ? spending : current.receipts().get(sourceId);
+        if (source == null) throw new IllegalArgumentException("Reward earning receipt is missing.");
+        if (spending.status() == ReceiptStatus.ACTIVE && source.status() != ReceiptStatus.ACTIVE)
+            throw new IllegalArgumentException("Restore the reward earning receipt before using or restoring its use.");
+    }
+
+    /** Do not hide an earning whose recorded value is consumed by an active receipt or transfer. */
+    private void validateDeletionDependencies(State current, ReceiptRevSnap receipt) {
+        var earningIds = receipt.contents().observations().earnings().stream()
+                .map(coupons.ReceiptObservations.Earning::earningId).collect(java.util.stream.Collectors.toSet());
+        current.history().values().stream().filter(h -> h.after().transactionId().equals(receipt.transactionId()))
+                .flatMap(h -> h.after().contents().observations().earnings().stream())
+                .forEach(e -> earningIds.add(e.earningId()));
+        var instruments = new HashSet<UUID>();
+        current.rewards().values().stream()
+                .filter(r -> receipt.transactionId().equals(r.getEarnedReceiptId()))
+                .forEach(r -> instruments.add(r.getRewardId()));
+        receipt.contents().observations().earnings().stream().map(coupons.ReceiptObservations.Earning::instrumentId)
+                .filter(Objects::nonNull).forEach(instruments::add);
+        for (var redemption : current.redemptions().values()) {
+            var spending = current.receipts().get(redemption.getRedeemedReceiptId());
+            if (spending != null && spending.status() == ReceiptStatus.ACTIVE
+                    && !spending.transactionId().equals(receipt.transactionId())
+                    && instruments.contains(redemption.getRewardId()))
+                throw new IllegalArgumentException("An active receipt uses this receipt's reward: "
+                        + receiptReference(spending));
+        }
+        for (var link : current.rrUsageLinks().values()) {
+            var spending = current.receipts().get(link.spentReceiptId());
+            if (spending != null && spending.status() == ReceiptStatus.ACTIVE
+                    && !spending.transactionId().equals(receipt.transactionId())
+                    && (link.receiptEarning() ? earningIds.contains(link.sourceId()) : instruments.contains(link.sourceId())))
+                throw new IllegalArgumentException("An active receipt uses this receipt's RR: "
+                        + receiptReference(spending));
+        }
+        var transfers = new HashMap<UUID, ProviderRedemption>();
+        current.balances().redemptionHistory().forEach(r -> transfers.put(r.redemptionId(), r));
+        if (transfers.values().stream().anyMatch(r -> r.status() != ProviderRedemption.Status.CANCELLED
+                && r.sourceEarningIds().stream().anyMatch(earningIds::contains)))
+            throw new IllegalArgumentException("A recorded provider redemption references this receipt's earnings.");
+    }
+
+    private String receiptReference(ReceiptRevSnap receipt) {
+        return receipt.metadata() != null && receipt.metadata().receiptNumber() != null
+                ? receipt.metadata().receiptNumber() : receipt.transactionId().toString();
+    }
+
     /** Captures one immutable state under the shared monitor. */
     private State snapshot() {
         synchronized (store) {
@@ -445,6 +557,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             var origin = current.receipts().values().stream().filter(r -> r.contents().observations().earnings().stream()
                     .anyMatch(e -> e.earningId().equals(link.sourceId()))).findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("Original receipt earning not found."));
+            if (origin.status() != ReceiptStatus.ACTIVE) throw new IllegalArgumentException("Original earning receipt is deleted; restore it first.");
             if (origin.transactionId().equals(link.spentReceiptId())) throw new IllegalArgumentException("Choose an RR from an earlier purchase, not earned on the spending receipt.");
             var earning = origin.contents().observations().earnings().stream().filter(e -> e.earningId().equals(link.sourceId())).findFirst().orElseThrow();
             if (earning.kind() != coupons.ReceiptObservations.EarningKind.REGISTER_REWARD || earning.confirmed() == null
@@ -458,6 +571,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             if (current.redemptions().values().stream().anyMatch(r -> r.getRewardId().equals(link.sourceId()))) throw new IllegalArgumentException("This instrument is already redeemed.");
             if (current.receipts().values().stream().anyMatch(r -> r.contents().observations().earnings().stream()
                     .anyMatch(e -> link.sourceId().equals(e.instrumentId())))) throw new IllegalArgumentException("Match the original receipt earning for this instrument.");
+            validateRewardOrigin(current, spent, reward);
             face = reward.getFaceValue(); earnedDate = reward.getEarnedDate();
         }
         if (face.compareTo(link.amount()) != 0) throw new IllegalArgumentException("Coupon face value must match the recorded deduction exactly.");
@@ -700,40 +814,52 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         }
     }
 
-    /** Soft deletion belongs to the lifecycle checkpoint. */
     @Override
     public ReceiptWriteResult softDelete(UUID id, long revision, ReceiptWriteRequest request,
             ReceiptChangeContext context) {
-        var input = new DeleteInput(id, revision, request, context);
+        return changeStatus(new DeleteInput(id, revision, request, context), id, revision,
+                request, context, ReceiptStatus.ACTIVE, ReceiptStatus.DELETED, ReceiptChangeAction.DELETED);
+    }
+
+    @Override
+    public ReceiptWriteResult restore(UUID id, long revision, ReceiptWriteRequest request,
+            ReceiptChangeContext context) {
+        return changeStatus(new RestoreInput(id, revision, request, context), id, revision,
+                request, context, ReceiptStatus.DELETED, ReceiptStatus.ACTIVE, ReceiptChangeAction.RESTORED);
+    }
+
+    private ReceiptWriteResult changeStatus(InMemoryStore.WriteInput input, UUID id, long revision,
+            ReceiptWriteRequest request, ReceiptChangeContext context, ReceiptStatus expectedStatus,
+            ReceiptStatus status, ReceiptChangeAction action) {
         synchronized (store) {
             var current = store.state;
             var committed = current.requests().get(request.requestId());
             if (committed != null) return committed.resultForMatching(input);
             var before = current.receipts().get(id);
-            if (before == null || before.status() != ReceiptStatus.ACTIVE) throw new IllegalArgumentException("Active receipt not found.");
-            if (before.revision() != revision) throw new java.util.ConcurrentModificationException("Receipt revision has changed.");
-            var after = new ReceiptRevSnap(id, Math.addExact(revision, 1), ReceiptStatus.DELETED,
+            if (before == null || before.status() != expectedStatus)
+                throw new IllegalArgumentException(expectedStatus == ReceiptStatus.ACTIVE
+                        ? "Active receipt not found." : "Deleted receipt not found.");
+            if (before.revision() != revision)
+                throw new java.util.ConcurrentModificationException("Receipt revision has changed.");
+            var after = new ReceiptRevSnap(id, Math.addExact(revision, 1), status,
                     before.contents(), before.metadata(), before.evidenceIds());
-            var result = new ReceiptWriteResult(request.requestId(), id, after.revision(), ReceiptChangeAction.DELETED, ReceiptStatus.DELETED, clock.instant());
+            validateStoredReferences(current, after, List.of(), before);
+            if (status == ReceiptStatus.DELETED) validateDeletionDependencies(current, before);
+            var result = new ReceiptWriteResult(request.requestId(), id, after.revision(), action, status, clock.instant());
             var entry = new ReceiptHistoryEntry(UUID.randomUUID(), request, result, before, after, null, context);
             var receipts = new HashMap<>(current.receipts()); receipts.put(id, after);
             var history = new HashMap<>(current.history()); history.put(entry.historyId(), entry);
             var requests = new HashMap<>(current.requests()); requests.put(request.requestId(), new CommittedWrite(input, result));
-            var replacement = new State(receipts, current.rewards(), current.redemptions(), current.evidence(), history, requests,
-                    current.rewardVoids(), current.giftCardPromotions(), current.balances(), current.rrUsageLinks());
+            var replacement = new State(receipts, current.rewards(), current.redemptions(), current.evidence(),
+                    history, requests, current.rewardVoids(), current.giftCardPromotions(), current.balances(), current.rrUsageLinks());
             if (store.disk != null) {
                 try { store.disk.save(replacement); }
-                catch (java.io.IOException failure) { throw new IllegalStateException("Could not delete receipt; nothing committed.", failure); }
+                catch (java.io.IOException failure) {
+                    throw new IllegalStateException("Could not change receipt status; nothing committed.", failure);
+                }
             }
             store.state = replacement;
             return result;
         }
-    }
-
-    /** Restoration belongs to the lifecycle checkpoint. */
-    @Override
-    public ReceiptWriteResult restore(UUID id, long revision, ReceiptWriteRequest request,
-            ReceiptChangeContext context) {
-        throw new UnsupportedOperationException("Receipt restoration is not implemented yet.");
     }
 }

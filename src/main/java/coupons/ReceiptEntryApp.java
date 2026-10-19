@@ -2415,7 +2415,14 @@ public final class ReceiptEntryApp {
             }
         } else if (action.equals("HISTORY")) {
             var records = repository.creationHistory().stream().map(h -> h.after().transactionId())
-                    .map(id -> repository.findById(id).orElseGet(() -> repository.findDeletedById(id).orElseThrow())).toList();
+                    .map(id -> repository.findById(id).orElseGet(() -> repository.findDeletedById(id).orElseThrow()))
+                    .sorted(java.util.Comparator
+                            .comparing((ReceiptRecord r) -> r.transaction().getObservations().purchaseDate(),
+                                    java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))
+                            .thenComparing(r -> ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).orElse(null),
+                                    java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))
+                            .thenComparing(ReceiptRecord::transactionId))
+                    .toList();
             if (records.isEmpty()) { output.println("No saved receipt history."); return; }
             output.println("# | Date | Time | Receipt | Out of pocket | Status");
             for (int i = 0; i < records.size(); i++) {

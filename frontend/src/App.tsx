@@ -101,7 +101,7 @@ export default function App() {
       edit.kind === 'plan' ? `plan-${edit.plan?.planId || 'new'}`
         : edit.kind === 'purchase' ? `purchase-${edit.item?.plannedPurchaseId || 'new'}`
           : edit.kind === 'redeem' ? `redeem-${edit.coupon.couponId}`
-            : 'coupon-new'} 
+            : 'coupon-new'}
             edit={edit} api={api} data={data} onClose={closeNestedEditor} onSaved={() => { setMessage('Saved. Refreshing your recorded data.'); void refresh() }} onReview={() => { setMessage('Refreshing to check the uncertain save result.'); void refresh() }} onEdit={openNestedEditor} online={online} />}
     {creating && <ReceiptCreate offers={data?.rewardOffers} api={api} enabled={writable} onClose={closeCreate} onReview={reviewSaved} onSaved={id => { setCreating(false); setReceipt(id); setMessage('Receipt saved to PostgreSQL.'); void refresh() }} />}
     {receipt && <ReceiptDetail offers={data?.rewardOffers} id={receipt} api={api} onClose={closeReceipt} writable={writable} onChanged={() => void refresh()} />}

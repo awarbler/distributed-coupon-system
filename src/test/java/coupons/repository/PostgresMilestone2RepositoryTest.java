@@ -39,7 +39,7 @@ class PostgresMilestone2RepositoryTest {
                     TRUNCATE rebate_history_sources, rebate_history, rebate_sources,
                         rebate_current, deal_history_sources, deal_history, deal_sources,
                         deal_current, inventory_history, inventory_current, source_artifacts,
-                        receipt_write_requests, receipt_history, register_reward_redemptions,
+                        rr_usage_links, reward_removals, gift_card_promotions, receipt_write_requests, receipt_history, register_reward_redemptions,
                         receipt_evidence, register_rewards, receipt_current
                     """);
         }

@@ -8,7 +8,7 @@ import java.util.UUID;
 /** A provider coupon observed as clipped, with its lifecycle and redemption identity. */
 public record ClippedCoupon(UUID couponId, String provider, String externalId,
         Coupon coupon, CouponStatus status, LocalDate clippedOn,
-        LocalDate redeemedOn, UUID redeemedTransactionId, long revision) {
+        LocalDate redeemedOn, UUID redeemedTransactionId, long revision) implements java.io.Serializable {
     public ClippedCoupon {
         Objects.requireNonNull(couponId, "Coupon ID cannot be null.");
         requireText(provider, "Provider");

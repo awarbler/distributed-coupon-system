@@ -8,7 +8,7 @@ import java.util.UUID;
 
 /** A dated, revisioned shopping plan. Planned purchases are stored separately. */
 public record ShoppingPlan(UUID planId, String name, String retailer,
-        LocalDate shoppingDate, List<UUID> plannedPurchaseIds, long revision) {
+        LocalDate shoppingDate, List<UUID> plannedPurchaseIds, long revision) implements java.io.Serializable {
     public ShoppingPlan {
         Objects.requireNonNull(planId, "Plan ID cannot be null.");
         requireText(name, "Plan name");

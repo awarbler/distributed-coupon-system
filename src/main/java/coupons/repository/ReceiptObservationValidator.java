@@ -85,6 +85,10 @@ public final class ReceiptObservationValidator {
         contents.appliedCoupons().forEach(value -> {
             unique(ids, value.getApplicationId());
             coupons.add(value.getApplicationId());
+            for(var selection:value.getQualifyingQuantities().entrySet()) {
+                var line=contents.purchaseItems().stream().filter(l->l.lineItemId().equals(selection.getKey())).findFirst().orElseThrow(()->new IllegalArgumentException("Coupon selection references an unknown line."));
+                if(selection.getValue()>line.quantity())throw new IllegalArgumentException("Coupon qualifying quantity exceeds purchased quantity.");
+            }
         });
         contents.payments().forEach(value -> unique(ids, value.paymentId()));
         contents.registerRewardRedemptions().forEach(value -> unique(ids, value.getRedemptionId()));
@@ -95,6 +99,10 @@ public final class ReceiptObservationValidator {
             unique(ids, earning.earningId());
             if (!lines.containsAll(earning.lineItemIds())) {
                 throw new IllegalArgumentException("Earning references an unknown receipt line.");
+            }
+            if(earning.details()!=null)for(var selection:earning.details().qualifyingQuantities().entrySet()) {
+                var line=contents.purchaseItems().stream().filter(l->l.lineItemId().equals(selection.getKey())).findFirst().orElseThrow(()->new IllegalArgumentException("Selected line missing."));
+                if(selection.getValue()>line.quantity())throw new IllegalArgumentException("Qualifying quantity exceeds purchased quantity.");
             }
             if (!evidenceIds.containsAll(earning.evidenceIds())) {
                 throw new IllegalArgumentException("Earning evidence is not attached to this receipt.");

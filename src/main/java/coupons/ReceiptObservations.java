@@ -100,7 +100,12 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
             String offerReference, Scope scope, List<UUID> lineItemIds,
             RebateBenefit expected, RebateBenefit confirmed, RebateStatus status,
             LocalDate expirationDate, UUID instrumentId, UUID claimId, List<UUID> evidenceIds,
-            String recordedLifecycle, OfferRequirement requirement, RecordedValuation valuation) implements java.io.Serializable {
+            String recordedLifecycle, OfferRequirement requirement, RecordedValuation valuation, EarningDetails details) implements java.io.Serializable {
+        public Earning(UUID id,EarningKind kind,String provider,String offer,Scope scope,List<UUID> lines,
+                RebateBenefit expected,RebateBenefit confirmed,RebateStatus status,LocalDate expiry,UUID instrument,
+                UUID claim,List<UUID> evidence,String lifecycle,OfferRequirement requirement,RecordedValuation valuation) {
+            this(id,kind,provider,offer,scope,lines,expected,confirmed,status,expiry,instrument,claim,evidence,lifecycle,requirement,valuation,null);
+        }
         /** Preserves the existing constructor; new observations remain unknown. */
         public Earning(UUID earningId, EarningKind kind, String provider,
                 String offerReference, Scope scope, List<UUID> lineItemIds,
@@ -133,6 +138,7 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
             evidenceIds = List.copyOf(evidenceIds);
             unique(lineItemIds);
             unique(evidenceIds);
+            if(details!=null && !new HashSet<>(lineItemIds).equals(details.qualifyingQuantities().keySet()) && !details.qualifyingQuantities().isEmpty())throw new IllegalArgumentException("Quantity selection must match selected earning lines.");
             if (expected == null && confirmed == null) {
                 throw new IllegalArgumentException("An expected or confirmed benefit is required.");
             }
@@ -154,7 +160,7 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
         }
     }
 
-    public enum SpendBasis { SALE_BEFORE_COUPONS, UNKNOWN }
+    public enum SpendBasis { SALE_BEFORE_COUPONS, SALE_AFTER_COUPONS, UNKNOWN }
 
     /** Recorded requirement and explicit arithmetic basis; eligibility remains user-confirmed. */
     public record OfferRequirement(PromotionType type, BigDecimal amount, String category,

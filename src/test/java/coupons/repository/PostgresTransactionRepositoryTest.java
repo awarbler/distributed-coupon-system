@@ -41,7 +41,7 @@ class PostgresTransactionRepositoryTest {
         try (Connection connection = connections.open()) {
             PostgresSchema.apply(connection);
             connection.createStatement().executeUpdate(
-                    "TRUNCATE receipt_write_requests, receipt_history, register_reward_redemptions, "
+                    "TRUNCATE rr_usage_links, reward_removals, gift_card_promotions, receipt_write_requests, receipt_history, register_reward_redemptions, "
                             + "receipt_evidence, register_rewards, receipt_current");
         }
         repository = new PostgresTransactionRepository(connections,
@@ -86,7 +86,7 @@ class PostgresTransactionRepositoryTest {
     }
 
     @Test
-    void rejectsPromotionLinksUntilRelatedAggregateIsSupported() {
+    void rejectsPromotionLinksReferencingMissingPrograms() {
         var transaction = transaction();
         var observations = transaction.getObservations();
         transaction.setObservations(new coupons.ReceiptObservations(
@@ -98,7 +98,7 @@ class PostgresTransactionRepositoryTest {
                         BigDecimal.ONE, "reviewed", NOW)), observations.worksheet(),
                 observations.footerStatus()));
 
-        assertThrows(UnsupportedOperationException.class, () -> repository.save(UUID.randomUUID(),
+        assertThrows(IllegalArgumentException.class, () -> repository.save(UUID.randomUUID(),
                 transaction, null, List.of(),
                 new ReceiptWriteRequest(UUID.randomUUID(), NOW),
                 new ReceiptCreateCtx("test-user")));

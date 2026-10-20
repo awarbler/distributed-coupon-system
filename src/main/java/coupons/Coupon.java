@@ -6,7 +6,14 @@ import java.util.Objects; // Provide null checking for required object values.
 /**
  * Represents a coupon that can be applied to qualifying purchased products.
  */
-public class Coupon { // Define the data and rules for one coupon.
+public class Coupon implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
+
+    private final CouponTerms terms;
+    public CouponTerms getTerms(){return terms;}
+    public Coupon(String description,BigDecimal amount,int quantity,CouponType type,LocalDate expiration){
+        this(description,amount,quantity,type,expiration,null);
+    }
 
     private final String couponDescription; // Store the human-readable description of the coupon.
     private final BigDecimal discountAmount; // Store the total monetary discount provided by the coupon.
@@ -32,7 +39,7 @@ public class Coupon { // Define the data and rules for one coupon.
             BigDecimal discountAmount, // Receive the coupon's monetary discount.
             int requiredQuantity, // Receive the required product quantity.
             CouponType couponType, // Receive the coupon classification.
-            LocalDate expirationDate) { // Receive the coupon's stated expiration date.
+            LocalDate expirationDate, CouponTerms terms) { // Receive the coupon's stated expiration date.
 
 
 
@@ -47,12 +54,12 @@ public class Coupon { // Define the data and rules for one coupon.
             );
         }
 
-        if (discountAmount == null) { // Reject a missing discount amount.
+        if (discountAmount == null && (terms==null || terms.discount()!=CouponTerms.Discount.FREE_ITEM)) { // Reject a missing discount amount.
             throw new IllegalArgumentException( // Report invalid coupon data to the caller.
                     "Coupon discount cannot be null." // Explain the violated rule.
             );
         }
-        if (discountAmount.signum() <= 0) { // Reject a non-positive discount amount.
+        if (discountAmount != null && discountAmount.signum() <= 0) { // Reject a non-positive discount amount.
             throw new IllegalArgumentException( // Report invalid coupon data to the caller.
                     "Coupon discount must be positive." // Explain the violated rule.
             );
@@ -69,6 +76,9 @@ public class Coupon { // Define the data and rules for one coupon.
                 "Coupon type cannot be null." // Explain why construction failed.
         );
 
+        if(terms!=null && terms.discount()==CouponTerms.Discount.PERCENT && discountAmount.compareTo(new BigDecimal("100"))>0)throw new IllegalArgumentException("Percentage exceeds 100.");
+        if(terms!=null && terms.startsOn()!=null && expirationDate!=null && expirationDate.isBefore(terms.startsOn()))throw new IllegalArgumentException("Coupon dates are reversed.");
+        this.terms=terms;
         this.expirationDate = expirationDate; // Store the stated expiration date, or null when the expiration date is unknown.
 
         this.couponDescription = couponDescription.trim(); // Store the validated description without surrounding whitespace.

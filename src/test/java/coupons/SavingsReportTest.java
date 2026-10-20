@@ -121,4 +121,30 @@ class SavingsReportTest {
         assertEquals(2,repo.creationHistory().size());
         for(var h:repo.creationHistory()) assertEquals(1,repo.history().findByReceiptId(h.after().transactionId()).size());
     }
+
+    @Test void approvalDoesNotCountAsNewlyCreditedValue() {
+        var approved=earning(EarningKind.THIRD_PARTY_REBATE,"Ibotta","2.50",BenefitKind.CASH,RebateStatus.APPROVED,null);
+        assertFalse(SavingsReport.earned(approved));
+        for(var status:List.of(RebateStatus.EXPECTED,RebateStatus.SUBMITTED,RebateStatus.PENDING,RebateStatus.REJECTED)) {
+            assertFalse(SavingsReport.earned(earning(EarningKind.THIRD_PARTY_REBATE,"Ibotta","2.50",BenefitKind.CASH,status,null)));
+        }
+        assertTrue(SavingsReport.earned(earning(EarningKind.REGISTER_REWARD,"Walgreens","5",BenefitKind.STORE_COUPON,RebateStatus.PAID,null)));
+        assertTrue(SavingsReport.earned(earning(EarningKind.WALGREENS_CASH,"Walgreens","5",BenefitKind.STORE_REWARD,RebateStatus.CREDITED,null)));
+    }
+
+    @Test void anExplicitUncreditedWalgreensRewardCannotLeakThroughThePrintedFooterFallback() {
+        var approved=earning(EarningKind.WALGREENS_CASH,"Walgreens","5",BenefitKind.STORE_REWARD,RebateStatus.APPROVED,null);
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));tx.addPurchaseItem(new PurchaseItem("Soap",null,BigDecimal.ONE,BigDecimal.ONE,1));
+        tx.addPayment(new Payment(PaymentType.CASH,BigDecimal.ONE));
+        var footer=new WalgreensCashAccount(n("10"),BigDecimal.ZERO,n("5"),n("15"));
+        for(var status:List.of(RebateStatus.APPROVED,RebateStatus.EXPECTED,RebateStatus.REJECTED)) {
+            var e=new Earning(approved.earningId(),approved.kind(),approved.provider(),null,approved.scope(),List.of(),approved.confirmed(),approved.confirmed(),status,null,null,null,List.of());
+            tx.setObservations(new ReceiptObservations(DAY,"9:00 AM",List.of(e),List.of(),footer,List.of(),Map.of()));
+            var receipt=new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,tx,null,List.of());
+            assertEquals(0,BigDecimal.ZERO.compareTo(SavingsReport.calculate(List.of(receipt)).newlyEarned()));
+            assertTrue(new ProviderBalanceSummary().movements(List.of(receipt)).isEmpty());
+        }
+        tx.setObservations(new ReceiptObservations(DAY,"9:00 AM",List.of(),List.of(),footer,List.of(),Map.of()));
+        assertEquals(0,n("5").compareTo(SavingsReport.calculate(List.of(new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,tx,null,List.of()))).newlyEarned()));
+    }
 }

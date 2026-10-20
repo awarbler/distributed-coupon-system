@@ -89,15 +89,15 @@ public final class PostgresProviderAccountRepository implements ProviderAccountR
     }
 
     @Override public List<AccountOpening> findOpenings(String provider) {
-        return list("SELECT payload FROM provider_account_openings WHERE provider=? ORDER BY observed_date, observation_id",
+        return list("SELECT payload FROM provider_account_openings WHERE provider=? ORDER BY source_sequence NULLS LAST, recorded_at, observation_id",
                 provider, AccountOpening.class);
     }
     @Override public List<AccountAdjustment> findAdjustments(String provider) {
-        return list("SELECT payload FROM provider_account_adjustments WHERE provider=? ORDER BY event_date, event_id",
+        return list("SELECT payload FROM provider_account_adjustments WHERE provider=? ORDER BY source_sequence NULLS LAST, recorded_at, event_id",
                 provider, AccountAdjustment.class);
     }
     @Override public List<ProviderRedemption> findRedemptionHistory(String provider) {
-        return list("SELECT payload FROM provider_redemptions_history WHERE provider=? ORDER BY recorded_at, redemption_id, revision",
+        return list("SELECT payload FROM provider_redemptions_history WHERE provider=? ORDER BY source_sequence NULLS LAST, recorded_at, redemption_id, revision",
                 provider, ProviderRedemption.class);
     }
     @Override public AccountBalanceState balanceState(String provider) {

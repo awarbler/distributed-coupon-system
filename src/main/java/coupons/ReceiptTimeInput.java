@@ -8,12 +8,12 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /** Normalizes console time for display while the original receipt text stays recorded. */
-final class ReceiptTimeInput {
+public final class ReceiptTimeInput {
     private static final Pattern TWELVE = Pattern.compile("(\\d{1,2})(?::?(\\d{2}))?\\s*([AP])\\.?M\\.?", Pattern.CASE_INSENSITIVE);
     private static final Pattern TWENTY_FOUR = Pattern.compile("(\\d{1,2}):?(\\d{2})");
     private ReceiptTimeInput() { }
 
-    static Optional<LocalTime> parse(String raw) {
+    public static Optional<LocalTime> parse(String raw) {
         if (raw == null) return Optional.empty();
         String text = raw.trim();
         var twelve = TWELVE.matcher(text);

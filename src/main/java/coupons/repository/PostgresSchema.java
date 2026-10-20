@@ -29,7 +29,10 @@ public final class PostgresSchema {
         applyMigration(connection, V2, 2, "catalog, deal, rebate, and inventory repositories");
         applyMigration(connection, V3, 3, "provider account ledger");
         applyMigration(connection, V4, 4, "shopping plans, planned purchases, and clipped coupons");
-    }
+        applyMigration(connection, "/db/migration/V5__api_retry_journal.sql", 5, "API retry journal and multiple coupon receipt use");
+        applyMigration(connection, "/db/migration/V6__lossless_local_migration.sql", 6, "lossless local migration and receipt supplements");
+        applyMigration(connection, "/db/migration/V7__offer_pricing.sql", 7, "structured advertised offer pricing");
+        applyMigration(connection, "/db/migration/V8__shopping_plan_checkout.sql", 8,  "revisioned shopping plan checkout estimates"); }
 
     private static void applyMigration(Connection connection, String resource, int version,
             String description) throws SQLException, IOException {

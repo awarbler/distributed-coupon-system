@@ -9,7 +9,11 @@ import java.util.UUID;
 /** One intended purchase line, kept distinct from a completed receipt line. */
 public record PlannedPurchase(UUID plannedPurchaseId, UUID planId, String productName,
         String productCode, int quantity, BigDecimal targetUnitPrice,
-        UUID advertisedDealId, List<UUID> clippedCouponIds, long revision) {
+        UUID advertisedDealId, List<UUID> clippedCouponIds, long revision, BigDecimal regularUnitPrice, BigDecimal saleUnitPrice, String priceSource) implements java.io.Serializable {
+    public PlannedPurchase(UUID id,UUID plan,String name,String code,int quantity,BigDecimal target,
+            UUID deal,List<UUID> coupons,long revision) {
+        this(id,plan,name,code,quantity,target,deal,coupons,revision,null,null,null);
+    }
     public PlannedPurchase {
         Objects.requireNonNull(plannedPurchaseId, "Planned purchase ID cannot be null.");
         Objects.requireNonNull(planId, "Plan ID cannot be null.");
@@ -17,6 +21,10 @@ public record PlannedPurchase(UUID plannedPurchaseId, UUID planId, String produc
         if (productName.isBlank()) throw new IllegalArgumentException("Product name cannot be blank.");
         if (productCode != null && productCode.isBlank()) throw new IllegalArgumentException("Product code must be null or nonblank.");
         if (quantity < 1) throw new IllegalArgumentException("Quantity must be at least one.");
+        for (var price : new BigDecimal[]{regularUnitPrice,saleUnitPrice})
+            if (price != null && price.signum()<0) throw new IllegalArgumentException("Prices cannot be negative.");
+        if (priceSource!=null && !java.util.Set.of("MANUAL","DEAL").contains(priceSource)) throw new IllegalArgumentException("Invalid pricing provenance.");
+        if ("DEAL".equals(priceSource) && advertisedDealId==null) throw new IllegalArgumentException("Deal pricing requires a linked deal.");
         if (targetUnitPrice != null && targetUnitPrice.signum() < 0) throw new IllegalArgumentException("Target price cannot be negative.");
         Objects.requireNonNull(clippedCouponIds, "Clipped coupon IDs cannot be null.");
         clippedCouponIds = List.copyOf(clippedCouponIds);

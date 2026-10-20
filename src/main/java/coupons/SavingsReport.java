@@ -41,7 +41,7 @@ public final class SavingsReport {
         return latestActive(records).stream().filter(r->{var day=r.transaction().getObservations().purchaseDate(); return day!=null && YearMonth.from(day).equals(month);}).toList();
     }
     static boolean earned(Earning e) {
-        return e.confirmed()!=null && (e.status()==RebateStatus.APPROVED || e.status()==RebateStatus.CREDITED || e.status()==RebateStatus.PAID);
+        return e.confirmed()!=null && (e.status()==RebateStatus.CREDITED || e.status()==RebateStatus.PAID);
     }
     static BigDecimal earnedDollars(Earning e) {
         var benefit=e.confirmed();
@@ -90,7 +90,9 @@ public final class SavingsReport {
             // A completely reward-funded zero checkout needs no invented cash/card tender.
             if(!tender && tx.getReceiptTotals().getFinalTotal().signum()!=0) { paymentsKnown=false; issues.add(source+": cash/card or other tender not recorded"); }
             boolean wc=false;
-            for(var e:obs.earnings()) if(earned(e)) {
+            for(var e:obs.earnings()) {
+                if(e.kind()==EarningKind.WALGREENS_CASH) wc=true;
+                if(!earned(e)) continue;
                 var dollars=earnedDollars(e); boolean app=e.kind()==EarningKind.THIRD_PARTY_REBATE;
                 if(e.kind()==EarningKind.WALGREENS_CASH) wc=true;
                 if(dollars==null) {

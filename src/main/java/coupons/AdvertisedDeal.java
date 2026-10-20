@@ -36,8 +36,14 @@ public record AdvertisedDeal(
         LocalDate validFrom,
         LocalDate validThrough,
         List<UUID> sourceArtifactIds,
-        long revision
+        long revision,
+        DealTerms pricing
 ) {
+
+    public AdvertisedDeal(UUID id, String title, String terms, String retailer, LocalDate from,
+            LocalDate through, List<UUID> sources, long revision) {
+        this(id,title,terms,retailer,from,through,sources,revision,null);
+    }
 
     /**
      * Validates offer values without normalizing text.

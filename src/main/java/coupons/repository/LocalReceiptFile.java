@@ -38,9 +38,15 @@ final class LocalReceiptFile implements AutoCloseable {
         lock = acquired;
     }
 
-    InMemoryStore.State load() throws IOException {
-        if (!Files.exists(path)) return new InMemoryStore().state;
-        try (var input = new ObjectInputStream(Files.newInputStream(path))) {
+    InMemoryStore.State load() throws IOException { return readSnapshot(path); }
+
+    /** Read-only decoder for explicitly selected copies; creates no lock or directory. */
+    static InMemoryStore.State readSnapshot(Path path) throws IOException { return readSnapshot(path, null); }
+
+    /** Decode the exact bytes inventoried by migration, avoiding a second source-file read. */
+    static InMemoryStore.State readSnapshot(Path path, byte[] capturedBytes) throws IOException {
+        if (capturedBytes == null && !Files.exists(path)) return new InMemoryStore().state;
+        try (var input = new ObjectInputStream(capturedBytes == null ? Files.newInputStream(path) : new java.io.ByteArrayInputStream(capturedBytes))) {
             input.setObjectInputFilter(info -> {
                 if (info.depth() > 100 || info.references() > 2_000_000 || info.arrayLength() > 100_000_000) {
                     return ObjectInputFilter.Status.REJECTED;

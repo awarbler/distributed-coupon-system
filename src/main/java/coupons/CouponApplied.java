@@ -16,6 +16,13 @@ import java.util.UUID;
 public final class CouponApplied implements java.io.Serializable {
     private static final long serialVersionUID = 1L;
 
+    private java.util.Map<UUID,Integer> qualifyingQuantities;
+    public java.util.Map<UUID,Integer> getQualifyingQuantities(){return qualifyingQuantities==null?java.util.Map.of():qualifyingQuantities;}
+    public CouponApplied(UUID id,String label,BigDecimal amount,List<UUID> lines,Integer required,boolean whole,java.util.Map<UUID,Integer> quantities) {
+        this(id,label,amount,lines,required,whole);
+        this.qualifyingQuantities=java.util.Map.copyOf(quantities);
+        if(!quantities.isEmpty()&&!new HashSet<>(lines).equals(quantities.keySet())||quantities.values().stream().anyMatch(q->q<1))throw new IllegalArgumentException("Coupon quantity selection must match its lines.");
+    }
     private final UUID applicationId; // Store a unique identifier for this coupon application.
     private final String printedLabel;
     private final Integer requiredQuantity;

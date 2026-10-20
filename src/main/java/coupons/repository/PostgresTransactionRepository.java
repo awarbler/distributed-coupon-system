@@ -33,9 +33,8 @@ import java.util.UUID;
  * while identity, lifecycle, revision, evidence, reward, and audit relationships
  * remain relational and constrained by PostgreSQL.
  *
- * <p>Receipt promotion links are rejected until gift-card promotion progress is
- * persisted in the same database transaction; silently dropping them would
- * violate the existing consistency contract.
+ * <p>Receipt-linked promotion progress and local RR reservations are persisted
+ * and validated in the same transaction using the existing receipt rules.
  */
 public final class PostgresTransactionRepository implements TransactionRepository, AutoCloseable {
     private final PostgresConnectionFactory connections;
@@ -69,7 +68,6 @@ public final class PostgresTransactionRepository implements TransactionRepositor
         Objects.requireNonNull(request);
         Objects.requireNonNull(context);
         ReceiptSnapshot snapshot = ReceiptSnapshot.from(transaction);
-        rejectUnsupportedPromotionLinks(snapshot);
         List<ReceiptEvidence> evidence = EvidenceBatchValidator.validateAndCopy(id, newEvidence);
         ReceiptRecord candidate = new ReceiptRecord(id, ReceiptStatus.ACTIVE, 1,
                 snapshot.toTransaction(), metadata, evidence.stream().map(ReceiptEvidence::getEvidenceId).toList());
@@ -81,6 +79,8 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             if (exists(connection, "receipt_current", "transaction_id", id)) {
                 throw new IllegalArgumentException("Receipt ID already exists.");
             }
+            var state = PostgresReceiptState.read(connection);
+            PostgresReceiptState.rules(state).validateWrite(state, ReceiptRevSnap.from(candidate), evidence, null);
             ensureEvidenceAvailable(connection, evidence);
             validateRedemptions(connection, snapshot.registerRewardRedemptions(), id, SetMode.NEW);
             Instant committedAt = clock.instant();
@@ -89,7 +89,9 @@ public final class PostgresTransactionRepository implements TransactionRepositor
                     ReceiptChangeAction.CREATED, ReceiptStatus.ACTIVE, committedAt);
             ReceiptHistoryEntry history = new ReceiptHistoryEntry(UUID.randomUUID(), request,
                     result, null, after, context, null);
+            var promotions = PostgresReceiptState.rules(state).receiptPromotions(state, after, null);
             insertReceipt(connection, candidate, snapshot);
+            PostgresReceiptState.promotions(connection, promotions);
             insertEvidence(connection, evidence);
             insertRedemptions(connection, snapshot.registerRewardRedemptions());
             insertHistory(connection, history);
@@ -114,7 +116,6 @@ public final class PostgresTransactionRepository implements TransactionRepositor
         Objects.requireNonNull(context);
         if (expectedRevision < 1) throw new IllegalArgumentException("Revision must be positive.");
         ReceiptSnapshot snapshot = ReceiptSnapshot.from(transaction);
-        rejectUnsupportedPromotionLinks(snapshot);
         List<ReceiptEvidence> evidence = EvidenceBatchValidator.validateAndCopy(id, newEvidence);
         UpdatePayload payload = new UpdatePayload(id, expectedRevision, snapshot, metadata, evidence, request, context);
         return inTransaction(connection -> {
@@ -128,6 +129,8 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             ReceiptRecord afterRecord = new ReceiptRecord(id, ReceiptStatus.ACTIVE, expectedRevision + 1,
                     snapshot.toTransaction(), metadata, allEvidence);
             ReceiptValidator.validate(afterRecord);
+            var state = PostgresReceiptState.read(connection);
+            PostgresReceiptState.rules(state).validateWrite(state, ReceiptRevSnap.from(afterRecord), evidence, ReceiptRevSnap.from(before));
             ensureUnchangedRedemptions(before, afterRecord);
             ensureEvidenceAvailable(connection, evidence);
             validateRedemptions(connection, snapshot.registerRewardRedemptions(), id, SetMode.UPDATE);
@@ -138,7 +141,9 @@ public final class PostgresTransactionRepository implements TransactionRepositor
                     ReceiptChangeAction.UPDATED, ReceiptStatus.ACTIVE, committedAt);
             ReceiptHistoryEntry history = new ReceiptHistoryEntry(UUID.randomUUID(), request, result,
                     beforeSnap, afterSnap, null, context);
+            var promotions = PostgresReceiptState.rules(state).receiptPromotions(state, afterSnap, beforeSnap);
             updateReceipt(connection, afterRecord, snapshot);
+            PostgresReceiptState.promotions(connection, promotions);
             insertEvidence(connection, evidence);
             insertNewRedemptions(connection, before.transaction().getRegisterRewardRedemptions(),
                     snapshot.registerRewardRedemptions());
@@ -322,6 +327,10 @@ public final class PostgresTransactionRepository implements TransactionRepositor
         ReceiptRecord before = current.record();
         ReceiptRecord after = new ReceiptRecord(id, to, expectedRevision + 1, before.transaction(),
                 before.metadata(), before.evidenceIds());
+        var state = PostgresReceiptState.read(connection);
+        var rules = PostgresReceiptState.rules(state);
+        rules.validateStoredReferences(state, ReceiptRevSnap.from(after), List.of(), ReceiptRevSnap.from(before));
+        if (to == ReceiptStatus.DELETED) rules.validateDeletionDependencies(state, ReceiptRevSnap.from(before));
         Instant committedAt = clock.instant();
         ReceiptWriteResult result = new ReceiptWriteResult(request.requestId(), id, expectedRevision + 1,
                 action, to, committedAt);
@@ -457,7 +466,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             statement.setObject(1, requestId);
             try (ResultSet rows = statement.executeQuery()) {
                 if (!rows.next()) return null;
-                if (!Arrays.equals(rows.getBytes(1), serialize(payload))) {
+                if (!Objects.equals(deserialize(rows.getBytes(1), Object.class), payload)) {
                     throw new IllegalArgumentException("Request ID was used with different contents.");
                 }
                 return deserialize(rows.getBytes(2), ReceiptWriteResult.class);
@@ -587,11 +596,21 @@ public final class PostgresTransactionRepository implements TransactionRepositor
                 || expected.storeReference().equals(candidate.storeReference());
     }
 
-    private static void rejectUnsupportedPromotionLinks(ReceiptSnapshot snapshot) {
-        if (!snapshot.observations().promotionLinks().isEmpty()) {
-            throw new UnsupportedOperationException(
-                    "PostgreSQL receipt persistence does not yet support gift-card promotion progress.");
-        }
+    /** Translate original retry inputs without issuing replacement write IDs or timestamps. */
+    static Object postgresInput(InMemoryStore.WriteInput input) {
+        return switch (input) {
+            case InMemoryStore.CreateInput i -> new CreatePayload(i.transactionId(),i.contents(),i.metadata(),i.evidence(),i.request(),i.context());
+            case InMemoryStore.UpdateInput i -> new UpdatePayload(i.transactionId(),i.expectedRevision(),i.contents(),i.metadata(),i.evidence(),i.request(),i.context());
+            case InMemoryStore.DeleteInput i -> new DeletePayload(i.transactionId(),i.expectedRevision(),i.request(),i.context());
+            case InMemoryStore.RestoreInput i -> new RestorePayload(i.transactionId(),i.expectedRevision(),i.request(),i.context());
+        };
+    }
+    static InMemoryStore.WriteInput localInput(Object input) {
+        if (input instanceof CreatePayload i) return new InMemoryStore.CreateInput(i.id(),i.snapshot(),i.metadata(),i.evidence(),i.request(),i.context());
+        if (input instanceof UpdatePayload i) return new InMemoryStore.UpdateInput(i.id(),i.expectedRevision(),i.snapshot(),i.metadata(),i.evidence(),i.request(),i.context());
+        if (input instanceof DeletePayload i) return new InMemoryStore.DeleteInput(i.id(),i.expectedRevision(),i.request(),i.context());
+        if (input instanceof RestorePayload i) return new InMemoryStore.RestoreInput(i.id(),i.expectedRevision(),i.request(),i.context());
+        throw new IllegalArgumentException("Unrecognized receipt retry payload; migration cannot continue.");
     }
 
     private static void setUuid(PreparedStatement statement, int index, UUID value) throws SQLException {
@@ -637,6 +656,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             boolean original = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
+                PostgresReceiptState.lock(connection);
                 T result = work.run(connection);
                 connection.commit();
                 connection.setAutoCommit(original);

@@ -33,3 +33,9 @@ checkpoint4-review.zip
 # Private design document and its Microsoft Word lock file
 /Distributed_Coupon_System_Design_and_Plan.docx
 /~$stributed_Coupon_System_Design_and_Plan.docx
+
+# Private local API credentials
+/.local-api.env
+
+# Private historical migration preview
+/step7-migration-review/

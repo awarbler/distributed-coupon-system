@@ -180,7 +180,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         }
     }
 
-    private java.util.Map<UUID, GiftCardPromotion> receiptPromotions(State current, ReceiptRevSnap receipt, ReceiptRevSnap previous) {
+    java.util.Map<UUID, GiftCardPromotion> receiptPromotions(State current, ReceiptRevSnap receipt, ReceiptRevSnap previous) {
         var promotions = new HashMap<>(current.giftCardPromotions());
         var lineIds = receipt.contents().purchaseItems().stream().map(PurchaseLineSnap::lineItemId).toList();
         if(previous!=null) {
@@ -265,7 +265,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
     }
 
     /** Checks references and uniqueness before any committed state changes. */
-    private void validateWrite(State current, ReceiptRevSnap receipt,
+    void validateWrite(State current, ReceiptRevSnap receipt,
             List<ReceiptEvidence> evidence, ReceiptRevSnap previous) {
         if (previous == null && current.receipts().containsKey(receipt.transactionId())) {
             throw new IllegalArgumentException("Receipt ID already exists.");
@@ -361,7 +361,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
     }
 
     /** Validate existing references too; unchanged financial events are not new redemptions. */
-    private void validateStoredReferences(State current, ReceiptRevSnap receipt,
+    void validateStoredReferences(State current, ReceiptRevSnap receipt,
             List<ReceiptEvidence> incoming, ReceiptRevSnap previous) {
         var artifacts = new HashMap<>(current.evidence());
         for (var artifact : EvidenceBatchValidator.validateAndCopy(receipt.transactionId(), incoming)) {
@@ -430,7 +430,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
     }
 
     /** Do not hide an earning whose recorded value is consumed by an active receipt or transfer. */
-    private void validateDeletionDependencies(State current, ReceiptRevSnap receipt) {
+    void validateDeletionDependencies(State current, ReceiptRevSnap receipt) {
         var earningIds = receipt.contents().observations().earnings().stream()
                 .map(coupons.ReceiptObservations.Earning::earningId).collect(java.util.stream.Collectors.toSet());
         current.history().values().stream().filter(h -> h.after().transactionId().equals(receipt.transactionId()))

@@ -1,0 +1,3 @@
+ALTER TABLE deal_current ADD COLUMN IF NOT EXISTS pricing BYTEA;
+ALTER TABLE deal_history ADD COLUMN IF NOT EXISTS pricing BYTEA;
+ALTER TABLE deal_current ADD COLUMN IF NOT EXISTS manual_fingerprint TEXT UNIQUE;

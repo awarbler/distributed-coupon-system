@@ -115,6 +115,7 @@ public final class PostgresPlanCheckoutRepository {
         result.put("promoDiscount", BigDecimal.ZERO);
         result.put("taxRate", null);
         result.put("taxableBase", null);
+        result.put("actualTax", null);
         result.put("walgreensCashUsed", BigDecimal.ZERO);
         result.put("registerRewardsCoupon", BigDecimal.ZERO);
         result.put("giftCardUsed", BigDecimal.ZERO);
@@ -137,7 +138,7 @@ public final class PostgresPlanCheckoutRepository {
         result.put("promoDiscount", r.getBigDecimal("promo_discount"));
         result.put("taxRate", r.getBigDecimal("tax_rate"));
         result.put("taxableBase", r.getBigDecimal("taxable_base"));
-
+        result.put("actualTax", r.getBigDecimal("actual_tax"));
         for (int i = 0; i < MONEY_FIELDS.length; i++) {
             if (!MONEY_FIELDS[i].equals("promoDiscount")) {
                 result.put(
@@ -175,43 +176,17 @@ public final class PostgresPlanCheckoutRepository {
             int start) throws SQLException {
 
         p.setString(start, (String) values.get("promoCode"));
-        p.setBigDecimal(
-                start + 1,
-                (BigDecimal) values.get("promoDiscount")
-        );
-        p.setBigDecimal(
-                start + 2,
-                (BigDecimal) values.get("taxRate")
-        );
-        p.setBigDecimal(
-                start + 3,
-                (BigDecimal) values.get("taxableBase")
-        );
-        p.setBigDecimal(
-                start + 4,
-                (BigDecimal) values.get("walgreensCashUsed")
-        );
-        p.setBigDecimal(
-                start + 5,
-                (BigDecimal) values.get("registerRewardsCoupon")
-        );
-        p.setBigDecimal(
-                start + 6,
-                (BigDecimal) values.get("giftCardUsed")
-        );
-        p.setBigDecimal(
-                start + 7,
-                (BigDecimal) values.get("cashPayment")
-        );
-        p.setBigDecimal(
-                start + 8,
-                (BigDecimal) values.get("cardPayment")
-        );
-        p.setBigDecimal(
-                start + 9,
-                (BigDecimal) values.get("otherPayment")
-        );
-        p.setString(start + 10, (String) values.get("notes"));
+        p.setBigDecimal(start + 1, (BigDecimal) values.get("promoDiscount"));
+        p.setBigDecimal(start + 2, (BigDecimal) values.get("taxRate"));
+        p.setBigDecimal(start + 3, (BigDecimal) values.get("taxableBase"));
+        p.setBigDecimal(start + 4, (BigDecimal) values.get("actualTax"));
+        p.setBigDecimal(start + 5, (BigDecimal) values.get("walgreensCashUsed"));
+        p.setBigDecimal(start + 6, (BigDecimal) values.get("registerRewardsCoupon"));
+        p.setBigDecimal(start + 7, (BigDecimal) values.get("giftCardUsed"));
+        p.setBigDecimal(start + 8, (BigDecimal) values.get("cashPayment"));
+        p.setBigDecimal(start + 9, (BigDecimal) values.get("cardPayment"));
+        p.setBigDecimal(start + 10, (BigDecimal) values.get("otherPayment"));
+        p.setString(start + 11, (String) values.get("notes"));
     }
 
     public Map<String, Object> save(
@@ -237,6 +212,7 @@ public final class PostgresPlanCheckoutRepository {
         allowed.add("promoCode");
         allowed.add("taxRate");
         allowed.add("taxableBase");
+        allowed.add("actualTax");
         allowed.add("notes");
         allowed.addAll(List.of(MONEY_FIELDS));
 
@@ -262,6 +238,10 @@ public final class PostgresPlanCheckoutRepository {
         values.put(
                 "taxableBase",
                 optionalAmount(input.get("taxableBase"))
+        );
+        values.put(
+                "actualTax",
+                optionalAmount(input.get("actualTax"))
         );
 
         for (String field : MONEY_FIELDS) {
@@ -310,7 +290,7 @@ public final class PostgresPlanCheckoutRepository {
 
             String columns
                     = "promo_code,promo_discount,tax_rate,taxable_base,"
-                    + "walgreens_cash_used,register_rewards_coupon,"
+                    + "actual_tax,walgreens_cash_used,register_rewards_coupon,"
                     + "gift_card_used,cash_payment,card_payment,"
                     + "other_payment,notes";
 
@@ -318,7 +298,7 @@ public final class PostgresPlanCheckoutRepository {
                 String sql
                         = "INSERT INTO shopping_plan_checkout_current "
                         + "(plan_id,revision," + columns + ") "
-                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
                 try (PreparedStatement p = c.prepareStatement(sql)) {
                     p.setObject(1, planId);
@@ -330,17 +310,15 @@ public final class PostgresPlanCheckoutRepository {
                 String sql
                         = "UPDATE shopping_plan_checkout_current SET "
                         + "revision=?,promo_code=?,promo_discount=?,"
-                        + "tax_rate=?,taxable_base=?,"
-                        + "walgreens_cash_used=?,"
-                        + "register_rewards_coupon=?,"
-                        + "gift_card_used=?,cash_payment=?,"
-                        + "card_payment=?,other_payment=?,notes=? "
-                        + "WHERE plan_id=?";
+                        + "tax_rate=?,taxable_base=?,actual_tax=?,"
+                        + "walgreens_cash_used=?,register_rewards_coupon=?,"
+                        + "gift_card_used=?,cash_payment=?,card_payment=?,"
+                        + "other_payment=?,notes=? WHERE plan_id=?";
 
                 try (PreparedStatement p = c.prepareStatement(sql)) {
                     p.setLong(1, next);
                     bindValues(p, values, 2);
-                    p.setObject(13, planId);
+                    p.setObject(14, planId);
                     p.executeUpdate();
                 }
             }
@@ -348,7 +326,7 @@ public final class PostgresPlanCheckoutRepository {
             String historySql
                     = "INSERT INTO shopping_plan_checkout_history "
                     + "(plan_id,revision,changed_by," + columns + ") "
-                    + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+                    + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
 
             try (PreparedStatement p = c.prepareStatement(historySql)) {
                 p.setObject(1, planId);
@@ -379,8 +357,15 @@ public final class PostgresPlanCheckoutRepository {
             UUID planId,
             ShoppingEstimate pricing) {
 
+        return calculateView(find(planId), pricing);
+    }
+
+    static Map<String, Object> calculateView(
+            Map<String, Object> checkout,
+            ShoppingEstimate pricing) {
+
         Map<String, Object> result
-                = new LinkedHashMap<>(find(planId));
+                = new LinkedHashMap<>(checkout);
 
         BigDecimal merchandise = pricing.saleTotal();
         BigDecimal registerCost = pricing.registerCost();
@@ -392,7 +377,7 @@ public final class PostgresPlanCheckoutRepository {
 
         BigDecimal taxRate = value(result, "taxRate");
         BigDecimal taxableBase = value(result, "taxableBase");
-
+        BigDecimal actualTax = value(result, "actualTax");
         BigDecimal tax = null;
         BigDecimal due = null;
         BigDecimal remaining = null;
@@ -402,11 +387,9 @@ public final class PostgresPlanCheckoutRepository {
                     "Merchandise or coupon estimate is incomplete."
             );
         } else {
-            if (taxRate == null) {
-                issues.add(
-                        "Sales tax is not configured; amounts due exclude tax."
-                );
-            } else {
+            if (actualTax != null) {
+                tax = money(actualTax);
+            } else if (taxRate != null) {
                 BigDecimal base = taxableBase == null
                         ? merchandise
                         : taxableBase;
@@ -415,6 +398,10 @@ public final class PostgresPlanCheckoutRepository {
                         base.multiply(taxRate)
                                 .divide(new BigDecimal("100"), 8,
                                         RoundingMode.HALF_UP)
+                );
+            } else {
+                issues.add(
+                        "Sales tax is not configured; amounts due exclude tax."
                 );
             }
 
@@ -473,7 +460,7 @@ public final class PostgresPlanCheckoutRepository {
         result.put("estimateComplete",
                 registerCost != null
                 && merchandise != null
-                && taxRate != null
+                && (actualTax != null || taxRate != null)
         );
 
         return result;

@@ -4,10 +4,19 @@ import { date, decimal, label, money, shortId } from '../api/format'
 import { rewardStatusLabel } from '../features/receipts/rewardStatus'
 import { Badge, Empty, LinkButton, Notice, PageHeader, Panel, Unavailable } from '../components/ui'
 import type { Edit } from '../features/shopping/EditDialog'
-import type { PlanRow, Workspace } from '../types/platform'
+import type { Plan, PlanRow, Workspace } from '../types/platform'
 
 export type Page = 'dashboard' | 'receipts' | 'shopping' | 'coupons' | 'deals' | 'rewards' | 'inventory' | 'rebates'
-interface Props { data: Workspace; page: Page; writable: boolean; onPage: (p: Page) => void; onReceipt: (id: string) => void; onEdit: (edit: Edit) => void; onAddReceipt: () => void }
+interface Props {
+  data: Workspace
+  page: Page
+  writable: boolean
+  onPage: (p: Page) => void
+  onReceipt: (id: string) => void
+  onEdit: (edit: Edit) => void
+  onAddReceipt: () => void
+  onCheckout: (plan: Plan) => void
+}
 export function WorkspacePages(props: Props) {
   const { page } = props
   if (page === 'dashboard') return <Dashboard {...props} />
@@ -54,7 +63,13 @@ function Receipts({ data, onReceipt, writable, onAddReceipt }: Props) {
 }
 
 
-function PlanCard({ row, data, writable, onEdit, embedded = false }: {
+function PlanCard({
+  row,
+  data,
+  writable,
+  onEdit,
+  embedded = false,
+}: {
   row: PlanRow
   data: Workspace
   writable: boolean
@@ -352,7 +367,7 @@ function PlanCard({ row, data, writable, onEdit, embedded = false }: {
   )
 }
 
-function Shopping({ data, writable, onEdit }: Props) {
+function Shopping({ data, writable, onEdit, onCheckout }: Props) {
   const [search, setSearch] = useState('')
   const [store, setStore] = useState('ALL')
   const [dateFilter, setDateFilter] = useState('ALL')
@@ -361,7 +376,6 @@ function Shopping({ data, writable, onEdit }: Props) {
   const [dateTo, setDateTo] = useState('')
   const [sort, setSort] = useState('NEWEST')
   const [openPlanIds, setOpenPlanIds] = useState<string[]>([])
-
   const stores = [...new Set(
     data.plans
       .map(row => row.plan.retailer)
@@ -535,74 +549,60 @@ function Shopping({ data, writable, onEdit }: Props) {
         )}
 
         <div className="panel-bottom">
-          <strong>
-            {filteredPlans.length} of {data.plans.length} plans
-          </strong>
-
+          <strong> {filteredPlans.length} of {data.plans.length} plans</strong>
           <button
             type="button"
             className="secondary"
             onClick={resetFilters}
-          >
-            Clear filters
-          </button>
+          >Clear filters</button>
         </div>
       </Panel>
 
-      <div className="stack">
-        {filteredPlans.map(row => {
-          const planId = row.plan.planId
-          const isOpen = openPlanIds.includes(planId)
+      <div className="stack">{filteredPlans.map(row => {
+        const planId = row.plan.planId
+        const isOpen = openPlanIds.includes(planId)
+        return (
+          <div key={planId} className="shopping-plan-entry">
+            <Panel title={row.plan.name}
+              subtitle={`${row.plan.retailer || 'Store not selected'} · ${date(row.plan.shoppingDate)} · ${row.items.length} items`}
+              action={<div className="form-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  aria-expanded={isOpen}
+                  onClick={() => togglePlan(planId)}
+                > {isOpen ? 'Hide details' : 'View'}
+                </button>
 
-          return (
-            <div key={planId} className="shopping-plan-entry">
-              <Panel
-                title={row.plan.name}
-                subtitle={`${row.plan.retailer || 'Store not selected'} · ${date(row.plan.shoppingDate)} · ${row.items.length} items`}
-                action={
-                  <div className="form-actions">
-                    <button
-                      type="button"
-                      className="secondary"
-                      aria-expanded={isOpen}
-                      onClick={() => togglePlan(planId)}
-                    >
-                      {isOpen ? 'Hide details' : 'View'}
-                    </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={!writable}
+                  onClick={() => onEdit({ kind: 'plan', plan: row.plan })
+                  } > Edit
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onCheckout(row.plan)}
+                > Checkout </button>
+              </div>
+              }
+            >
+              <div className="shopping-plan-meta">
+                Shopping date: {date(row.plan.shoppingDate)} {' · '}  Revision {row.plan.revision}
+              </div>
+            </Panel>
 
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={!writable}
-                      onClick={() =>
-                        onEdit({ kind: 'plan', plan: row.plan })
-                      }
-                    > Edit
-                    </button>
-                  </div>
-                }
-              >
-                <div className="shopping-plan-meta">
-                  Shopping date: {date(row.plan.shoppingDate)}
-                  {' · '}
-                  Revision {row.plan.revision}
-                </div>
-              </Panel>
-
-              {isOpen && (
-                <div className="shopping-plan-expanded">
-                  <PlanCard
-                    row={row}
-                    data={data}
-                    writable={writable}
-                    onEdit={onEdit}
-                    embedded
-                  />
-                </div>
-              )}
-            </div>
-          )
-        })}
+            {isOpen && (
+              <div className="shopping-plan-expanded">
+                <PlanCard
+                  row={row}
+                  data={data}
+                  writable={writable}
+                  onEdit={onEdit}
+                  embedded />
+              </div>)}</div>)})}
 
         {filteredPlans.length === 0 && (
           <Panel title="Shopping plans">

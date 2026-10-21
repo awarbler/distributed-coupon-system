@@ -12,7 +12,24 @@ export interface CheckoutSummary {
   remainingPayment: Decimal | null
   expectedRewards: Decimal | null
 issues: string[]}
-
+export interface PlanCheckout {
+  planId: string
+  revision: string
+  promoCode: string | null
+  promoDiscount: Decimal
+  taxRate: Decimal
+  taxableBase: Decimal
+  actualTax: Decimal
+  walgreensCashUsed: Decimal
+  registerRewardsCoupon: Decimal
+  giftCardUsed: Decimal
+  cashPayment: Decimal
+  cardPayment: Decimal
+  otherPayment: Decimal
+  notes: string | null
+  summary: CheckoutSummary
+  estimateComplete: boolean
+}
 export interface PlanRow { pricing?: { regularTotal: Decimal; saleTotal: Decimal; saleSavings: Decimal; couponSavings: Decimal; expectedRewards: Decimal; registerCost: Decimal; finalCost: Decimal; issues: string[] }; plan: Plan; items: Purchase[]; estimatedMerchandise: Decimal; estimateComplete: boolean }
 export interface Coupon { terms?: {source: string; discount: string} | null; couponId: string; provider: string; externalId: string | null; status: string; clippedOn: string | null; redeemedOn: string | null; redeemedTransactionId: string | null; revision: string; description: string; discountAmount: Decimal; couponType: string; expirationDate: string | null }
 export interface Deal { pricing?: { type: string; promotionalPrice: Decimal } | null; dealId: string; title: string; interpretedTerms: string; retailer: string | null; validFrom: string | null; validThrough: string | null; sourceArtifactIds: string[]; revision: string }

@@ -1,5 +1,5 @@
 import { parse } from 'lossless-json'
-import type { Workspace, Receipt, History, Totals } from '../types/platform'
+import type {Workspace,Receipt,History,Totals,PlanCheckout,} from '../types/platform'
 
 export class ApiError extends Error {
   readonly status: number
@@ -36,6 +36,30 @@ export class ApiClient {
       throw new ApiError(502, 'The server returned an incompatible workspace contract. Start the updated Java API.')
     return value
   }
+  checkout(
+  planId: string,
+  signal?: AbortSignal
+): Promise<PlanCheckout> {
+  return this.get<PlanCheckout>(
+    `/shopping-plans/${encodeURIComponent(planId)}/checkout`,
+    signal
+  )
+}
+
+saveCheckout(
+  planId: string,
+  values: Record<string, string | null>,
+  revision: string,
+  key: string
+): Promise<PlanCheckout> {
+  return this.mutate(
+    `/shopping-plans/${encodeURIComponent(planId)}/checkout`,
+    'PUT',
+    values,
+    key,
+    revision
+  ) as Promise<PlanCheckout>
+}
   receipt(id: string, signal?: AbortSignal) { return this.get<Receipt>(`/receipts/${encodeURIComponent(id)}`, signal) }
   history(id: string, signal?: AbortSignal) { return this.get<History[]>(`/receipts/${encodeURIComponent(id)}/history`, signal) }
   totals(id: string, signal?: AbortSignal) { return this.get<Totals>(`/receipts/${encodeURIComponent(id)}/totals`, signal) }

@@ -1,0 +1,2289 @@
+
+========== FILE: src/main/java/coupons/api/CouponApiService.java ==========
+package coupons.api;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.math.BigDecimal;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URLDecoder;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.Executors;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpServer;
+
+import coupons.ClippedCoupon;
+import coupons.EarningDetails;
+import coupons.PromotionQualification;
+import coupons.RebateStatus;
+import coupons.ReceiptObservations;
+import coupons.ShoppingPlan;
+import coupons.TransactionCalculator;
+import static coupons.api.Json.asText;
+import static coupons.api.Json.known;
+import static coupons.api.Json.number;
+import static coupons.api.Json.optional;
+import static coupons.api.Json.required;
+import coupons.repository.ClippedCouponRepository;
+import coupons.repository.PostgresPlatformRepository;
+import coupons.repository.ReceiptChangeContext;
+import coupons.repository.ReceiptCreateCtx;
+import coupons.repository.ReceiptRecord;
+import coupons.repository.ReceiptSnapshot;
+import coupons.repository.ReceiptWriteRequest;
+import coupons.repository.ShoppingPlanRepository;
+import coupons.repository.TransactionRepository;
+
+/**
+ * Single-owner HTTP boundary. Repository instances must belong to the
+ * configured owner.
+ */
+public final class CouponApiService implements HttpHandler {
+
+    private static final int MAX_BODY = 64 * 1024;
+    private static final int MAX_KEYS = 10_000;
+    private final TransactionRepository receipts;
+    private final ShoppingPlanRepository plans;
+    private final ClippedCouponRepository coupons;
+    private final ApiRequestStore requestStore;
+    private final PostgresPlatformRepository platform;
+    private final String token;
+    private final String adminToken;
+    private final Map<String, Cached> idempotency = new HashMap<>();
+
+    public CouponApiService(TransactionRepository receipts, ShoppingPlanRepository plans,
+            ClippedCouponRepository coupons, String token, String adminToken) {
+        this(receipts, plans, coupons, token, adminToken, null);
+    }
+
+    CouponApiService(TransactionRepository receipts, ShoppingPlanRepository plans,
+            ClippedCouponRepository coupons, String token, String adminToken, ApiRequestStore requestStore) {
+        this(receipts, plans, coupons, token, adminToken, requestStore, null);
+    }
+
+    CouponApiService(TransactionRepository receipts, ShoppingPlanRepository plans, ClippedCouponRepository coupons,
+            String token, String adminToken, ApiRequestStore requestStore, PostgresPlatformRepository platform) {
+        this.platform = platform;
+        this.requestStore = requestStore;
+        this.receipts = Objects.requireNonNull(receipts);
+        this.plans = Objects.requireNonNull(plans);
+        this.coupons = Objects.requireNonNull(coupons);
+        if (token == null || token.isBlank()) {
+            throw new IllegalArgumentException("API token must be configured.");
+        }
+        this.token = token;
+        this.adminToken = adminToken == null || adminToken.isBlank() ? null : adminToken;
+        if (token.equals(this.adminToken)) {
+            throw new IllegalArgumentException("Read and write tokens must differ.");
+        }
+    }
+
+    /**
+     * Loopback by default; remote deployment must use a trusted TLS proxy.
+     */
+    public HttpServer start(int port) throws IOException {
+        return start("127.0.0.1", port);
+    }
+
+    public HttpServer start(String host, int port) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress(host, port), 32);
+        var executor = Executors.newVirtualThreadPerTaskExecutor();
+        server.createContext("/", this);
+        server.setExecutor(executor);
+        // HttpServer does not own the supplied executor. Virtual workers exit with each request.
+        server.start();
+        return server;
+    }
+
+    @Override
+    public void handle(HttpExchange exchange) throws IOException {
+        try {
+            Response response = route(exchange);
+            send(exchange, response);
+        } catch (ApiError error) {
+            if (error.status == 401) {
+                exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer");
+            }
+            send(exchange, new Response(error.status, Json.object(Map.of("error", error.getMessage()))));
+        } catch (ApiRequestStore.Conflict error) {
+            send(exchange, new Response(409, Json.object(Map.of("error", error.getMessage()))));
+        } catch (NoSuchElementException error) {
+            send(exchange, new Response(404, Json.object(Map.of("error", "Resource not found."))));
+        } catch (ConcurrentModificationException error) {
+            send(exchange, new Response(409, Json.object(Map.of("error", "Revision changed; retrieve the current resource."))));
+        } catch (IllegalArgumentException | DateTimeParseException error) {
+            send(exchange, new Response(400, Json.object(Map.of("error", "Invalid request fields or resource state."))));
+        } catch (Exception error) {
+            error.printStackTrace(System.err);
+            // Never expose SQL, credentials, paths, or repository exception messages to clients.
+            send(exchange, new Response(500, Json.object(Map.of("error", "Request failed."))));
+        } finally {
+            exchange.close();
+        }
+    }
+
+    private Response route(HttpExchange e) throws IOException {
+        String path = e.getRequestURI().getPath();
+        String method = e.getRequestMethod();
+        if (path.equals("/health")) {
+            if (!method.equals("GET")) {
+                throw new ApiError(405, "Method not allowed.");
+            }
+            return json(200, Map.of("status", "ok"));
+        }
+        boolean write = !method.equals("GET");
+        String principal = authorize(e, write);
+        String[] parts = path.split("/", -1);
+        if (path.equals("/deals")) {
+            requireMethod(method, "POST");
+            requirePlatform();
+            return write(e, principal, 8 * 1024 * 1024, request -> {
+                var input = DealInput.read(Json.parseObject(request));
+                platform.saveDeal(input.deal(), principal, input.source());
+                return json(201, input.deal());
+            });
+        }
+        if (path.equals("/receipts/preview")) {
+            requireMethod(method, "POST");
+            var input = receiptInput(body(e, 16 * 1024 * 1024));
+            var duplicate = possibleDuplicates(input);
+            return json(200, fields("transactionId", input.id(), "reviewToken", input.reviewToken(), "totals", PostgresPlatformRepository.totals(input.record()),
+                    "possibleDuplicates", duplicate.stream().map(r -> fields("transactionId", r.transactionId(), "status", r.status(), "revision", r.revision())).toList(),
+                    "evidence", input.evidence().stream().map(v -> fields("evidenceId", v.getEvidenceId(), "mediaType", v.getMediaType(), "bytes", v.getContent().length)).toList()));
+        }
+        if (path.equals("/receipts")) {
+            requireMethod(method, "POST");
+            return write(e, principal, 16 * 1024 * 1024, request -> {
+                var input = receiptInput(request);
+                if (!input.reviewToken().equals(input.suppliedReviewToken())) {
+                    throw new ApiError(409, "Receipt changed since preview. Review the current values before saving.");
+                }
+                if (new TransactionCalculator().calculateReceiptDifference(input.transaction()).signum() != 0 && !input.acknowledgeDifference()) {
+                    throw new ApiError(400, "Confirm the reported/calculated difference before saving.");
+                }
+                if (receipts.findById(input.id()).or(() -> receipts.findDeletedById(input.id())).isPresent()) {
+                    throw new ApiError(409, "Receipt UUID already exists; creation cannot overwrite it.");
+                }
+                if (!possibleDuplicates(input).isEmpty()) {
+                    throw new ApiError(409, "Possible existing receipt found. Review it before creating another receipt.");
+                }
+                var result = receipts.save(input.id(), input.transaction(), input.metadata(), input.evidence(), new ReceiptWriteRequest(UUID.randomUUID(), java.time.Instant.now()), new ReceiptCreateCtx(principal));
+                e.getResponseHeaders().set("Location", "/receipts/" + input.id());
+                return json(201, result);
+            });
+        }
+        if (path.equals("/workspace")) {
+            requireMethod(method, "GET");
+            requirePlatform();
+            var data = new LinkedHashMap<>(platform.workspace());
+            data.put("canWrite", principal.equals("api-owner"));
+            return json(200, data);
+        }
+        if (parts.length == 4 && parts[1].equals("receipts") && Set.of("totals", "history").contains(parts[3])) {
+            requireMethod(method, "GET");
+            requirePlatform();
+            UUID id = UUID.fromString(parts[2]);
+            return json(200, parts[3].equals("history") ? platform.history(id) : platform.receiptTotals(id));
+        }
+        if (parts.length == 5 && parts[1].equals("receipts") && parts[3].equals("evidence")) {
+            requireMethod(method, "GET");
+            requirePlatform();
+            var evidence = platform.evidence(UUID.fromString(parts[2]), UUID.fromString(parts[4]));
+            e.getResponseHeaders().set("Content-Disposition", "attachment; filename=receipt-evidence");
+            String type = Set.of("image/jpeg", "image/png", "image/webp", "application/pdf").contains(evidence.getMediaType()) ? evidence.getMediaType() : "application/octet-stream";
+            return new Response(200, "", evidence.getContent(), type);
+        }
+        if ((parts.length == 4 || parts.length == 5) && parts[1].equals("shopping-plans") && parts[3].equals("purchases")) {
+            requirePlatform();
+            UUID planId = UUID.fromString(parts[2]);
+            requireMethod(method, parts.length == 4 ? "POST" : "PUT");
+            return write(e, principal, request -> {
+                var f = Json.parseObject(request);
+                known(f, "plannedPurchaseId", "productName", "productCode", "quantity", "targetUnitPrice", "advertisedDealId", "clippedCouponIds", "regularUnitPrice", "saleUnitPrice", "priceSource");
+                UUID id = parts.length == 4 ? UUID.fromString(required(f, "plannedPurchaseId")) : UUID.fromString(parts[4]);
+                if (f.containsKey("plannedPurchaseId") && !id.toString().equals(required(f, "plannedPurchaseId"))) {
+                    throw new ApiError(400, "Purchase ID must match URL.");
+                }
+                long quantity = number(f.get("quantity"));
+                if (quantity < 1 || quantity > Integer.MAX_VALUE) {
+                    throw new ApiError(400, "Quantity must be a positive whole number.");
+                }
+                String target = optional(f, "targetUnitPrice"), deal = optional(f, "advertisedDealId");
+                var couponIds = new ArrayList<UUID>();
+                if (f.containsKey("clippedCouponIds")) {
+                    if (!(f.get("clippedCouponIds") instanceof List<?> ids)) {
+                        throw new ApiError(400, "Coupon IDs must be an array.");
+                    }
+                    for (var coupon : ids) {
+                        couponIds.add(UUID.fromString(asText(coupon)));
+                    }
+                }
+                var item = f.containsKey("regularUnitPrice") ? platform.savePurchase(planId, id, required(f, "productName"), optional(f, "productCode"), (int) quantity,
+                        ReceiptInput.decimal(f, "regularUnitPrice", true), ReceiptInput.decimal(f, "saleUnitPrice", true), optional(f, "priceSource"), deal == null ? null : UUID.fromString(deal), couponIds, parts.length == 4 ? 0 : revision(e), principal)
+                        : platform.savePurchase(planId, id, required(f, "productName"), optional(f, "productCode"), (int) quantity, target == null ? null : new BigDecimal(target), deal == null ? null : UUID.fromString(deal), couponIds, parts.length == 4 ? 0 : revision(e), principal);
+                return json(parts.length == 4 ? 201 : 200, item);
+            });
+        }
+
+        if ((parts.length == 4 || parts.length == 5 && parts[4].equals("preview")) && parts[1].equals("receipts") && parts[3].equals("earnings")) {
+            requireMethod(method, "POST");
+            UUID receiptId = UUID.fromString(parts[2]);
+            if (parts.length == 5) {
+                var old = receipts.findById(receiptId).orElseThrow();
+                if (old.revision() != revision(e)) {
+                    throw new ConcurrentModificationException();
+                }
+                var addition = ReceiptEarningAddition.read(old, Json.parseObject(body(e, 8 * 1024 * 1024)));
+                return json(200, fields("earning", addition.earning(), "qualification", PromotionQualification.evaluate(addition.earning(), addition.transaction()), "totals", PostgresPlatformRepository.totals(new ReceiptRecord(old.transactionId(), old.status(), old.revision(), addition.transaction(), old.metadata(), old.evidenceIds()))));
+            }
+            return write(e, principal, 8 * 1024 * 1024, request -> {
+                var old = receipts.findById(receiptId).orElseThrow();
+                if (old.revision() != revision(e)) {
+                    throw new ConcurrentModificationException();
+
+                }
+                var addition = ReceiptEarningAddition.read(old, Json.parseObject(request));
+                return json(201, addition.save(receipts, old, principal));
+            });
+        }
+
+        if (parts.length == 6 && parts[1].equals("receipts") && parts[3].equals("earnings") && parts[5].equals("associations")) {
+            requireMethod(method, "PUT");
+            UUID receiptId = UUID.fromString(parts[2]), earningId = UUID.fromString(parts[4]);
+            return write(e, principal, request -> {
+                var old = receipts.findById(receiptId).orElseThrow();
+                if (old.revision() != revision(e)) {
+                    throw new ConcurrentModificationException();
+                }
+                var f = Json.parseObject(request);
+                known(f, "lineItemIds", "qualifyingQuantities");
+                var lines = ReceiptInput.ids(f, "lineItemIds");
+                var tx = old.transaction();
+                var obs = tx.getObservations();
+                var earnings = new ArrayList<>(obs.earnings());
+                int index = -1;
+                for (int i = 0; i < earnings.size(); i++) {
+                    if (earnings.get(i).earningId().equals(earningId)) {
+                        index = i;
+
+                    }
+                }
+                if (index < 0) {
+                    throw new NoSuchElementException();
+                }
+                var previous = earnings.get(index);
+                var detail = previous.details();
+                var nextDetails = new EarningDetails(ReceiptInput.quantities(f), detail == null ? null : detail.payoutDestination(), detail == null ? null : detail.submittedOn(), detail == null ? null : detail.submissionReference(), detail == null ? null : detail.confirmationReference());
+                earnings.set(index, new ReceiptObservations.Earning(previous.earningId(), previous.kind(), previous.provider(), previous.offerReference(), lines.isEmpty() ? ReceiptObservations.Scope.RECEIPT : lines.size() == 1 ? ReceiptObservations.Scope.ITEM : ReceiptObservations.Scope.MULTI_ITEM, lines, previous.expected(), previous.confirmed(), previous.status(), previous.expirationDate(), previous.instrumentId(), previous.claimId(), previous.evidenceIds(), previous.recordedLifecycle(), previous.requirement(), previous.valuation(), nextDetails));
+                tx.setObservations(new ReceiptObservations(obs.purchaseDate(), obs.printedTime(), earnings, obs.unidentifiedRR(), obs.walgreensCash(), obs.savings(), obs.discountKinds(), obs.receiptSavingValuePercent(), obs.promotionLinks(), obs.worksheet(), obs.footerStatus()));
+                var now = java.time.Instant.now();
+                return json(200, receipts.update(receiptId, old.revision(), tx, old.metadata(), List.of(), new ReceiptWriteRequest(UUID.randomUUID(), now), new ReceiptChangeContext(principal, "Updated earning product associations: " + earningId, principal, now)));
+            });
+        }
+        if (parts.length == 6 && parts[1].equals("receipts") && parts[3].equals("earnings") && parts[5].equals("status")) {
+            requireMethod(method, "PUT");
+            UUID receiptId = UUID.fromString(parts[2]), earningId = UUID.fromString(parts[4]);
+            return write(e, principal, request -> {
+                long expected = revision(e);
+                var f = Json.parseObject(request);
+                known(f, "status", "amount", "unit", "confirmAmountAndUnit", "rejectionReason");
+                var receipt = receipts.findById(receiptId).orElseThrow();
+                if (receipt.revision() != expected) {
+                    throw new ConcurrentModificationException("Receipt revision changed; refresh before editing.");
+                }
+                var tx = receipt.transaction();
+                var obs = tx.getObservations();
+                var earnings = new ArrayList<>(obs.earnings());
+                int index = -1;
+                for (int i = 0; i < earnings.size(); i++) {
+                    if (earnings.get(i).earningId().equals(earningId)) {
+                        index = i;
+                    }
+                }
+                if (index < 0) {
+                    throw new NoSuchElementException();
+                }
+                if (f.containsKey("confirmAmountAndUnit") && !(f.get("confirmAmountAndUnit") instanceof Boolean)) {
+                    throw new ApiError(400, "Amount confirmation must be a boolean.");
+                }
+                var status = RebateStatus.valueOf(required(f, "status"));
+                var updated = ReceiptEarningStatusUpdate.apply(earnings.get(index), status, optional(f, "amount"), optional(f, "unit"), Boolean.TRUE.equals(f.get("confirmAmountAndUnit")), optional(f, "rejectionReason"));
+                earnings.set(index, updated);
+                tx.setObservations(new ReceiptObservations(obs.purchaseDate(), obs.printedTime(), earnings, obs.unidentifiedRR(), obs.walgreensCash(), obs.savings(), obs.discountKinds(), obs.receiptSavingValuePercent(), obs.promotionLinks(), obs.worksheet(), obs.footerStatus()));
+                var now = java.time.Instant.now();
+                var result = receipts.update(receiptId, expected, tx, receipt.metadata(), List.of(), new ReceiptWriteRequest(UUID.randomUUID(), now),
+                        new ReceiptChangeContext(principal, "Owner-confirmed reward status: " + earningId + " -> " + status, principal, now));
+                return json(200, result);
+            });
+        }
+
+        if (parts.length == 3 && parts[1].equals("receipts")) {
+            requireMethod(method, "GET");
+            UUID receiptId = UUID.fromString(parts[2]);
+            ReceiptRecord r = receipts.findById(receiptId).or(() -> receipts.findDeletedById(receiptId)).orElseThrow();
+            e.getResponseHeaders().set("ETag", "\"" + r.revision() + "\"");
+            return json(200, fields("transactionId", r.transactionId(), "revision", r.revision(),
+                    "status", r.status(), "metadata", r.metadata(), "evidenceIds", r.evidenceIds(),
+                    "contents", ReceiptSnapshot.from(r.transaction())));
+        }
+        if (parts.length == 4
+                && parts[1].equals("shopping-plans")
+                && parts[3].equals("checkout")) {
+
+            requirePlatform();
+
+            UUID planId = UUID.fromString(parts[2]);
+
+            if (method.equals("GET")) {
+                return json(200, platform.checkout(planId));
+            }
+
+            requireMethod(method, "PUT");
+
+            return write(e, principal, request -> {
+                long expected = checkoutRevision(e);
+                Map<String, Object> values
+                        = Json.parseObject(request);
+
+                return json(200, platform.saveCheckout(
+                        planId,
+                        expected,
+                        values,
+                        principal
+                ));
+            });
+        }
+        if (path.equals("/shopping-plans")) {
+            requireMethod(method, "POST");
+            return write(e, principal, request -> {
+                ShoppingPlan plan = parsePlan(null, Json.parseObject(request), 1, null);
+                plans.save(plan, principal);
+                return json(201, plan);
+            });
+        }
+        if (parts.length == 3 && parts[1].equals("shopping-plans")) {
+            UUID id = UUID.fromString(parts[2]);
+            if (method.equals("GET")) {
+                ShoppingPlan plan = plans.findById(id).orElseThrow();
+                e.getResponseHeaders().set("ETag", "\"" + plan.revision() + "\"");
+                return json(200, plan);
+            }
+            requireMethod(method, "PUT");
+            return write(e, principal, request -> {
+                long expected = revision(e);
+                ShoppingPlan previous = plans.findById(id).orElseThrow();
+                if (previous.revision() != expected) {
+                    throw new ConcurrentModificationException();
+                }
+                ShoppingPlan plan = parsePlan(id, Json.parseObject(request), Math.addExact(expected, 1), previous);
+                return json(200, plans.update(plan, expected, principal, "API update"));
+            });
+        }
+        if (path.equals("/clipped-coupons")) {
+            if (method.equals("POST")) {
+                requirePlatform();
+                return write(e, principal, 8 * 1024 * 1024, request -> {
+                    var copies = CouponInput.read(Json.parseObject(request));
+                    platform.saveCoupons(copies, principal);
+                    return json(201, copies.stream().map(CouponApiService::couponFields).toList());
+                });
+            }
+            requireMethod(method, "GET");
+            String provider = query(e.getRequestURI(), "provider");
+            if (provider == null || provider.isBlank()) {
+                throw new ApiError(400, "provider is required.");
+            }
+            return json(200, coupons.findByProvider(provider).stream().map(CouponApiService::couponFields).toList());
+        }
+        if (parts.length == 3 && parts[1].equals("clipped-coupons")) {
+            requireMethod(method, "GET");
+            ClippedCoupon coupon = coupons.findById(UUID.fromString(parts[2])).orElseThrow();
+            return json(200, couponFields(coupon));
+        }
+        if (parts.length == 4 && parts[1].equals("clipped-coupons") && parts[3].equals("redeem")) {
+            requireMethod(method, "POST");
+            UUID id = UUID.fromString(parts[2]);
+            return write(e, principal, request -> {
+                long expected = revision(e);
+                Map<String, Object> f = Json.parseObject(request);
+                known(f, "transactionId", "redeemedOn");
+                UUID receiptId = UUID.fromString(required(f, "transactionId"));
+                receipts.findById(receiptId).orElseThrow();
+                coupons.findById(id).orElseThrow();
+                try {
+                    return json(200, couponFields(coupons.redeem(id, receiptId,
+                            LocalDate.parse(required(f, "redeemedOn")), expected, principal)));
+                } catch (IllegalStateException x) {
+                    throw new ApiError(409, "Coupon cannot be redeemed in its current state.");
+                }
+            });
+        }
+        throw new ApiError(404, "Unknown endpoint.");
+    }
+
+    /**
+     * Serialize retries and writes: cache key includes authenticated role,
+     * route and revision.
+     */
+    private Response write(HttpExchange e, String principal, Work operation) throws IOException {
+        return write(e, principal, MAX_BODY, operation);
+    }
+
+    private synchronized Response write(HttpExchange e, String principal, int limit, Work operation) throws IOException {
+        String key = e.getRequestHeaders().getFirst("Idempotency-Key");
+        if (key == null || key.isBlank() || key.length() > 200) {
+            throw new ApiError(400, "Idempotency-Key is required (maximum 200 characters).");
+        }
+        String requestBody = body(e, limit);
+        String signature = e.getRequestMethod() + "\n" + e.getRequestURI() + "\n"
+                + e.getRequestHeaders().getFirst("If-Match-Revision") + "\n" + requestBody;
+        if (requestStore != null) {
+            var result = requestStore.execute(principal, key, signature, () -> {
+                Response response = operation.run(requestBody);
+                return new ApiRequestStore.Result(response.status, response.body);
+            });
+            return new Response(result.status(), result.body());
+        }
+        String scopedKey = principal + ":" + key;
+        Cached old = idempotency.get(scopedKey);
+        if (old != null) {
+            if (!old.signature.equals(signature)) {
+                throw new ApiError(409, "Idempotency key was used for a different request.");
+            }
+            return old.response;
+        }
+        if (idempotency.size() >= MAX_KEYS) {
+            throw new ApiError(503, "API retry cache is full; restart during a maintenance window.");
+        }
+        Response result = operation.run(requestBody);
+        idempotency.put(scopedKey, new Cached(signature, result));
+        return result;
+    }
+
+    private ShoppingPlan parsePlan(UUID pathId, Map<String, Object> f, long next, ShoppingPlan previous) {
+        known(f, "planId", "name", "retailer", "shoppingDate", "revision", "plannedPurchaseIds");
+        UUID id = pathId == null ? UUID.fromString(required(f, "planId")) : pathId;
+        if (f.containsKey("planId") && !id.toString().equals(required(f, "planId"))) {
+            throw new ApiError(400, "Plan ID must match the URL.");
+        }
+        if (f.containsKey("revision") && number(f.get("revision")) != next) {
+            throw new ApiError(400, "Body revision must be the next revision.");
+        }
+        List<UUID> purchases = previous == null ? List.of() : previous.plannedPurchaseIds();
+        if (f.containsKey("plannedPurchaseIds")) {
+            if (!(f.get("plannedPurchaseIds") instanceof List<?> list)) {
+                throw new ApiError(400, "plannedPurchaseIds must be an array.");
+            }
+            purchases = list.stream().map(v -> UUID.fromString(asText(v))).toList();
+            // These repositories do not atomically validate or synchronize purchase ownership.
+            if (previous == null ? !purchases.isEmpty() : !purchases.equals(previous.plannedPurchaseIds())) {
+                throw new ApiError(400, "Purchase links must be managed through the planned-purchase workflow; this endpoint preserves existing links.");
+            }
+        }
+        String date = f.containsKey("shoppingDate") ? optional(f, "shoppingDate") : previous == null || previous.shoppingDate() == null ? null : previous.shoppingDate().toString();
+        return new ShoppingPlan(id, required(f, "name"), f.containsKey("retailer") ? optional(f, "retailer") : previous == null ? null : previous.retailer(),
+                date == null ? null : LocalDate.parse(date), purchases, next);
+    }
+
+    private String authorize(HttpExchange e, boolean write) {
+        String header = e.getRequestHeaders().getFirst("Authorization");
+        if (header == null || !header.startsWith("Bearer ")) {
+            throw new ApiError(401, "Bearer token required.");
+        }
+        String supplied = header.substring(7);
+        boolean owner = equal(token, supplied);
+        boolean admin = adminToken != null && equal(adminToken, supplied);
+        if (!owner && !admin) {
+            throw new ApiError(401, "Invalid bearer token.");
+        }
+        if (write && adminToken != null && !admin) {
+            throw new ApiError(403, "Write authorization required.");
+        }
+        // Audit identity comes from server configuration, never the caller's X-Actor header.
+        return admin ? "api-owner" : adminToken == null ? "api-owner" : "api-reader";
+    }
+
+    private static ReceiptInput receiptInput(String json) {
+        try {
+            return ReceiptInput.read(Json.parseObject(json));
+        } catch (IllegalArgumentException ex) {
+            throw new ApiError(400, ex.getMessage() == null ? "Invalid receipt fields." : ex.getMessage());
+        }
+    }
+
+    private List<ReceiptRecord> possibleDuplicates(ReceiptInput input) {
+        var m = input.metadata();
+        return m.receiptNumber() == null && m.purchasedAt() == null ? List.of() : receipts.findPossibleDuplicates(m);
+    }
+
+    private void requirePlatform() {
+        if (platform == null) {
+            throw new ApiError(501, "Platform operations are not configured on this server.");
+
+        }
+    }
+
+    private static boolean equal(String a, String b) {
+        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static long revision(HttpExchange e) {
+        String value = e.getRequestHeaders().getFirst("If-Match-Revision");
+        if (value == null) {
+            throw new ApiError(428, "If-Match-Revision is required.");
+        }
+        try {
+            long n = Long.parseLong(value);
+            if (n < 1 || n == Long.MAX_VALUE) {
+                throw new NumberFormatException();
+
+            }
+            return n;
+        } catch (NumberFormatException x) {
+            throw new ApiError(400, "Revision must be a positive integer.");
+        }
+    }
+
+    private static long checkoutRevision(HttpExchange e) {
+        String value = e.getRequestHeaders().getFirst("If-Match-Revision");
+        if (value == null) {
+            throw new ApiError(428, "If-Match-Revision is required.");
+        }
+
+        try {
+            long revision = Long.parseLong(value);
+            if (revision < 0 || revision == Long.MAX_VALUE) {
+                throw new NumberFormatException();
+            }
+            return revision;
+        } catch (NumberFormatException ex) {
+            throw new ApiError(400,
+                    "Checkout revision must be a nonnegative integer.");
+        }
+    }
+
+    private static String body(HttpExchange e) throws IOException {
+        return body(e, MAX_BODY);
+    }
+
+    private static String body(HttpExchange e, int limit) throws IOException {
+        String type = e.getRequestHeaders().getFirst("Content-Type");
+        if (type == null || !type.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) {
+            throw new ApiError(415, "Content-Type must be application/json.");
+        }
+        byte[] bytes = e.getRequestBody().readNBytes(limit + 1);
+        if (bytes.length > limit) {
+            throw new ApiError(413, "Request body exceeds the allowed size.");
+        }
+        String value;
+        try {
+            value = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException x) {
+            throw new ApiError(400, "Body must be UTF-8.");
+        }
+        return value;
+    }
+
+    private static String query(URI uri, String key) {
+        if (uri.getRawQuery() == null) {
+            return null;
+        }
+        for (String p : uri.getRawQuery().split("&")) {
+            String[] a = p.split("=", 2);
+            if (URLDecoder.decode(a[0], StandardCharsets.UTF_8).equals(key)) {
+                return a.length == 2 ? URLDecoder.decode(a[1], StandardCharsets.UTF_8) : "";
+
+            }
+        }
+        return null;
+    }
+
+    private static void requireMethod(String actual, String expected) {
+        if (!actual.equals(expected)) {
+            throw new ApiError(405, "Method not allowed.");
+
+        }
+    }
+
+    private static Map<String, Object> fields(Object... pairs) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < pairs.length; i += 2) {
+            map.put((String) pairs[i], pairs[i + 1]);
+
+        }
+        return map;
+    }
+
+    private static Map<String, Object> couponFields(ClippedCoupon c) {
+        return PostgresPlatformRepository.couponFields(c);
+    }
+
+    private static Response json(int status, Object value) {
+        return new Response(status, Json.encode(value));
+    }
+
+    private static void send(HttpExchange e, Response response) throws IOException {
+        e.getResponseHeaders().set("Content-Type", response.mediaType);
+        e.getResponseHeaders().set("Cache-Control", "no-store");
+        e.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+        byte[] bytes = response.binary == null ? response.body.getBytes(StandardCharsets.UTF_8) : response.binary;
+        e.sendResponseHeaders(response.status, bytes.length);
+        try (OutputStream out = e.getResponseBody()) {
+            out.write(bytes);
+        }
+    }
+
+    private record Response(int status, String body, byte[] binary, String mediaType) {
+
+        Response(int status, String body) {
+            this(status, body, null, "application/json; charset=utf-8");
+        }
+    }
+
+    private record Cached(String signature, Response response) {}
+
+    @FunctionalInterface
+    private interface Work {
+
+        Response run(String request) throws IOException;
+    }
+
+    private static final class ApiError extends RuntimeException {
+
+        final int status;
+
+        ApiError(int status, String message) {
+            super(message);
+            this.status = status;
+        }
+    }
+}
+
+========== FILE: src/main/java/coupons/repository/PostgresPlatformRepository.java ==========
+package coupons.repository;
+
+import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Objects;
+import java.util.UUID;
+
+import coupons.AdvertisedDeal;
+import coupons.ClippedCoupon;
+import coupons.PlannedPurchase;
+import coupons.PromotionQualification;
+import coupons.ProviderBalanceSummary;
+import coupons.PurchaseItem;
+import coupons.ReceiptTimeInput;
+import coupons.ReceiptWorksheetReport;
+import coupons.SavingsReport;
+import coupons.ShoppingEstimate;
+import coupons.SourceArtifact;
+import coupons.TransactionCalculator;
+import static coupons.repository.PostgresRepositorySupport.transaction;
+
+/**
+ * Optional web read model and narrow actions, reusing domain repositories and
+ * calculations.
+ */
+public final class PostgresPlatformRepository {
+
+    private final PostgresConnectionFactory db;
+
+    public PostgresPlatformRepository(PostgresConnectionFactory db) {
+        this.db = Objects.requireNonNull(db);
+    }
+
+    public Map<String, Object> workspace() {
+        return transaction(db, c -> {
+            c.setReadOnly(true);
+            var state = PostgresReceiptState.read(c);
+            var records = state.receipts().values().stream().map(r -> new ReceiptRecord(r.transactionId(), r.status(), r.revision(), r.contents().toTransaction(), r.metadata(), r.evidenceIds()))
+                    .sorted(Comparator.comparing((ReceiptRecord r) -> r.transaction().getObservations().purchaseDate(), Comparator.nullsLast(Comparator.reverseOrder()))
+                            .thenComparing(r -> ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).orElse(LocalTime.MIN), Comparator.reverseOrder())).toList();
+            var summary = new ProviderBalanceSummary(PostgresReceiptState.rules(state));
+            LocalDate day = records.stream().map(r -> r.transaction().getObservations().purchaseDate()).filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(LocalDate.now());
+            List<Object> balances = new ArrayList<>();
+            boolean targetSplit = state.balances().openings().stream().anyMatch(o -> !o.date().isAfter(day) && (o.provider().equals("Target Gift Card") || o.provider().equals("Target Circle")))
+                    || summary.movements(records).stream().anyMatch(m -> m.date() != null && !m.date().isAfter(day) && (m.provider().equals("Target Gift Card") || m.provider().equals("Target Circle")));
+            for (String name : summary.programs(records)) {
+                if (name.equals("Target") && targetSplit) {
+                    continue;
+                }
+                var balance = summary.balance(day, name, records);
+                boolean known = java.util.stream.Stream.of(balance.monthUsd(), balance.startUsd(), balance.endUsd(), balance.startPoints(), balance.endPoints()).anyMatch(v -> v != null && v.signum() != 0);
+                if (known) {
+                    balances.add(fields("provider", name, "balance", balance));
+                }
+            }
+            var plans = new PostgresShoppingPlanRepository(db);
+            var purchases = new PostgresPlannedPurchaseRepository(db);
+            List<Object> planRows = new ArrayList<>();
+            for (UUID id : ids(c, "SELECT plan_id FROM shopping_plan_current ORDER BY shopping_date NULLS LAST,plan_id")) {
+                var plan = plans.findById(id).orElseThrow();
+                var items = purchases.findByPlanId(id);
+                Map<UUID, AdvertisedDeal> planDeals = new HashMap<>();
+                Map<UUID, ClippedCoupon> planCoupons = new HashMap<>();
+                for (var item : items) {
+                    if (item.advertisedDealId() != null) {
+                        new PostgresDealRepository(db).findById(item.advertisedDealId()).ifPresent(d -> planDeals.put(d.dealId(), d));
+
+                    }
+                    for (var couponId : item.clippedCouponIds()) {
+                        new PostgresClippedCouponRepository(db).findById(couponId).ifPresent(v -> planCoupons.put(v.couponId(), v));
+
+                    }
+                }
+                var pricing = ShoppingEstimate.calculate(items, planDeals, planCoupons, plan.shoppingDate(), plan.retailer());
+                var checkout = new PostgresPlanCheckoutRepository(db).view(id, pricing);
+                planRows.add(fields("pricing", pricing, "checkout", checkout, "plan", plan, "items", items, "estimatedMerchandise", items.isEmpty() ? null : pricing.saleTotal(), "estimateComplete", !items.isEmpty() && pricing.saleTotal() != null));
+            }
+            var couponRepo = new PostgresClippedCouponRepository(db);
+            List<Object> coupons = new ArrayList<>();
+            for (UUID id : ids(c, "SELECT coupon_id FROM clipped_coupon_current ORDER BY provider,coupon_id")) {
+                coupons.add(couponFields(couponRepo.findById(id).orElseThrow()));
+            }
+            var dealRepo = new PostgresDealRepository(db);
+            List<Object> deals = new ArrayList<>();
+            for (UUID id : ids(c, "SELECT deal_id FROM deal_current ORDER BY valid_through NULLS LAST,deal_id")) {
+                deals.add(dealRepo.findById(id).orElseThrow());
+            }
+            var rebateRepo = new PostgresRebateRepository(db);
+            List<Object> rebates = new ArrayList<>();
+            for (UUID id : ids(c, "SELECT claim_id FROM rebate_current ORDER BY provider,claim_id")) {
+                rebates.add(rebateRepo.findById(id).orElseThrow());
+            }
+            var inventoryRepo = new PostgresInventoryRepository(db);
+            List<Object> inventory = new ArrayList<>();
+            for (UUID id : ids(c, "SELECT inventory_id FROM inventory_current ORDER BY product_id")) {
+                inventory.add(inventoryRepo.findById(id).orElseThrow());
+            }
+            List<Object> reported = new ArrayList<>();
+            for (var r : records) {
+                if (r.transaction().getObservations().walgreensCash() != null) {
+                    reported.add(fields("transactionId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "date", r.transaction().getObservations().purchaseDate(), "status", r.status(), "values", r.transaction().getObservations().walgreensCash()));
+                }
+            }
+            return fields("receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream()).filter(v -> v.requirement() != null).map(v -> fields("id", v.earningId(), "title", v.offerReference(), "kind", v.kind(), "provider", v.provider(), "amount", v.expected() == null ? v.confirmed().amount() : v.expected().amount(), "requirement", v.requirement())).toList(), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "totals", totals(r))).toList(),
+                    "summaries", fields("all", savings(records), "day", savings(SavingsReport.day(records, day)), "week", savings(ReceiptWorksheetReport.week(records, day)), "month", savings(SavingsReport.month(records, YearMonth.from(day)))), "plans", planRows, "coupons", coupons, "deals", deals, "rebates", rebates, "inventory", inventory, "balances", balances, "reportedBalances", reported,
+                    "accountHistory", state.balances(), "movements", summary.movements(records), "promotions", state.giftCardPromotions().values(), "rrMatches", state.rrUsageLinks().values(), "rewardRemovals", state.rewardVoids().values());
+        });
+    }
+
+    public Map<String, Object> receiptTotals(UUID id) {
+        var receipt = new PostgresTransactionRepository(db).findById(id).or(() -> new PostgresTransactionRepository(db).findDeletedById(id)).orElseThrow();
+        return totals(receipt);
+    }
+
+    public static Map<String, Object> totals(ReceiptRecord receipt) {
+        var tx = receipt.transaction();
+        var calculator = new TransactionCalculator();
+        Map<String, List<PurchaseItem>> groups = new LinkedHashMap<>();
+        for (var line : tx.getPurchaseItems()) {
+            String key = line.getProductCode() != null ? "sku:" + line.getProductCode() : "description:" + line.getProductName().trim().toLowerCase(java.util.Locale.ROOT);
+            groups.computeIfAbsent(key, k -> new ArrayList<>()).add(line);
+        }
+        return fields("lineTotals", tx.getPurchaseItems().stream().collect(java.util.stream.Collectors.toMap(PurchaseItem::getLineItemId, PurchaseItem::calculateLineTotal)), "productGroups", groups.entrySet().stream().map(g -> fields("identity", g.getKey(), "description", g.getValue().getFirst().getProductName(), "quantity", g.getValue().stream().mapToLong(PurchaseItem::getQuantity).sum(), "lineItemIds", g.getValue().stream().map(PurchaseItem::getLineItemId).toList())).toList(),
+                "qualification", tx.getObservations().earnings().stream().filter(e -> e.requirement() != null).map(e -> fields("earningId", e.earningId(), "review", PromotionQualification.evaluate(e, tx))).toList(), "regularMerchandise", calculator.calculateRegularMerchandiseTotal(tx), "saleMerchandise", calculator.calculateSaleMerchandiseTotal(tx), "coupons", calculator.calculateCouponTotal(tx),
+                "rrUsed", calculator.calculateRegisterRewardsRedeemed(tx), "wcUsed", calculator.calculateWalgreensCashRedeemed(tx), "tax", tx.getReceiptTotals().getTaxAmount(), "calculatedDue", calculator.calculateExpectedCheckoutAmount(tx),
+                "reportedDue", tx.getReceiptTotals().getFinalTotal(), "difference", calculator.calculateReceiptDifference(tx), "savings", savings(List.of(new ReceiptRecord(receipt.transactionId(), ReceiptStatus.ACTIVE, receipt.revision(), tx, receipt.metadata(), receipt.evidenceIds()))));
+    }
+
+    private static Map<String, Object> savings(List<ReceiptRecord> records) {
+        var t = SavingsReport.calculate(records);
+        return fields("receipts", t.receipts(), "regularWithTax", t.regularKnown() ? t.regularWithTax() : null,
+                "due", t.due(), "cash", t.paymentsKnown() ? t.cash() : null, "card", t.paymentsKnown() ? t.card() : null,
+                "newlyEarned", t.earningsKnown() ? t.newlyEarned() : null,
+                "paidAfterRebates", t.paymentsKnown() && t.earningsKnown() ? t.paidAfterRebates() : null,
+                "totalSaved", t.regularKnown() && t.paymentsKnown() && t.earningsKnown() ? t.totalSaved() : null,
+                "percentSaved", t.percentSaved(), "issues", t.issues());
+    }
+
+    public List<ReceiptHistoryEntry> history(UUID id) {
+        var history = new PostgresTransactionRepository(db).findHistoryByReceiptId(id);
+        if (history.isEmpty()) {
+            throw new NoSuchElementException();
+
+        }
+        return history;
+    }
+
+    public ReceiptEvidence evidence(UUID receipt, UUID evidence) {
+        var artifact = new PostgresTransactionRepository(db).findEvidenceById(evidence).orElseThrow();
+        if (!receipt.equals(artifact.getTransactionId())) {
+            throw new NoSuchElementException();
+
+        }
+        return artifact;
+    }
+
+    public PlannedPurchase savePurchase(UUID planId, UUID id, String name, String code, int quantity, BigDecimal target,
+            UUID deal, List<UUID> coupons, long expected, String actor) {
+        var planRepo = new PostgresShoppingPlanRepository(db);
+        planRepo.findById(planId).orElseThrow();
+        if (deal != null) {
+            new PostgresDealRepository(db).findById(deal).orElseThrow();
+        }
+        var couponRepo = new PostgresClippedCouponRepository(db);
+        for (var coupon : coupons) {
+            couponRepo.findById(coupon).orElseThrow();
+        }
+        var repo = new PostgresPlannedPurchaseRepository(db);
+        if (expected > 0) {
+            var old = repo.findById(id).orElseThrow();
+            if (!old.planId().equals(planId)) {
+                throw new IllegalArgumentException("Purchase belongs to another plan.");
+
+            }
+        }
+        var next = new PlannedPurchase(id, planId, name, code, quantity, target, deal, coupons, expected == 0 ? 1 : Math.addExact(expected, 1));
+        if (expected == 0) {
+            repo.save(next, actor);
+            return next;
+        }
+        return repo.update(next, expected, actor, "Web plan item update");
+    }
+
+    public void saveCoupons(List<ClippedCoupon> copies, String actor) {
+        new PostgresClippedCouponRepository(db).saveAll(copies, actor);
+    }
+
+    public void saveDeal(AdvertisedDeal deal, String actor, SourceArtifact source) {
+        new PostgresDealRepository(db).save(deal, actor, source);
+    }
+
+    public PlannedPurchase savePurchase(UUID planId, UUID id, String name, String code, int quantity, BigDecimal regular, BigDecimal sale, String source,
+            UUID deal, List<UUID> coupons, long expected, String actor) {
+        new PostgresShoppingPlanRepository(db).findById(planId).orElseThrow();
+        if (deal != null) {
+            new PostgresDealRepository(db).findById(deal).orElseThrow();
+        }
+        for (var coupon : coupons) {
+            new PostgresClippedCouponRepository(db).findById(coupon).orElseThrow();
+        }
+        var repo = new PostgresPlannedPurchaseRepository(db);
+        if (expected > 0 && !repo.findById(id).orElseThrow().planId().equals(planId)) {
+            throw new IllegalArgumentException("Purchase belongs to another plan.");
+        }
+        var next = new PlannedPurchase(id, planId, name, code, quantity, sale != null ? sale : regular, deal, coupons, expected == 0 ? 1 : Math.addExact(expected, 1), regular, sale, source);
+        if (expected == 0) {
+            repo.save(next, actor);
+            return next;
+        }
+        return repo.update(next, expected, actor, "Web plan pricing update");
+    }
+
+    private static List<UUID> ids(Connection c, String sql) throws SQLException {
+        List<UUID> out = new ArrayList<>();
+        try (var p = c.prepareStatement(sql); var r = p.executeQuery()) {
+            while (r.next()) {
+                out.add(r.getObject(1, UUID.class));
+
+            }
+        }
+        return out;
+    }
+
+    public static Map<String, Object> couponFields(ClippedCoupon c) {
+        return fields("couponId", c.couponId(), "provider", c.provider(), "externalId", c.externalId(), "status", c.status(), "clippedOn", c.clippedOn(), "redeemedOn", c.redeemedOn(), "redeemedTransactionId", c.redeemedTransactionId(), "revision", c.revision(), "description", c.coupon().getCouponDescription(), "discountAmount", c.coupon().getDiscountAmount(), "couponType", c.coupon().getCouponType(), "requiredQuantity", c.coupon().getRequiredQuantity(), "terms", c.coupon().getTerms(), "expirationDate", c.coupon().getExpirationDate());
+    }
+
+    private static Map<String, Object> fields(Object... pairs) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (int i = 0; i < pairs.length; i += 2) {
+            out.put((String) pairs[i], pairs[i + 1]);
+
+        }
+        return out;
+    }
+
+
+    public Map<String, Object> checkout(UUID planId) {
+        var plan = new PostgresShoppingPlanRepository(db)
+                .findById(planId)
+                .orElseThrow();
+
+        var items = new PostgresPlannedPurchaseRepository(db)
+                .findByPlanId(planId);
+
+        Map<UUID, AdvertisedDeal> deals = new HashMap<>();
+        Map<UUID, ClippedCoupon> coupons = new HashMap<>();
+
+        var dealRepository = new PostgresDealRepository(db);
+        var couponRepository = new PostgresClippedCouponRepository(db);
+
+        for (var item : items) {
+            if (item.advertisedDealId() != null) {
+                dealRepository.findById(item.advertisedDealId())
+                        .ifPresent(d -> deals.put(d.dealId(), d));
+            }
+
+            for (var couponId : item.clippedCouponIds()) {
+                couponRepository.findById(couponId)
+                        .ifPresent(c -> coupons.put(c.couponId(), c));
+            }
+        }
+
+        var pricing = ShoppingEstimate.calculate(items, deals, coupons, plan.shoppingDate(), plan.retailer());
+        return new PostgresPlanCheckoutRepository(db)
+                .view(planId, pricing);
+    }
+
+    public Map<String, Object> saveCheckout(
+            UUID planId,
+            long expectedRevision,
+            Map<String, Object> values,
+            String actor) {
+
+        new PostgresPlanCheckoutRepository(db)
+                .save(planId, expectedRevision, values, actor);
+
+        return checkout(planId);
+    }
+
+}
+
+========== FILE: src/main/java/coupons/repository/PostgresRepositorySupport.java ==========
+package coupons.repository;
+
+import java.io.*;
+import java.sql.*;
+import java.time.Instant;
+import java.util.*;
+
+final class PostgresRepositorySupport {
+    private PostgresRepositorySupport() {}
+
+    @FunctionalInterface
+    interface Work<T> { T run(Connection connection) throws Exception; }
+
+    static <T> T transaction(PostgresConnectionFactory factory, Work<T> work) {
+        try (Connection c = factory.open()) {
+            boolean old = c.getAutoCommit();
+            c.setAutoCommit(false);
+            try {
+                T value = work.run(c);
+                c.commit();
+                c.setAutoCommit(old);
+                return value;
+            } catch (Exception e) {
+                c.rollback();
+                if (e instanceof RuntimeException r) throw r;
+                if (e instanceof SQLException s) throw new IllegalStateException(s.getMessage(), s);
+                throw new IllegalStateException(e.getMessage(), e);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("PostgreSQL operation failed.", e);
+        }
+    }
+
+    static void requireActor(String actor, String label) {
+        if (actor == null || actor.isBlank()) throw new IllegalArgumentException(label + " cannot be blank.");
+    }
+
+    static byte[] serialize(Object value) {
+        try (var out = new ByteArrayOutputStream(); var stream = new ObjectOutputStream(out)) {
+            stream.writeObject(value);
+            return out.toByteArray();
+        } catch (IOException e) { throw new IllegalStateException("Could not serialize repository payload.", e); }
+    }
+
+    @SuppressWarnings("unchecked")
+    static <T> T deserialize(byte[] bytes, Class<T> type) {
+        try (var stream = new ObjectInputStream(new ByteArrayInputStream(bytes))) {
+            return (T) stream.readObject();
+        } catch (IOException | ClassNotFoundException e) {
+            throw new IllegalStateException("Could not deserialize repository payload.", e);
+        }
+    }
+
+    static Set<UUID> sourceIds(Connection c, String table, String idColumn, UUID id) throws SQLException {
+        Set<UUID> ids = new HashSet<>();
+        try (PreparedStatement p = c.prepareStatement("SELECT artifact_id FROM " + table
+                + " WHERE " + idColumn + "=?")) {
+            p.setObject(1, id);
+            try (ResultSet r = p.executeQuery()) { while (r.next()) ids.add((UUID) r.getObject(1)); }
+        }
+        return ids;
+    }
+        static Set<UUID> sourceIds(Connection c, String table, String idColumn, UUID id, long revision) throws SQLException {
+            Set<UUID> ids = new HashSet<>();
+            try (PreparedStatement p = c.prepareStatement("SELECT artifact_id FROM " + table
+                    + " WHERE " + idColumn + "=? AND revision=?")) {
+                p.setObject(1, id); p.setLong(2, revision);
+                try (ResultSet r = p.executeQuery()) { while (r.next()) ids.add((UUID) r.getObject(1)); }
+            }
+            return ids;
+        }
+
+    static void validateSources(Connection c, Collection<UUID> ids) throws SQLException {
+        for (UUID id : ids) {
+            try (PreparedStatement p = c.prepareStatement("SELECT 1 FROM source_artifacts WHERE artifact_id=?")) {
+                p.setObject(1, id);
+                try (ResultSet r = p.executeQuery()) {
+                    if (!r.next()) throw new IllegalArgumentException("Source artifact does not exist: " + id);
+                }
+            }
+        }
+    }
+
+    static void insertSources(Connection c, String table, String idColumn, UUID id,
+            Collection<UUID> sources) throws SQLException {
+        try (PreparedStatement p = c.prepareStatement("INSERT INTO " + table
+                + "(" + idColumn + ", artifact_id) VALUES (?,?)")) {
+            for (UUID source : sources) {
+                p.setObject(1, id); p.setObject(2, source); p.addBatch();
+            }
+            p.executeBatch();
+        }
+    }
+
+    static Instant instant(ResultSet r, String column) throws SQLException { return r.getTimestamp(column).toInstant(); }
+}
+
+========== FILE: src/main/java/coupons/repository/PostgresSchema.java ==========
+package coupons.repository;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Objects;
+
+/** Applies checked-in PostgreSQL migrations to an explicitly supplied database. */
+public final class PostgresSchema {
+    private static final String V1 = "/db/migration/V1__receipt_repository.sql";
+    private static final String V2 = "/db/migration/V2__catalog_deal_rebate_inventory.sql";
+    private static final String V3 = "/db/migration/V3__provider_account_ledger.sql";
+    private static final String V4 = "/db/migration/V4__shopping_plans_and_clipped_coupons.sql";
+
+    private PostgresSchema() {
+    }
+
+    /**
+     * Applies the receipt-repository schema to the supplied connection.
+     *
+     * <p>This method never opens local receipt files and does not migrate data.
+     */
+    public static void apply(Connection connection) throws SQLException, IOException {
+        Objects.requireNonNull(connection, "Connection cannot be null.");
+        applyMigration(connection, V1, 1, "receipt repository");
+        applyMigration(connection, V2, 2, "catalog, deal, rebate, and inventory repositories");
+        applyMigration(connection, V3, 3, "provider account ledger");
+        applyMigration(connection, V4, 4, "shopping plans, planned purchases, and clipped coupons");
+        applyMigration(connection, "/db/migration/V5__api_retry_journal.sql", 5, "API retry journal and multiple coupon receipt use");
+        applyMigration(connection, "/db/migration/V6__lossless_local_migration.sql", 6, "lossless local migration and receipt supplements");
+        applyMigration(connection, "/db/migration/V7__offer_pricing.sql", 7, "structured advertised offer pricing");
+        applyMigration(connection, "/db/migration/V8__shopping_plan_checkout.sql", 8,  "revisioned shopping plan checkout estimates");
+        applyMigration(connection, "/db/migration/V9__actual_checkout_tax.sql", 9, "actual receipt sales tax for shopping plan checkout");
+    }
+
+    private static void applyMigration(Connection connection, String resource, int version,
+            String description) throws SQLException, IOException {
+        try (InputStream input = PostgresSchema.class.getResourceAsStream(resource)) {
+            if (input == null) throw new IOException("Missing PostgreSQL migration resource: " + resource);
+            String sql = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+            try (Statement statement = connection.createStatement()) {
+                for (String command : sql.split(";")) {
+                    if (!command.isBlank()) statement.execute(command);
+                }
+                statement.executeUpdate("INSERT INTO schema_version(version, description) VALUES ("
+                        + version + ", '" + description + "') ON CONFLICT (version) DO NOTHING");
+            }
+        }
+    }
+}
+
+========== FILE: src/main/resources/db/migration/V2__catalog_deal_rebate_inventory.sql ==========
+CREATE TABLE IF NOT EXISTS source_artifacts (
+    artifact_id UUID PRIMARY KEY, label TEXT NOT NULL, media_type TEXT NOT NULL,
+    source_reference TEXT, captured_at TIMESTAMPTZ NOT NULL, content BYTEA NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inventory_current (
+    inventory_id UUID PRIMARY KEY, product_id UUID NOT NULL UNIQUE,
+    quantity_on_hand INTEGER NOT NULL CHECK (quantity_on_hand >= 0),
+    revision BIGINT NOT NULL CHECK (revision > 0)
+);
+CREATE TABLE IF NOT EXISTS inventory_history (
+    history_id UUID PRIMARY KEY, inventory_id UUID NOT NULL REFERENCES inventory_current(inventory_id),
+    from_quantity INTEGER NOT NULL, to_quantity INTEGER NOT NULL,
+    from_revision BIGINT NOT NULL, to_revision BIGINT NOT NULL,
+    requested_by TEXT NOT NULL, reason TEXT NOT NULL, approved_by TEXT NOT NULL,
+    approved_at TIMESTAMPTZ NOT NULL, committed_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS deal_current (
+    deal_id UUID PRIMARY KEY, title TEXT NOT NULL, interpreted_terms TEXT NOT NULL,
+    retailer TEXT, valid_from DATE, valid_through DATE,
+    revision BIGINT NOT NULL CHECK (revision > 0), recorded_by TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS deal_sources (
+    deal_id UUID NOT NULL REFERENCES deal_current(deal_id),
+    artifact_id UUID NOT NULL REFERENCES source_artifacts(artifact_id),
+    PRIMARY KEY (deal_id, artifact_id)
+);
+CREATE TABLE IF NOT EXISTS deal_history (
+    deal_id UUID NOT NULL REFERENCES deal_current(deal_id), revision BIGINT NOT NULL,
+    title TEXT NOT NULL, interpreted_terms TEXT NOT NULL, retailer TEXT,
+    valid_from DATE, valid_through DATE, changed_by TEXT NOT NULL,
+    reason TEXT NOT NULL, committed_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (deal_id, revision)
+);
+CREATE TABLE IF NOT EXISTS deal_history_sources (
+    deal_id UUID NOT NULL, revision BIGINT NOT NULL,
+    artifact_id UUID NOT NULL REFERENCES source_artifacts(artifact_id),
+    PRIMARY KEY (deal_id, revision, artifact_id),
+    FOREIGN KEY (deal_id, revision) REFERENCES deal_history(deal_id, revision)
+);
+CREATE TABLE IF NOT EXISTS rebate_current (
+    claim_id UUID PRIMARY KEY, provider TEXT NOT NULL, external_claim_ref TEXT,
+    planned_purchase_id UUID, transaction_id UUID, status TEXT NOT NULL,
+    provider_status TEXT, expected_benefits BYTEA NOT NULL, confirmed_benefits BYTEA NOT NULL,
+    submitted_on DATE, fulfilled_on DATE, revision BIGINT NOT NULL CHECK (revision > 0),
+    recorded_by TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rebate_sources (
+    claim_id UUID NOT NULL REFERENCES rebate_current(claim_id),
+    artifact_id UUID NOT NULL REFERENCES source_artifacts(artifact_id),
+    PRIMARY KEY (claim_id, artifact_id)
+);
+CREATE TABLE IF NOT EXISTS rebate_history (
+    claim_id UUID NOT NULL REFERENCES rebate_current(claim_id), revision BIGINT NOT NULL,
+    provider TEXT NOT NULL, external_claim_ref TEXT, planned_purchase_id UUID,
+    transaction_id UUID, status TEXT NOT NULL, provider_status TEXT,
+    expected_benefits BYTEA NOT NULL, confirmed_benefits BYTEA NOT NULL,
+    submitted_on DATE, fulfilled_on DATE, changed_by TEXT NOT NULL,
+    reason TEXT NOT NULL, committed_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (claim_id, revision)
+);
+CREATE TABLE IF NOT EXISTS rebate_history_sources (
+    claim_id UUID NOT NULL, revision BIGINT NOT NULL,
+    artifact_id UUID NOT NULL REFERENCES source_artifacts(artifact_id),
+    PRIMARY KEY (claim_id, revision, artifact_id),
+    FOREIGN KEY (claim_id, revision) REFERENCES rebate_history(claim_id, revision)
+);
+
+========== FILE: frontend/src/pages/WorkspacePages.tsx ==========
+import { useState } from 'react'
+import { ArrowUpRight, CalendarDays, Check, ClipboardList, Coins, Plus, Search, ShoppingBasket, Ticket, Wallet } from 'lucide-react'
+import { date, decimal, label, money, shortId } from '../api/format'
+import { rewardStatusLabel } from '../features/receipts/rewardStatus'
+import { Badge, Empty, LinkButton, Notice, PageHeader, Panel, Unavailable } from '../components/ui'
+import type { Edit } from '../features/shopping/EditDialog'
+import type { Plan, PlanRow, Workspace } from '../types/platform'
+
+export type Page = 'dashboard' | 'receipts' | 'shopping' | 'coupons' | 'deals' | 'rewards' | 'inventory' | 'rebates'
+interface Props {
+  data: Workspace
+  page: Page
+  writable: boolean
+  onPage: (p: Page) => void
+  onReceipt: (id: string) => void
+  onEdit: (edit: Edit) => void
+  onAddReceipt: () => void
+  onCheckout: (plan: Plan) => void
+}
+export function WorkspacePages(props: Props) {
+  const { page } = props
+  if (page === 'dashboard') return <Dashboard {...props} />
+  if (page === 'receipts') return <Receipts {...props} />
+  if (page === 'shopping') return <Shopping {...props} />
+  if (page === 'coupons') return <Coupons {...props} />
+  if (page === 'rewards') return <Rewards {...props} />
+  if (page === 'inventory') return <Inventory {...props} />
+  if (page === 'rebates') return <Rebates {...props} />
+  return <Deals {...props} />
+}
+function Dashboard({ data, writable, onPage, onEdit, onReceipt }: Props) {
+  const [period, setPeriod] = useState<'month' | 'week' | 'day' | 'all'>('month')
+  const summary = data.summaries[period]
+  const metrics = [
+    { title: 'Regular value', value: money(summary.regularWithTax), icon: ShoppingBasket, description: 'Including recorded tax', color: 'mint' },
+    { title: 'Due at checkout', value: money(summary.due), icon: Wallet, description: `${summary.receipts} recorded transactions`, color: 'peach' },
+    { title: 'Future value earned', value: money(summary.newlyEarned), icon: Coins, description: 'Confirmed rewards and valued rebates', color: 'lilac' },
+    { title: 'Total saved', value: money(summary.totalSaved), icon: Ticket, description: summary.percentSaved == null ? 'Needs complete recorded values' : `${decimal(summary.percentSaved)}% saved`, color: 'yellow' },
+  ]
+  return <>
+    <PageHeader title="Make every trip count." subtitle="Your plans, purchases, and rewards. All in one place." action={<button className="primary" disabled={!writable} onClick={() => onEdit({ kind: 'plan' })}><Plus size={18} />New shopping plan</button>} />
+    <div className="overview-bar"><div><strong>Your savings at a glance</strong><span>As of {date(data.asOf)}</span></div><div className="segmented" aria-label="Savings period">{(['day', 'week', 'month', 'all'] as const).map(p => <button key={p} className={period === p ? 'active' : ''} onClick={() => setPeriod(p)}>{p === 'all' ? 'All time' : label(p)}</button>)}</div></div>
+    <div className="metrics">{metrics.map(m => <section className="metric" key={m.title}><div className="metric-top"><span>{m.title}</span><span className={`icon-tile ${m.color}`}><m.icon size={19} /></span></div><strong>{m.value}</strong><small>{m.description}</small></section>)}</div>
+    {summary.issues.length > 0 && <Notice>{summary.issues.length} recorded information issue(s) affect these totals. Review receipt details for missing values.</Notice>}
+    <div className="dashboard-grid"><Panel title="Your next shopping trip" subtitle="A little preparation goes a long way." action={<LinkButton onClick={() => onPage('shopping')}>All plans</LinkButton>}>
+      {data.plans.length ? data.plans.slice(0, 3).map(row => <button className="plan-preview" key={row.plan.planId} onClick={() => onPage('shopping')}><span className="icon-tile mint"><ClipboardList size={21} /></span><span><strong>{row.plan.name}</strong><small>{row.plan.retailer || 'Store not selected'} · {row.items.length} items</small></span><span className="preview-date">{date(row.plan.shoppingDate)}<ArrowUpRight size={17} /></span></button>) : <Empty title="Start with a shopping plan">Gather the essentials before your next trip.<button disabled={!writable} className="text-button" onClick={() => onEdit({ kind: 'plan' })}>Create your first plan <Plus size={15} /></button></Empty>}
+      <div className="tip"><span className="icon-tile yellow"><Check size={20} /></span><p><strong>Plan first. Shop with confidence.</strong><br />Keep product quantities, target prices, and coupon associations together.</p></div>
+    </Panel><Panel title="Rewards to keep track of" subtitle="Calculated account balances" action={<LinkButton onClick={() => onPage('rewards')}>All accounts</LinkButton>}>
+        {data.balances.length ? data.balances.slice(0, 4).map((b, i) => <div className="account-preview" key={b.provider}><span className={`account-avatar ${['mint', 'lilac', 'peach', 'yellow'][i % 4]}`}>{b.provider.slice(0, 1)}</span><span><strong>{b.provider}</strong><small>{b.balance.endPoints != null ? `${b.balance.endPoints} points` : 'Recorded account value'}</small></span><strong>{money(b.balance.endUsd)}</strong></div>) : <Empty title="No account records yet">Balances appear when openings and activity are recorded.</Empty>}
+      </Panel></div>
+    <Panel title="Recent receipts" subtitle="The details behind your grocery spending." action={<LinkButton onClick={() => onPage('receipts')}>View receipts</LinkButton>}>
+      {data.receipts.length ? <ReceiptTable rows={data.receipts.slice(0, 4)} onReceipt={onReceipt} /> : <Empty title="No receipts in this workspace">Your local receipts remain separate until an explicitly approved database import.</Empty>}
+    </Panel>
+  </>
+}
+function ReceiptTable({ rows, onReceipt }: { rows: Workspace['receipts']; onReceipt: (id: string) => void }) {
+  return <div className="table-wrap"><table><thead><tr><th>Store / receipt</th><th>Date & time</th><th>Due at register</th><th>Newly earned</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map(r => <tr key={r.transactionId}><td><strong>{r.metadata?.retailer || 'Store not recorded'}</strong><small>{r.metadata?.receiptNumber || shortId(r.transactionId)}</small></td><td>{date(r.date)}<small>{r.time || 'Time not recorded'}</small></td><td>{money(r.totals.reportedDue)}</td><td>{money(r.totals.savings.newlyEarned)}</td><td><Badge>{label(r.status)}</Badge></td><td><button className="icon-button" aria-label={`Open receipt ${r.metadata?.receiptNumber || shortId(r.transactionId)}`} onClick={() => onReceipt(r.transactionId)}><ArrowUpRight size={19} /></button></td></tr>)}</tbody></table></div>
+}
+function Receipts({ data, onReceipt, writable, onAddReceipt }: Props) {
+  const [search, setSearch] = useState(''); const [status, setStatus] = useState('ALL')
+  const rows = data.receipts.filter(r => (status === 'ALL' || r.status === status) && `${r.metadata?.retailer} ${r.metadata?.receiptNumber} ${r.date}`.toLowerCase().includes(search.toLowerCase()))
+  return <><PageHeader title="Your receipts" subtitle="Original records, item details, and the full revision trail." action={<button className="primary" disabled={!writable} onClick={onAddReceipt}><Plus size={16} />Add receipt</button>} /><div className="filters"><label className="search"><Search size={18} /><input aria-label="Search receipts" placeholder="Search store, receipt, or date" value={search} onChange={e => setSearch(e.target.value)} /></label><select aria-label="Receipt status" value={status} onChange={e => setStatus(e.target.value)}><option value="ALL">All statuses</option><option>ACTIVE</option><option>DELETED</option></select></div><Panel title={`${rows.length} receipt${rows.length === 1 ? '' : 's'}`}>{rows.length ? <ReceiptTable rows={rows} onReceipt={onReceipt} /> : <Empty title="No matching receipts">Try another search or status.</Empty>}</Panel><Unavailable>General editing of saved receipts is not available yet. Add receipt creates a new purchase; owner access can update an existing reward’s status in the Rewards tab.</Unavailable></>
+}
+
+
+function PlanCard({
+  row,
+  data,
+  writable,
+  onEdit,
+  embedded = false,
+}: {
+  row: PlanRow
+  data: Workspace
+  writable: boolean
+  onEdit: Props['onEdit']
+  embedded?: boolean
+}) {
+  // Group existing planned purchases by advertised promotion.
+  // Items without a linked promotion remain individually visible.
+  const groups = new Map<string, typeof row.items>()
+
+  for (const item of row.items) {
+    const key =
+      item.advertisedDealId || `item:${item.plannedPurchaseId}`
+    const existing = groups.get(key) || []
+    existing.push(item)
+    groups.set(key, existing)
+  }
+
+  const dealGroups = [...groups.entries()].map(
+    ([key, items], index) => {
+      const deal = data.deals.find(d => d.dealId === key)
+      const merchandiseSubtotal = items.reduce((total, item) => {
+        const unitPrice = Number(
+          item.saleUnitPrice ??
+          item.regularUnitPrice ??
+          item.targetUnitPrice)
+        const quantity = Number(item.quantity)
+
+        if (!Number.isFinite(unitPrice) || !Number.isFinite(quantity)) { return total }
+        return total + unitPrice * quantity
+      }, 0)
+      return {
+        key, items, number: index + 1, merchandiseSubtotal,
+        title: deal?.title || (items.length === 1 ? items[0].
+          productName : 'Unlinked products'),
+        terms: deal?.interpretedTerms || '',
+        linked: Boolean(deal),
+      }
+    })
+
+  return (
+    <Panel
+      title={embedded ? '' : row.plan.name}
+      subtitle={
+        embedded
+          ? undefined
+          : `${row.plan.retailer || 'Store not selected'} · ${date(row.plan.shoppingDate)} · revision ${row.plan.revision}`
+      }
+      action={embedded ? undefined : (
+        <button
+          className="secondary"
+          disabled={!writable}
+          onClick={() => onEdit({ kind: 'plan', plan: row.plan })}
+        > Edit plan
+        </button>)}
+    >
+      {/* DEAL GROUPS */}
+      {dealGroups.length > 0 ? (
+        <div
+          className="stack"
+          style={{ gap: 16, padding: '16px', }}>
+          {dealGroups.map(group => (
+            <section
+              key={group.key}
+              style={{ border: '1px solid #dce5dc', borderRadius: 12, padding: 18, background: '#fff', }}
+            >
+              {/* DEAL HEADER */}
+              <div style={{ marginBottom: 14 }}>
+                <h3
+                  style={{
+                    margin: '0 0 5px',
+                    fontSize: 16,
+                  }}
+                >
+                  Deal #{group.number} — {group.title}
+                </h3>
+
+                {group.terms && (
+                  <p className="muted" style={{ margin: 0 }}>{group.terms}</p>)}
+
+                {!group.linked && (
+                  <p className="muted" style={{ margin: 0 }} > No advertised promotion linked yet.</p>)}
+              </div>
+
+              {/* PRODUCTS IN THIS DEAL */}
+              {group.items.map(item => (
+                <div
+                  key={item.plannedPurchaseId}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                    padding: '12px 0',
+                    borderTop: '1px solid #edf0eb',
+                  }}
+                >
+                  {/* PRODUCT DESCRIPTION */}
+                  <div
+                    style={{
+                      flex: '1 1 240px',
+                      minWidth: 0,
+                    }}
+                  >
+                    <strong>{item.productName}</strong>
+
+                    <small
+                      style={{
+                        display: 'block',
+                        marginTop: 5,
+                      }}
+                    >
+                      Qty: {item.quantity}
+                      {' · '}
+                      {item.clippedCouponIds.length}{' '}
+                      linked coupon(s)
+                    </small>
+
+                    {item.productCode && (
+                      <small
+                        style={{
+                          display: 'block',
+                          marginTop: 3,
+                        }}
+                      >
+                        SKU: {item.productCode}
+                      </small>
+                    )}
+                  </div>
+
+                  {/* UNIT PRICES */}
+                  <div
+                    style={{
+                      textAlign: 'right',
+                      minWidth: 125,
+                    }}
+                  >
+                    <strong>
+                      {money(
+                        item.saleUnitPrice ??
+                        item.regularUnitPrice ??
+                        item.targetUnitPrice
+                      )}
+                    </strong>
+
+                    <small
+                      style={{
+                        display: 'block',
+                        marginTop: 4,
+                      }}
+                    >
+                      Sale unit price
+                    </small>
+
+                    <small
+                      style={{
+                        display: 'block',
+                        marginTop: 3,
+                      }}
+                    >
+                      Regular:{' '}
+                      {money(
+                        item.regularUnitPrice ??
+                        item.targetUnitPrice
+                      )}
+                    </small>
+                  </div>
+
+                  {/* EDIT PRODUCT */}
+                  <button
+                    className="secondary"
+                    disabled={!writable}
+                    onClick={() =>
+                      onEdit({
+                        kind: 'purchase',
+                        row,
+                        item,
+                      })
+                    }
+                  >
+                    Edit
+                  </button>
+                </div>
+              ))}
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  paddingTop: 14,
+                  marginTop: 6,
+                  borderTop: '2px solid #dce5dc',
+                }}
+              >
+                <strong>Merchandise subtotal</strong>
+                <strong>{money(group.merchandiseSubtotal.toFixed(2))}</strong>
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <Empty title="What’s on your list?">
+          Add products and quantities to prepare
+          this shopping trip.
+        </Empty>
+      )}
+
+      {/* ADD ITEM AND MERCHANDISE ESTIMATE */}
+      <div className="panel-bottom">
+        <button
+          className="secondary"
+          disabled={!writable}
+          onClick={() =>
+            onEdit({
+              kind: 'purchase',
+              row,
+            })
+          }
+        >
+          <Plus size={16} />
+          Add item
+        </button>
+
+        <span>
+          Merchandise estimate{' '}
+          <strong>
+            {money(row.pricing?.saleTotal ?? row.estimatedMerchandise)}
+          </strong>
+        </span>
+      </div>
+
+      {/* SHOPPING TRIP FINANCIAL SUMMARY */}
+      {row.pricing && (
+        <div className="plan-totals">
+          <div className="detail-row">
+            Regular total
+            <strong>
+              {money(row.pricing.regularTotal)}
+            </strong>
+          </div>
+
+          <div className="detail-row">
+            Sale total / savings
+            <strong>
+              {money(row.pricing.saleTotal)}
+              {' / '}
+              {money(row.pricing.saleSavings)}
+            </strong>
+          </div>
+
+          <div className="detail-row">
+            Estimated coupon savings
+            <strong>
+              {money(row.pricing.couponSavings)}
+            </strong>
+          </div>
+
+          <div className="detail-row">
+            Estimated register cost (before tax)
+            <strong>
+              {money(row.pricing.registerCost)}
+            </strong>
+          </div>
+
+          <div className="detail-row">
+            Expected promotional rewards
+            <strong>
+              {money(row.pricing.expectedRewards)}
+            </strong>
+          </div>
+
+          <div className="detail-row">
+            Estimated cost after rewards
+            <strong>
+              {money(row.pricing.finalCost)}
+            </strong>
+          </div>
+
+          {/* BACKEND CALCULATION WARNINGS */}
+          {row.pricing.issues.map((issue, index) => (
+            <p className="panel-note" key={index}>
+              {issue}
+            </p>
+          ))}
+        </div>
+      )}
+
+      <p className="panel-note">
+        Estimates use recorded qualifications and dates,
+        before tax. Expected rewards are not available
+        balances.
+      </p>
+    </Panel>
+  )
+}
+
+function Shopping({ data, writable, onEdit, onCheckout }: Props) {
+  const [search, setSearch] = useState('')
+  const [store, setStore] = useState('ALL')
+  const [dateFilter, setDateFilter] = useState('ALL')
+  const [selectedDate, setSelectedDate] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [sort, setSort] = useState('NEWEST')
+  const [openPlanIds, setOpenPlanIds] = useState<string[]>([])
+  const stores = [...new Set(
+    data.plans
+      .map(row => row.plan.retailer)
+      .filter((value): value is string => Boolean(value))
+  )].sort()
+
+  const filteredPlans = data.plans
+    .filter(row => {
+      const plan = row.plan
+      const query = search.trim().toLowerCase()
+
+      const matchesSearch =
+        !query ||
+        plan.name.toLowerCase().includes(query) ||
+        (plan.retailer || '').toLowerCase().includes(query) ||
+        row.items.some(item =>
+          item.productName.toLowerCase().includes(query)
+        )
+
+      const matchesStore =
+        store === 'ALL' || plan.retailer === store
+
+      const matchesDate =
+        dateFilter === 'ALL' ||
+        (dateFilter === 'SPECIFIC' &&
+          selectedDate !== '' &&
+          plan.shoppingDate === selectedDate) ||
+        (dateFilter === 'RANGE' &&
+          (!dateFrom || (plan.shoppingDate != null &&
+            plan.shoppingDate >= dateFrom)) &&
+          (!dateTo || (plan.shoppingDate != null &&
+            plan.shoppingDate <= dateTo)) &&
+          plan.shoppingDate != null)
+
+      return matchesSearch && matchesStore && matchesDate
+    })
+    .sort((a, b) => {
+      const first = a.plan.shoppingDate || ''
+      const second = b.plan.shoppingDate || ''
+
+      if (sort === 'NAME') {
+        return a.plan.name.localeCompare(b.plan.name)
+      }
+
+      if (sort === 'STORE') {
+        return (a.plan.retailer || '').localeCompare(
+          b.plan.retailer || ''
+        )
+      }
+
+      return sort === 'OLDEST'
+        ? first.localeCompare(second)
+        : second.localeCompare(first)
+    })
+
+  const resetFilters = () => {
+    setSearch('')
+    setStore('ALL')
+    setDateFilter('ALL')
+    setSelectedDate('')
+    setDateFrom('')
+    setDateTo('')
+    setSort('NEWEST')
+  }
+
+  const togglePlan = (planId: string) => {
+    setOpenPlanIds(current =>
+      current.includes(planId)
+        ? current.filter(id => id !== planId)
+        : [...current, planId]
+    )
+  }
+
+  return (
+    <>
+      <PageHeader
+        title="Shopping plans"
+        subtitle="Search, organize, and manage your shopping trips."
+        action={
+          <button
+            className="primary"
+            disabled={!writable}
+            onClick={() => onEdit({ kind: 'plan' })}
+          >
+            <Plus size={18} />
+            New plan
+          </button>
+        }
+      />
+
+      <Panel title="Find shopping plans">
+        <div className="filters">
+          <label className="search">
+            <Search size={18} />
+            <input
+              aria-label="Search shopping plans"
+              placeholder="Search plan, store, or product"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </label>
+
+          <select
+            aria-label="Filter by store"
+            value={store}
+            onChange={e => setStore(e.target.value)}
+          >
+            <option value="ALL">All stores</option>
+            {stores.map(value => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+
+          <select
+            aria-label="Filter by date"
+            value={dateFilter}
+            onChange={e => setDateFilter(e.target.value)}
+          >
+            <option value="ALL">All dates</option>
+            <option value="SPECIFIC">Specific date</option>
+            <option value="RANGE">Date range</option>
+          </select>
+
+          <select
+            aria-label="Sort shopping plans"
+            value={sort}
+            onChange={e => setSort(e.target.value)}
+          >
+            <option value="NEWEST">Newest first</option>
+            <option value="OLDEST">Oldest first</option>
+            <option value="NAME">Plan name</option>
+            <option value="STORE">Store name</option>
+          </select>
+        </div>
+
+        {dateFilter === 'SPECIFIC' && (
+          <label>
+            Shopping date
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={e => setSelectedDate(e.target.value)}
+            />
+          </label>
+        )}
+
+        {dateFilter === 'RANGE' && (
+          <div className="form-grid">
+            <label>
+              From
+              <input
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={e => setDateFrom(e.target.value)}
+              />
+            </label>
+
+            <label>
+              To
+              <input
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={e => setDateTo(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+
+        <div className="panel-bottom">
+          <strong> {filteredPlans.length} of {data.plans.length} plans</strong>
+          <button
+            type="button"
+            className="secondary"
+            onClick={resetFilters}
+          >Clear filters</button>
+        </div>
+      </Panel>
+
+      <div className="stack">{filteredPlans.map(row => {
+        const planId = row.plan.planId
+        const isOpen = openPlanIds.includes(planId)
+        return (
+          <div key={planId} className="shopping-plan-entry">
+            <Panel title={row.plan.name}
+              subtitle={`${row.plan.retailer || 'Store not selected'} · ${date(row.plan.shoppingDate)} · ${row.items.length} items`}
+              action={<div className="form-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  aria-expanded={isOpen}
+                  onClick={() => togglePlan(planId)}
+                > {isOpen ? 'Hide details' : 'View'}
+                </button>
+
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={!writable}
+                  onClick={() => onEdit({ kind: 'plan', plan: row.plan })
+                  } > Edit
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onCheckout(row.plan)}
+                > Checkout </button>
+              </div>
+              }
+            >
+              <div className="shopping-plan-meta">
+                Shopping date: {date(row.plan.shoppingDate)} {' · '}  Revision {row.plan.revision}
+              </div>
+            </Panel>
+
+            {isOpen && (
+              <div className="shopping-plan-expanded">
+                <PlanCard
+                  row={row}
+                  data={data}
+                  writable={writable}
+                  onEdit={onEdit}
+                  embedded />
+              </div>)}</div>)})}
+
+        {filteredPlans.length === 0 && (
+          <Panel title="Shopping plans">
+            <Empty title="No matching shopping plans">
+              {data.plans.length
+                ? 'Try another search, store, or date.'
+                : 'Create your first shopping plan to get started.'}
+            </Empty>
+          </Panel>
+        )}
+      </div>
+
+      <Unavailable>
+        Item deletion and offline changes are not available yet.
+        Promotion qualifications and loyalty eligibility require review.
+      </Unavailable>
+    </>
+  )
+}
+function Coupons({ data, writable, onEdit }: Props) {
+  const [today] = useState(() => new Date().toISOString().slice(0, 10))
+  const [search, setSearch] = useState(''); const [status, setStatus] = useState('ALL')
+  const rows = data.coupons.filter(c => `${c.provider} ${c.description}`.toLowerCase().includes(search.toLowerCase()) && (status === 'ALL' || c.status === status))
+  return <><PageHeader title="Coupons" subtitle="Keep your paper and digital coupons together." action={<button className="primary" disabled={!writable} onClick={() => onEdit({ kind: 'coupon' })}>Add coupon</button>} /><div className="filters"><label className="search"><Search size={18} /><input aria-label="Search coupons" placeholder="Search coupons or providers" value={search} onChange={e => setSearch(e.target.value)} /></label><select aria-label="Coupon status" value={status} onChange={e => setStatus(e.target.value)}><option value="ALL">All statuses</option>{[...new Set(data.coupons.map(c => c.status))].map(s => <option key={s}>{s}</option>)}</select></div><div className="card-grid">{rows.map(c => <article className="coupon-card" key={c.couponId}><div className="card-top"><span className="icon-tile lilac"><Ticket size={20} /></span><Badge>{c.expirationDate && c.expirationDate < today && c.status !== 'APPLIED' ? 'Expired' : label(c.status)}</Badge></div><span className="eyebrow">{c.provider}</span><h2>{c.terms?.discount === 'PERCENT' ? `${c.discountAmount}% off` : c.terms?.discount === 'FREE_ITEM' ? 'Free item' : money(c.discountAmount)}</h2><h3>{c.description}</h3><p>{label(c.couponType)} coupon · {label(c.terms?.source || 'Source unknown')}</p><p>{data.plans.filter(p => p.items.some(i => i.clippedCouponIds.includes(c.couponId))).length} plan(s) assigned · assignment is not redemption</p><div className="coupon-dates"><CalendarDays size={15} />Expires {date(c.expirationDate)}</div>{c.redeemedOn && <p>Used {date(c.redeemedOn)}</p>}<button className="secondary full-width" disabled={!writable || c.status !== 'CLIPPED'} onClick={() => onEdit({ kind: 'redeem', coupon: c })}>Record as used</button></article>)}</div>{!rows.length && <Panel title="Recorded coupons"><Empty title="No coupons to show">No matching coupons are recorded in this database.</Empty></Panel>}<Unavailable>Removing coupons is not exposed by the API. Text qualifications require review. Expiration and one-time use are enforced by the backend when recording redemption.</Unavailable></>
+}
+function Deals({ data }: Props) { return <><PageHeader title="Deals & promotions" subtitle="Source-backed offers and recorded rebate qualification programs." /><div className="card-grid">{data.deals.map(d => <article className="deal-card" key={d.dealId}><div className="card-top"><span className="icon-tile peach"><Ticket size={20} /></span><Badge>{d.retailer || 'Store not recorded'}</Badge></div><h2>{d.title}</h2><p>{d.interpretedTerms}</p><div className="coupon-dates"><CalendarDays size={15} />{date(d.validFrom)} – {date(d.validThrough)}</div><small>{d.sourceArtifactIds.length} source artifact(s) · revision {d.revision}</small></article>)}</div>{!data.deals.length && <Panel title="Advertised deals"><Empty title="No advertised deals recorded">Saved source-backed offers will appear here.</Empty></Panel>}<Panel title="Gift-card promotion progress" subtitle="Qualification records only. These amounts are not available gift-card balances.">{data.promotions.length ? data.promotions.map(p => <details className="promotion" key={p.id}><summary><span><strong>{p.name}</strong><small>{label(p.status)} · threshold {money(p.threshold)}</small></span><Badge>Potential gift card {money(p.giftCardValue)}</Badge></summary><p>{p.terms}</p>{Object.values(p.contributions).map(c => <div className="detail-row" key={c.receiptId}><div>Receipt {data.receipts.find(r => r.transactionId === c.receiptId)?.metadata?.receiptNumber || shortId(c.receiptId)}<small>Reviewed revision {c.reviewedRevision} · {c.note}</small></div><strong>Recorded contribution {money(c.reviewedAmount)}</strong></div>)}</details>) : <Empty title="No programs recorded">Promotion contributions appear after they are recorded.</Empty>}</Panel><Unavailable>Editing source-backed offers and confirming current promotion eligibility are not web operations yet. Recorded contributions are not presented as confirmed combined progress.</Unavailable></> }
+function Rewards({ data }: Props) { return <><PageHeader title="Rewards & accounts" subtitle={`Calculated from recorded activity through ${date(data.asOf)}. Provider observations remain separate.`} /><Panel title="Calculated account balances"><div className="table-wrap"><table><thead><tr><th>Provider</th><th>Month start</th><th>Day start</th><th>Day close</th><th>Original points at close</th></tr></thead><tbody>{data.balances.map(b => <tr key={b.provider}><td><strong>{b.provider}</strong></td><td>{money(b.balance.monthUsd)}</td><td>{money(b.balance.startUsd)}</td><td>{money(b.balance.endUsd)}</td><td>{b.balance.endPoints || 'Not recorded'}</td></tr>)}</tbody></table></div>{!data.balances.length && <Empty title="No recorded account balances">Openings and activity are needed to calculate balances.</Empty>}</Panel><Panel title="Provider-reported observations"><div className="table-wrap"><table><thead><tr><th>Date / receipt</th><th>Reported opening</th><th>Earned</th><th>Used</th><th>Reported close</th></tr></thead><tbody>{data.reportedBalances.map(r => <tr key={r.transactionId}><td>{date(r.date)}<small>{r.receiptNumber || shortId(r.transactionId)} · {label(r.status)}</small></td><td>{money(r.values.startingBalance)}</td><td>{money(r.values.earned)}</td><td>{money(r.values.used)}</td><td>{money(r.values.endingBalance)}</td></tr>)}</tbody></table></div>{!data.reportedBalances.length && <Empty title="No printed observations">Reported receipt balances appear separately here.</Empty>}</Panel><Panel title="Account activity"><div className="table-wrap"><table><thead><tr><th>Date</th><th>Provider</th><th>Recorded USD movement</th><th>Original points</th><th>Source</th></tr></thead><tbody>{data.movements.map((m, i) => <tr key={`${m.source}-${i}`}><td>{date(m.date)}<small>{m.time}</small></td><td>{m.provider}</td><td>{money(m.usd)}</td><td>{m.points || '—'}</td><td className="wrap">{m.source}</td></tr>)}</tbody></table></div>{!data.movements.length && <Empty title="No recorded movements">Account activity will appear when recorded.</Empty>}</Panel><Unavailable>Entering openings, transfers, adjustments, and reconciliation approvals still requires dedicated account API workflows. No account balance can be edited here.</Unavailable></> }
+function Inventory({ data }: Props) { return <><PageHeader title="Your inventory" subtitle="Recorded whole-package quantities, separate from receipt history." /><Panel title={`${data.inventory.length} inventory balances`}><div className="table-wrap"><table><thead><tr><th>Catalog product</th><th>Packages on hand</th><th>Revision</th><th>Inventory ID</th></tr></thead><tbody>{data.inventory.map(item => <tr key={item.inventoryId}><td><strong>Product {shortId(item.productId)}</strong><small>{item.productId}</small></td><td>{item.quantityOnHand}</td><td>{item.revision}</td><td><code>{shortId(item.inventoryId)}</code></td></tr>)}</tbody></table></div>{!data.inventory.length && <Empty title="No inventory balances recorded">Products are not automatically added from receipts.</Empty>}</Panel><Unavailable>Inventory adjustments require an authenticated approval workflow. The current API does not establish an independent approver, so this screen is read-only. Product names also require the catalog API.</Unavailable></> }
+function Rebates({ data, onReceipt }: Props) { return <><PageHeader title="Rebates" subtitle="Track expected and confirmed benefits without counting them twice." /><Panel title="Receipt-linked rebates and points"><div className="stack">{data.receiptEarnings?.filter(row => row.earning.kind === 'THIRD_PARTY_REBATE').map(row => <div className="detail-row" key={`${row.receiptId}-${row.earning.earningId}`}><div><strong>{row.earning.provider} · {row.earning.offerReference || 'Receipt reward'}</strong><small>{rewardStatusLabel(row.earning)} · receipt {row.receiptNumber || shortId(row.receiptId)} · {label(row.receiptStatus)}</small><small>Expected {row.earning.expected?.amount} {row.earning.expected?.kind === 'POINTS' ? 'points' : row.earning.expected?.currency} · confirmed {row.earning.confirmed?.amount || 'not recorded'}</small>{row.earning.details?.payoutDestination && <small>Payout destination: {label(row.earning.details.payoutDestination)} (context only)</small>}</div><button className="text-button" onClick={() => onReceipt(row.receiptId)}>Open receipt</button></div>)}</div>{!data.receiptEarnings?.some(row => row.earning.kind === 'THIRD_PARTY_REBATE') && <p className="muted">No receipt-linked rebates yet. Open a receipt’s Rewards tab to add one.</p>}</Panel><div className="card-grid">{data.rebates.map(r => <article className="deal-card" key={r.claimId}><div className="card-top"><span className="icon-tile mint"><Coins size={20} /></span><Badge>{label(r.status)}</Badge></div><h2>{r.provider}</h2><p>{r.externalClaimRef || shortId(r.claimId)}</p><h3>Expected</h3>{r.expectedBenefits.map((b, i) => <p key={i}>{b.kind === 'POINTS' ? `${b.amount} points` : `${b.currency || ''} ${b.amount}`} · {label(b.kind)}</p>)}<h3>Confirmed</h3>{r.confirmedBenefits.length ? r.confirmedBenefits.map((b, i) => <p key={i}>{b.kind === 'POINTS' ? `${b.amount} points` : `${b.currency || ''} ${b.amount}`} · {label(b.kind)}</p>) : <p className="muted">Not confirmed</p>}<small>Receipt: {r.transactionId ? data.receipts.find(row => row.transactionId === r.transactionId)?.metadata?.receiptNumber || r.transactionId : 'Not linked'}</small><small>Submitted {date(r.submittedOn)} · fulfilled {date(r.fulfilledOn)}</small>{r.providerStatus && <p>{r.providerStatus}</p>}</article>)}</div>{!data.rebates.length && <Panel title="Rebate claims"><Empty title="No rebate claims recorded">Receipt earnings and formal rebate claims are separate records.</Empty></Panel>}<Unavailable>Receipt-linked earnings and their submission notes can be added on receipts. Standalone claim lifecycle management and external payout confirmation are not exposed here.</Unavailable></> }
+
+========== FILE: frontend/src/features/shopping/CheckoutForm.test.tsx ==========
+
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { describe, expect, it, vi } from 'vitest'
+import { ApiClient, ApiError } from '../../api/client'
+import type { PlanCheckout } from '../../types/platform'
+import { CheckoutForm } from './CheckoutForm'
+
+// A checkout response used only by these tests.
+// No real database or API requests are made.
+function checkoutFixture(): PlanCheckout {
+    return {
+        planId: 'plan-test-123',
+        revision: '0',
+        promoCode: null,
+        promoDiscount: '0.00',
+        taxRate: null,
+        taxableBase: null,
+        actualTax: null,
+        walgreensCashUsed: '0.00',
+        registerRewardsCoupon: '0.00',
+        giftCardUsed: '0.00',
+        cashPayment: '0.00',
+        cardPayment: '0.00',
+        otherPayment: '0.00',
+        notes: null,
+        summary: {
+            tax: null,
+            amountDue: '25.98',
+            remainingPayment: '25.98',
+            expectedRewards: '2.00',
+            issues: ['Sales tax is not configured.'],
+        },
+        estimateComplete: false,
+    }
+}
+
+function setup() {
+    const api = new ApiClient('test-token')
+
+    const load = vi.spyOn(api, 'checkout')
+        .mockResolvedValue(checkoutFixture())
+
+    const save = vi.spyOn(api, 'saveCheckout')
+        .mockResolvedValue({
+            ...checkoutFixture(),
+            revision: '1',
+        })
+
+    const onClose = vi.fn()
+    const onSaved = vi.fn()
+
+    render(
+        <CheckoutForm
+            api={api}
+            planId="plan-test-123"
+            planName="Pick Up Order"
+            writable
+            onClose={onClose}
+            onSaved={onSaved}
+        />
+    )
+
+    return {
+        user: userEvent.setup(),
+        load,
+        save,
+        onClose,
+        onSaved,
+    }
+}
+
+describe('shopping plan checkout', () => {
+    it('loads checkout fields and existing totals', async () => {
+        const { load } = setup()
+
+        expect(
+            await screen.findByLabelText('Sales tax rate (%)')
+        ).toBeInTheDocument()
+
+        expect(load).toHaveBeenCalledWith('plan-test-123')
+
+        expect(
+            screen.getByText('Checkout revision 0')
+        ).toBeInTheDocument()
+
+        expect(screen.getAllByText('25.98')).toHaveLength(2)
+    })
+
+    it('rejects invalid sales tax before saving', async () => {
+        const { user, save } = setup()
+
+        const tax = await screen.findByLabelText(
+            'Sales tax rate (%)'
+        )
+
+        await user.type(tax, '101')
+
+        await user.click(
+            screen.getByRole('button', {
+                name: 'Save checkout',
+            })
+        )
+
+        expect(
+            screen.getByRole('alert')
+        ).toHaveTextContent('cannot exceed 100%')
+
+        expect(save).not.toHaveBeenCalled()
+    })
+
+    it('rejects negative payment amounts', async () => {
+        const { user, save } = setup()
+
+        const payment = await screen.findByLabelText(
+            'Cash payment ($)'
+        )
+
+        await user.type(payment, '-5')
+
+        await user.click(
+            screen.getByRole('button', {
+                name: 'Save checkout',
+            })
+        )
+
+        expect(
+            screen.getByRole('alert')
+        ).toHaveTextContent('nonnegative amount')
+
+        expect(save).not.toHaveBeenCalled()
+    })
+
+    it('saves exact decimal strings with checkout revision', async () => {
+        const { user, save, onSaved, onClose } = setup()
+
+        await user.type(
+            await screen.findByLabelText('Sales tax rate (%)'),
+            '8.25'
+        )
+
+        const giftCard = screen.getByLabelText('Gift card used ($)')
+
+        await user.clear(giftCard)
+        await user.type(giftCard, '10.50')
+
+        await user.click(
+            screen.getByRole('button', {
+                name: 'Save checkout',
+            })
+        )
+
+        await waitFor(() => {
+            expect(save).toHaveBeenCalledTimes(1)
+        })
+
+        const [planId, values, revision, key] =
+            save.mock.calls[0]
+
+        expect(planId).toBe('plan-test-123')
+        expect(values.taxRate).toBe('8.25')
+        expect(values.giftCardUsed).toBe('10.50')
+        expect(revision).toBe('0')
+        expect(key).toBeTruthy()
+
+        await waitFor(() => {
+            expect(onSaved).toHaveBeenCalledOnce()
+            expect(onClose).toHaveBeenCalledOnce()
+        })
+    })
+
+    it('preserves the request key after an uncertain network failure', async () => {
+        const { user, save } = setup()
+
+        save
+            .mockRejectedValueOnce(
+                new ApiError(0, 'Network outcome unknown.')
+            )
+            .mockResolvedValueOnce({
+                ...checkoutFixture(),
+                revision: '1',
+            })
+
+        await screen.findByLabelText('Sales tax rate (%)')
+
+        await user.click(
+            screen.getByRole('button', {
+                name: 'Save checkout',
+            })
+        )
+
+        expect(
+            await screen.findByRole('alert')
+        ).toHaveTextContent('Network outcome unknown.')
+
+        await user.click(
+            screen.getByRole('button', {
+                name: 'Retry save',
+            })
+        )
+
+        await waitFor(() => {
+            expect(save).toHaveBeenCalledTimes(2)
+        })
+
+        expect(save.mock.calls[1][2]).toBe(
+            save.mock.calls[0][2]
+        )
+
+        expect(save.mock.calls[1][3]).toBe(
+            save.mock.calls[0][3]
+        )
+
+        expect(save.mock.calls[1][1]).toEqual(
+            save.mock.calls[0][1]
+        )
+    })
+
+    it('unlocks fields after a definite server rejection', async () => {
+        const { user, save } = setup()
+
+        save.mockRejectedValueOnce(
+            new ApiError(409, 'Checkout revision changed.')
+        )
+
+        const tax = await screen.findByLabelText(
+            'Sales tax rate (%)'
+        )
+
+        await user.type(tax, '8.25')
+
+        await user.click(
+            screen.getByRole('button', {
+                name: 'Save checkout',
+            })
+        )
+
+        expect(
+            await screen.findByRole('alert')
+        ).toHaveTextContent('Checkout revision changed.')
+
+        expect(tax).toBeEnabled()
+
+        expect(
+            screen.getByRole('button', {
+                name: 'Save checkout',
+            })
+        ).toBeEnabled()
+    })
+})
+
+========== FILE: src/test/java/coupons/AdvertisedDealTest.java ==========
+package coupons;
+
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+/** Tests advertised-offer values, revisions, and source associations. */
+class AdvertisedDealTest {
+
+    /** Verifies multiple sources, unknown dates, and exact text preservation. */
+    @Test
+    void preservesTermsAndMultipleSources() {
+        UUID id = UUID.randomUUID();
+        List<UUID> sources = List.of(UUID.randomUUID(), UUID.randomUUID());
+        String terms = " Buy two; coupon and reward conditions need verification. ";
+        AdvertisedDeal deal = new AdvertisedDeal(id, " Dove offer ", terms,
+                " Walgreens ", null, null, sources, 1);
+        assertEquals(id, deal.dealId());
+        assertEquals(" Dove offer ", deal.title());
+        assertEquals(terms, deal.interpretedTerms());
+        assertEquals(" Walgreens ", deal.retailer());
+        assertEquals(sources, deal.sourceArtifactIds());
+        assertEquals(1L, deal.revision());
+        assertNull(deal.validFrom());
+        assertNull(deal.validThrough());
+    }
+
+    /** Verifies one artifact may support multiple distinct offers. */
+    @Test
+    void allowsOneArtifactToSupportMultipleOffers() {
+        UUID source = UUID.randomUUID();
+        AdvertisedDeal first = new AdvertisedDeal(UUID.randomUUID(), "Dove", "Recorded terms",
+                null, null, null, List.of(source), 1);
+        AdvertisedDeal second = new AdvertisedDeal(UUID.randomUUID(), "Colgate", "Recorded terms",
+                null, null, null, List.of(source), 1);
+        assertNotEquals(first.dealId(), second.dealId());
+        assertEquals(first.sourceArtifactIds(), second.sourceArtifactIds());
+        assertNull(first.retailer());
+    }
+
+    /** Verifies defensive copying and unmodifiable source associations. */
+    @Test
+    void defensivelyCopiesSources() {
+        UUID source = UUID.randomUUID();
+        List<UUID> supplied = new ArrayList<>(List.of(source));
+        AdvertisedDeal deal = new AdvertisedDeal(UUID.randomUUID(), "Example", "Recorded terms",
+                null, null, null, supplied, 1);
+        supplied.clear();
+        assertEquals(List.of(source), deal.sourceArtifactIds());
+        assertThrows(UnsupportedOperationException.class, () -> deal.sourceArtifactIds().clear());
+    }
+
+    /** Verifies unknown individual date bounds and same-day offers remain representable. */
+    @Test
+    void acceptsKnownAndUnknownDateBounds() {
+        LocalDate date = LocalDate.of(2026, 10, 16);
+        UUID source = UUID.randomUUID();
+        AdvertisedDeal startOnly = new AdvertisedDeal(UUID.randomUUID(), "Example", "Terms",
+                null, date, null, List.of(source), 1);
+        AdvertisedDeal endOnly = new AdvertisedDeal(UUID.randomUUID(), "Example", "Terms",
+                null, null, date, List.of(source), 1);
+        AdvertisedDeal sameDay = new AdvertisedDeal(UUID.randomUUID(), "Example", "Terms",
+                null, date, date, List.of(source), 1);
+        assertEquals(date, startOnly.validFrom());
+        assertNull(startOnly.validThrough());
+        assertNull(endOnly.validFrom());
+        assertEquals(date, endOnly.validThrough());
+        assertEquals(date, sameDay.validThrough());
+    }
+
+    /** Verifies empty and duplicate source references are rejected. */
+    @Test
+    void rejectsEmptyAndDuplicateSources() {
+        UUID source = UUID.randomUUID();
+        assertThrows(IllegalArgumentException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), "Example", "Terms", null, null, null, List.of(), 1));
+        assertThrows(IllegalArgumentException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), "Example", "Terms", null, null, null, List.of(source, source), 1));
+    }
+
+    /** Verifies null source collections and null source IDs are rejected. */
+    @Test
+    void rejectsNullSourceListAndElements() {
+        assertThrows(NullPointerException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), "Example", "Terms", null, null, null, null, 1));
+        assertThrows(NullPointerException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), "Example", "Terms", null, null, null,
+                Arrays.asList(UUID.randomUUID(), null), 1));
+    }
+
+    /** Verifies required identity and text references are present. */
+    @Test
+    void rejectsMissingRequiredFields() {
+        List<UUID> sources = List.of(UUID.randomUUID());
+        assertThrows(NullPointerException.class, () -> new AdvertisedDeal(
+                null, "Example", "Terms", null, null, null, sources, 1));
+        assertThrows(NullPointerException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), null, "Terms", null, null, null, sources, 1));
+        assertThrows(NullPointerException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), "Example", null, null, null, null, sources, 1));
+    }
+
+    /** Verifies blank required text and blank supplied retailers are rejected. */
+    @Test
+    void rejectsBlankText() {
+        List<UUID> sources = List.of(UUID.randomUUID());
+        for (String blank : new String[]{"", "   "}) {
+            assertThrows(IllegalArgumentException.class, () -> new AdvertisedDeal(
+                    UUID.randomUUID(), blank, "Terms", null, null, null, sources, 1));
+            assertThrows(IllegalArgumentException.class, () -> new AdvertisedDeal(
+                    UUID.randomUUID(), "Example", blank, null, null, null, sources, 1));
+            assertThrows(IllegalArgumentException.class, () -> new AdvertisedDeal(
+                    UUID.randomUUID(), "Example", "Terms", blank, null, null, sources, 1));
+        }
+    }
+
+    /** Verifies reversed date ranges and invalid revisions are rejected. */
+    @Test
+    void rejectsInvalidDatesAndRevision() {
+        List<UUID> sources = List.of(UUID.randomUUID());
+        assertThrows(IllegalArgumentException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), "Example", "Terms", null, null, null, sources, 0));
+        assertThrows(IllegalArgumentException.class, () -> new AdvertisedDeal(
+                UUID.randomUUID(), "Example", "Terms", null,
+                LocalDate.of(2026, 10, 17), LocalDate.of(2026, 10, 11), sources, 1));
+    }
+
+    /** Verifies a revised interpretation does not change the original offer revision. */
+    @Test
+    void preservesOriginalInterpretation() {
+        UUID id = UUID.randomUUID();
+        List<UUID> sources = List.of(UUID.randomUUID());
+        AdvertisedDeal before = new AdvertisedDeal(id, "Example", "Initial reading",
+                null, null, null, sources, 1);
+        AdvertisedDeal after = new AdvertisedDeal(id, before.title(), "Corrected reading",
+                null, null, null, sources, 2);
+        assertEquals(before.dealId(), after.dealId());
+        assertEquals("Initial reading", before.interpretedTerms());
+        assertEquals("Corrected reading", after.interpretedTerms());
+        assertEquals(1L, before.revision());
+        assertEquals(2L, after.revision());
+    }
+}
+
+========== FILE: pom.xml ==========
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>coupons</groupId>
+    <artifactId>distributed-coupon-system</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+     <dependencies>
+        <dependency><groupId>org.apache.pdfbox</groupId><artifactId>pdfbox</artifactId><version>3.0.6</version></dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.7</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-dependency-plugin</artifactId><version>3.8.1</version>
+                <executions><execution><id>runtime-libraries</id><phase>process-resources</phase><goals><goal>copy-dependencies</goal></goals><configuration><includeScope>runtime</includeScope></configuration></execution></executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+========== API TEST FILES ==========
+src/test/java/coupons/api/CouponApiServiceTest.java
+src/test/java/coupons/api/PostgresApiIntegrationTest.java
+src/test/java/coupons/AdvertisedDealTest.java

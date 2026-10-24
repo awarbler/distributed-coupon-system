@@ -25,10 +25,8 @@ The React and TypeScript browser workspace for the
 
 ## Documentation
 
-- [Project documentation index](../docs/reference/README.md)
-- [Environment and operating guide](../docs/operations/LOCAL_API_SETUP.md)
-- [Frontend design system](../docs/reference/FRONTEND-DESIGN-SYSTEM.md)
-- [Verification and test scope](../docs/reference/VERIFICATION.md)
+See the [project overview](../README.md). Detailed setup, design-system, and
+verification guides remain local while under review and are not published yet.
 
 Frontend validation uses TypeScript, Oxlint, Vitest, and Playwright. Browser tests
 use synthetic fixtures or an explicitly configured disposable API database.

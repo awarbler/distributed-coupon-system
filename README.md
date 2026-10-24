@@ -43,19 +43,9 @@ planned area of the project.
 
 ## Documentation
 
-- [Documentation index](docs/reference/README.md)
-- [Software Requirements Specification](docs/reference/Distributed_Coupon_System_SRS_Draft_1_0.docx)
-- [Software Design Description](docs/reference/Distributed_Coupon_System_SDD_Draft_1_0.docx)
-- [Frontend overview](frontend/README.md)
-- [Local environment and operating guide](docs/operations/LOCAL_API_SETUP.md)
-- [PostgreSQL and migration runbook](docs/operations/postgresql-local-runbook.md)
-- [Receipt and reward workflows](docs/reference/RECEIPT-REWARDS-WORKFLOWS.md)
-- [API reference](docs/reference/API-REFERENCE.md)
-- [Verification record](docs/reference/VERIFICATION.md)
-
-Setup commands and step-by-step operating instructions belong in the linked
-guides. Specifications use stable filenames with numbered revisions inside each
-document.
+Specifications, design references, and operating guides are maintained locally
+while under review. They will be published after they are finalized and approved.
+The [frontend overview](frontend/README.md) describes the browser application.
 
 ## Maintenance and support
 

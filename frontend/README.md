@@ -1,44 +1,34 @@
-# React + TypeScript + Vite
+# Grocery Intelligence Platform — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React and TypeScript browser workspace for the
+[Grocery Intelligence Platform](../README.md), built with Vite.
 
-Currently, two official plugins are available:
+## Responsibilities
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Receipt entry, correction, browsing, and financial report views.
+- Shopping plans, coupons, promotions, and reward account views.
+- Responsive layouts, validation feedback, and collapsible sections.
+- Authenticated communication with the Java API; financial calculations remain
+  in the Java backend.
 
-## React Compiler
+## Structure
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| Location | Purpose |
+| --- | --- |
+| `src/features/` | Receipt and shopping workflows |
+| `src/pages/` | Workspace pages |
+| `src/api/` | API client and formatting helpers |
+| `src/components/` | Shared UI components |
+| `src/index.css` | Typography, colors, and form-control tokens |
+| `src/App.css` | Page and component layouts |
+| `tests/` | Playwright browser checks |
 
-## Expanding the Oxlint configuration
+## Documentation
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+- [Project documentation index](../docs/reference/README.md)
+- [Environment and operating guide](../docs/operations/LOCAL_API_SETUP.md)
+- [Frontend design system](../docs/reference/FRONTEND-DESIGN-SYSTEM.md)
+- [Verification and test scope](../docs/reference/VERIFICATION.md)
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
-
-## Grocery Intelligence Platform
-
-Run `npm ci` once, then `npm run dev`. Open http://127.0.0.1:5173 and enter an API
-access token from your separately running Java backend. The default proxy target
-is http://127.0.0.1:8080; override with `COUPON_API_TARGET` before starting Vite.
-See the root README's **Web and mobile browser interface (Step 6)** section for
-supported workflows, security boundaries, PWA deployment, and verification.
-
-Checks: `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`.
-Browser checks: `npm run test:e2e` (requires a built app and Playwright Chromium).
-Never configure real-API browser tests against a persistent database.
+Frontend validation uses TypeScript, Oxlint, Vitest, and Playwright. Browser tests
+use synthetic fixtures or an explicitly configured disposable API database.

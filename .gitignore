@@ -39,3 +39,23 @@ checkpoint4-review.zip
 
 # Private historical migration preview
 /step7-migration-review/
+
+# Version canonical specifications and the reference index; private data stays ignored.
+!/docs/
+/docs/*
+!/docs/reference/
+/docs/reference/*
+!/docs/reference/Distributed_Coupon_System_SRS_Draft_1_0.docx
+!/docs/reference/Distributed_Coupon_System_SDD_Draft_1_0.docx
+!/docs/reference/README.md
+
+# Canonical guides linked by the GitHub project/documentation READMEs.
+!/docs/reference/*.md
+/docs/reference/Notes.md
+!/docs/reference/file-catalog.csv
+!/docs/operations/
+/docs/operations/*
+!/docs/operations/LOCAL_API_SETUP.md
+!/docs/operations/postgresql-local-runbook.md
+!/docs/operations/RECEIPT_TOTALS.md
+!/docs/operations/DEPLOYMENT-BACKUP.md

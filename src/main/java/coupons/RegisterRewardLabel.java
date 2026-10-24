@@ -6,7 +6,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /** Short display labels only; original terms, product names and UUID associations remain unchanged. */
-final class RegisterRewardLabel {
+public final class RegisterRewardLabel {
     private RegisterRewardLabel() { }
     static String lines(CouponTransaction tx, Earning earning) {
         if (earning.scope() == Scope.RECEIPT) return "Whole receipt";
@@ -39,7 +39,7 @@ final class RegisterRewardLabel {
         if(offer.startsWith("RR — ")) offer=offer.substring(5);
         return "Lines "+lines.replace(", ",",")+" — "+offer.replace(" — "," ");
     }
-    static String offer(CouponTransaction tx, Earning earning) {
+    public static String offer(CouponTransaction tx, Earning earning) {
         var terms=earning.requirement();
         if (terms==null || terms.type()==null || terms.amount()==null) return "RR — receipt lines " + lines(tx,earning);
         var benefit=earning.confirmed()==null?earning.expected():earning.confirmed();

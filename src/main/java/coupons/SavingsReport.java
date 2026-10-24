@@ -18,6 +18,8 @@ public final class SavingsReport {
             BigDecimal newStoreRewards, BigDecimal appRebates, boolean regularKnown, boolean paymentsKnown,
             boolean earningsKnown, boolean storeEarningsKnown, Map<String,BigDecimal> apps, Set<String> unvaluedApps, List<String> issues) {
         public Totals { apps=Collections.unmodifiableMap(new LinkedHashMap<>(apps)); unvaluedApps=Set.copyOf(unvaluedApps); issues=List.copyOf(issues); }
+        public BigDecimal knownConfirmedBenefitValue() { return newStoreRewards.add(appRebates); }
+        public BigDecimal confirmedBenefitValue() { return earningsKnown ? knownConfirmedBenefitValue() : null; }
         public BigDecimal couponSavings() { return storeCoupons.add(manufacturerCoupons); }
         public BigDecimal salesAndCoupons() { return saleSavings.add(couponSavings()).add(unclassifiedDiscounts); }
         public BigDecimal newlyEarned() { return newStoreRewards.add(appRebates); }
@@ -40,12 +42,29 @@ public final class SavingsReport {
     public static List<ReceiptRecord> month(List<ReceiptRecord> records, YearMonth month) {
         return latestActive(records).stream().filter(r->{var day=r.transaction().getObservations().purchaseDate(); return day!=null && YearMonth.from(day).equals(month);}).toList();
     }
+    public static List<ReceiptRecord> range(List<ReceiptRecord> records, LocalDate from, LocalDate to) {
+        if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("Choose a valid start and end date.");
+        return latestActive(records).stream().filter(r -> {
+            var date = r.transaction().getObservations().purchaseDate();
+            return date != null && !date.isBefore(from) && !date.isAfter(to);
+        }).toList();
+    }
     static boolean earned(Earning e) {
         return e.confirmed()!=null && (e.status()==RebateStatus.CREDITED || e.status()==RebateStatus.PAID);
     }
+    /** Read-only fallback for known worksheet point programs; explicit historical values win. */
+    public static RecordedValuation effectiveValuation(Earning e) {
+        if(e.valuation()!=null) return e.valuation();
+        var benefit=e.confirmed()!=null?e.confirmed():e.expected();
+        if(benefit==null || benefit.kind()!=BenefitKind.POINTS) return null;
+        String name=ProviderBalanceSummary.accountName(e.provider());
+        if(name.equals("Fetch")) return new RecordedValuation(benefit.amount().movePointLeft(3),USD,"Automatic worksheet Fetch rate: 1000 points = 1 USD");
+        if(name.equals("P&G Brand")) return new RecordedValuation(benefit.amount().divide(new BigDecimal("250")),USD,"Automatic worksheet P&G rate: 250 points = 1 USD");
+        return null;
+    }
     static BigDecimal earnedDollars(Earning e) {
         var benefit=e.confirmed();
-        if(benefit.kind()==BenefitKind.POINTS) return e.valuation()!=null && USD.equals(e.valuation().currency())?e.valuation().amount():null;
+        if(benefit.kind()==BenefitKind.POINTS) return effectiveValuation(e)!=null && USD.equals(effectiveValuation(e).currency())?effectiveValuation(e).amount():null;
         return USD.equals(benefit.currency())?benefit.amount():null;
     }
     public static Totals calculate(List<ReceiptRecord> records) {
@@ -119,6 +138,9 @@ public final class SavingsReport {
                 t.paymentsKnown()?amount(t.totalSaved(),t.regularKnown()&&t.earningsKnown()):"Missing payment",
                 t.percentSaved()==null?"N/A":t.percentSaved().setScale(2,RoundingMode.HALF_UP).toPlainString()+"%");
         out.println(border);
+        out.println("Legacy benefit-adjusted metrics above are not actual cash/card payment.");
+        row(out,"Recorded cash/card subtotal",t.cash().add(t.card()),t.paymentsKnown());
+        out.println("Payment completeness and printed-total basis require receipt-level review.");
         out.println("\nSAVINGS BREAKDOWN");
         out.println("+----------------------------------------+----------------------+ ");
         row(out,"Sale/promotion reductions",t.saleSavings(),t.regularKnown());
@@ -205,7 +227,7 @@ public final class SavingsReport {
         BigDecimal expected=BigDecimal.ZERO;boolean expectedKnown=true;boolean hasExpected=false;
         for(var r:active)for(var e:r.transaction().getObservations().earnings())if(!earned(e)&&e.status()!=RebateStatus.REJECTED) {
             hasExpected=true;var b=e.confirmed()==null?e.expected():e.confirmed();
-            BigDecimal value=b.kind()==BenefitKind.POINTS?(e.valuation()!=null&&USD.equals(e.valuation().currency())?e.valuation().amount():null):USD.equals(b.currency())?b.amount():null;
+            BigDecimal value=b.kind()==BenefitKind.POINTS?(effectiveValuation(e)!=null&&USD.equals(effectiveValuation(e).currency())?effectiveValuation(e).amount():null):USD.equals(b.currency())?b.amount():null;
             if(value==null)expectedKnown=false;else expected=expected.add(value);
         }
         if(hasExpected)compactMoney(rows,"Expected, not confirmed",expected,expectedKnown,true);

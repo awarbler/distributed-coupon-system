@@ -21,9 +21,18 @@ public record ReceiptMeta(
         String receiptNumber,
         LocalDateTime purchasedAt,
         String storeReference,
-        PurchaseChannel purchaseChannel
+        PurchaseChannel purchaseChannel,
+        PrintedTotalBasis printedTotalBasis,
+        PaymentEntryStatus paymentEntryStatus
 ) implements java.io.Serializable {
     public enum PurchaseChannel { IN_STORE, ONLINE, UNKNOWN }
+    public enum PrintedTotalBasis { BEFORE_PAYMENT_FUNDING, AFTER_REWARD_REDEMPTIONS, UNKNOWN }
+    public enum PaymentEntryStatus { COMPLETE, PARTIAL, UNKNOWN }
+    public ReceiptMeta(String retailer, String receiptNumber, LocalDateTime purchasedAt,
+            String storeReference, PurchaseChannel purchaseChannel) {
+        this(retailer, receiptNumber, purchasedAt, storeReference, purchaseChannel,
+                PrintedTotalBasis.UNKNOWN, PaymentEntryStatus.UNKNOWN);
+    }
     public ReceiptMeta(String retailer,String receiptNumber,LocalDateTime purchasedAt,String storeReference) {
         this(retailer,receiptNumber,purchasedAt,storeReference,PurchaseChannel.UNKNOWN);
     }
@@ -42,6 +51,8 @@ public record ReceiptMeta(
      *         optional text field is blank
      */
     public ReceiptMeta {
+        printedTotalBasis = printedTotalBasis == null ? PrintedTotalBasis.UNKNOWN : printedTotalBasis;
+        paymentEntryStatus = paymentEntryStatus == null ? PaymentEntryStatus.UNKNOWN : paymentEntryStatus;
         purchaseChannel=purchaseChannel==null?PurchaseChannel.UNKNOWN:purchaseChannel;
         Objects.requireNonNull(retailer, "Retailer cannot be null.");
         if (retailer.isBlank()) {

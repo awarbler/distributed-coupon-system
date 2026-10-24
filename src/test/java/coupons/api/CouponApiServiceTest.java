@@ -34,6 +34,21 @@ class CouponApiServiceTest {
         b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));
         return client.send(b.build(),HttpResponse.BodyHandlers.ofString());
     }
+    @Test void editsEcbExpirationWithoutChangingMoneyOrStatusAndCanClearIt() throws Exception {
+        UUID id=UUID.randomUUID(),earningId=UUID.randomUUID();
+        var earning=EarningInput.read(Map.of("earningId",earningId.toString(),"kind","THIRD_PARTY_REBATE","provider","ECB","form","STORE_REWARD","amount","10","status","CREDITED","confirmedAmount","10","unit","USD","confirmAmountAndUnit",true));
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));tx.addPurchaseItem(new PurchaseItem("Synthetic",null,BigDecimal.ONE,BigDecimal.ONE,1));
+        tx.setObservations(new ReceiptObservations(LocalDate.of(2026,10,4),null,List.of(earning),List.of(),null,List.of(),Map.of()));
+        receipts.save(id,tx,new ReceiptMeta("CVS","Synthetic-expiry",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        String path="/receipts/"+id+"/earnings/"+earningId+"/associations";
+        var result=call("PUT",path,"owner","{\"expirationDate\":\"2026-11-04\"}","expiry-save","1");assertEquals(200,result.statusCode(),result.body());
+        var changed=receipts.findById(id).orElseThrow().transaction().getObservations().earnings().getFirst();
+        assertEquals(LocalDate.of(2026,11,4),changed.expirationDate());assertEquals(earning.confirmed(),changed.confirmed());assertEquals(earning.status(),changed.status());assertEquals(earning.earningId(),changed.earningId());
+        assertEquals(400,call("PUT",path,"owner","{\"expirationDate\":\"2026-10-03\"}","expiry-invalid","2").statusCode());
+        assertEquals(200,call("PUT",path,"owner","{\"expirationDate\":null}","expiry-clear","2").statusCode());
+        assertNull(receipts.findById(id).orElseThrow().transaction().getObservations().earnings().getFirst().expirationDate());
+    }
+
     String planBody(UUID id,String name) { return Json.object(Map.of("planId",id,"name",name)); }
     UUID receipt() {
         UUID id=UUID.randomUUID();
@@ -50,6 +65,15 @@ class CouponApiServiceTest {
         assertEquals(401,call("GET","/shopping-plans/"+UUID.randomUUID(),"wrong",null,null,null).statusCode());
         assertEquals(403,call("POST","/shopping-plans","reader",planBody(UUID.randomUUID(),"x"),"key",null).statusCode());
         assertEquals(0,plans.writes);
+    }
+    @Test void receiptCorrectionExplainsZeroPaymentAndRRMatchingRequiresOwner() throws Exception {
+        UUID id=receipt();
+        var body=Json.object(Map.of("reason","Check payment","payments",List.of(Map.of("paymentId",UUID.randomUUID(),"paymentType","CASH","amount","0"))));
+        var result=call("POST","/receipts/"+id+"/edit-preview","owner",body,null,"1");
+        assertEquals(400,result.statusCode());assertTrue(result.body().contains("greater than zero"));
+        assertEquals(403,call("POST","/receipts/"+id+"/rr-matches","reader","{}","match","1").statusCode());
+        assertEquals(403,call("POST","/receipts/"+id+"/rr-matches/unknown-source","reader","{}","unknown","1").statusCode());
+        assertEquals(403,call("POST","/rewards/register-rewards","reader","{}","standalone",null).statusCode());
     }
     @Test void configurationRejectsMissingOrAmbiguousCredentials() {
         assertThrows(IllegalArgumentException.class,()->new CouponApiService(receipts,plans,coupons," ",null));
@@ -154,4 +178,90 @@ class CouponApiServiceTest {
         public ClippedCoupon update(ClippedCoupon c,long expected,String actor,String reason){throw new UnsupportedOperationException();}
         public synchronized ClippedCoupon redeem(UUID id,UUID receipt,LocalDate date,long expected,String actor){var old=data.get(id);if(old.revision()!=expected)throw new ConcurrentModificationException();if(old.status()==CouponStatus.APPLIED)throw new IllegalStateException();var next=new ClippedCoupon(id,old.provider(),old.externalId(),old.coupon(),CouponStatus.APPLIED,old.clippedOn(),date,receipt,expected+1);data.put(id,next);redemptions++;return next;}
     }
+
+    @Test void beforeFundingReceiptSavesWithoutFalseWalgreensCashDiscrepancy() throws Exception {
+        var fields = ReceiptInputTest.draft(UUID.randomUUID());
+        fields.put("retailer", "Walgreens"); fields.put("reportedTotal", "25.96"); fields.put("tax", "1.98");
+        fields.put("printedTotalBasis", "BEFORE_PAYMENT_FUNDING"); fields.put("paymentEntryStatus", "COMPLETE");
+        fields.put("items", List.of(Map.of("lineItemId", UUID.randomUUID(), "description", "Basket", "unitPrice", "31.98", "quantity", 1)));
+        fields.put("discounts", List.of(Map.of("applicationId", UUID.randomUUID(), "label", "Recorded discounts", "amount", "8", "kind", "STORE_COUPON", "wholeReceipt", true)));
+        fields.remove("rrUsed"); fields.put("payments", List.of(
+                Map.of("paymentId", UUID.randomUUID(), "type", "WALGREENS_CASH", "amount", "20"),
+                Map.of("paymentId", UUID.randomUUID(), "type", "CARD", "amount", "5.96")));
+        fields.put("earnings", List.of()); fields.put("evidence", List.of());
+        var preview = call("POST", "/receipts/preview", "owner", Json.object(fields), null, null);
+        assertEquals(200, preview.statusCode(), preview.body());
+        var response = Json.parseObject(preview.body());
+        var totals = (Map<?, ?>) response.get("totals");
+        var review = (Map<?, ?>) totals.get("paymentReview");
+        assertEquals("BALANCED", review.get("status"));
+        assertEquals(false, review.get("acknowledgementRequired"));
+        assertEquals(0, ((BigDecimal) totals.get("difference")).compareTo(new BigDecimal("20")));
+        fields.put("reviewToken", response.get("reviewToken"));
+        var created = call("POST", "/receipts", "owner", Json.object(fields), "split-funding", null);
+        assertEquals(201, created.statusCode(), created.body());
+        var saved = receipts.findById(UUID.fromString(fields.get("transactionId").toString())).orElseThrow();
+        assertEquals(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING, saved.metadata().printedTotalBasis());
+        assertEquals(0, saved.transaction().getReceiptTotals().getFinalTotal().compareTo(new BigDecimal("25.96")));
+    }
+
+    @Test void receiptCorrectionsRequirePreviewRevisionAndOwnerAndRetainHistory() throws Exception {
+        UUID id = receipt();
+        var body = new LinkedHashMap<String,Object>();
+        body.put("retailer","Corrected Store"); body.put("reason","Correct store name");
+        String payload = Json.object(body);
+        assertEquals(403,call("POST","/receipts/"+id+"/edit-preview","reader",payload,"preview","1").statusCode());
+        assertEquals(409,call("PUT","/receipts/"+id,"owner",payload,"no-preview","1").statusCode());
+        var preview = call("POST","/receipts/"+id+"/edit-preview","owner",payload,"preview","1");
+        assertEquals(200,preview.statusCode(),preview.body());
+        body.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));
+        body.put("acknowledgeDifference",true);
+        var before = ReceiptSnapshot.from(receipts.findById(id).orElseThrow().transaction());
+        var saved = call("PUT","/receipts/"+id,"owner",Json.object(body),"correct","1");
+        assertEquals(200,saved.statusCode(),saved.body());
+        assertEquals(before,ReceiptSnapshot.from(receipts.findById(id).orElseThrow().transaction()));
+        assertEquals("Corrected Store",receipts.findById(id).orElseThrow().metadata().retailer());
+        assertEquals(2,receipts.findById(id).orElseThrow().revision());
+        assertEquals(saved.body(),call("PUT","/receipts/"+id,"owner",Json.object(body),"correct","1").body());
+        assertEquals(409,call("PUT","/receipts/"+id,"owner",Json.object(body),"stale","1").statusCode());
+        assertEquals("Store",receipts.creationHistory().getFirst().after().metadata().retailer());
+    }
+    @Test void receiptDeletionAndRestorationRequireConfirmationAndPreserveContents() throws Exception {
+        UUID id = receipt(); var before = ReceiptSnapshot.from(receipts.findById(id).orElseThrow().transaction());
+        String payload = Json.object(Map.of("reason","Duplicate entry","confirmed",true));
+        assertEquals(403,call("DELETE","/receipts/"+id,"reader",payload,"delete-reader","1").statusCode());
+        assertEquals(400,call("DELETE","/receipts/"+id,"owner","{\"reason\":\"Duplicate\"}","unconfirmed","1").statusCode());
+        var deleted = call("DELETE","/receipts/"+id,"owner",payload,"delete","1");
+        assertEquals(200,deleted.statusCode(),deleted.body());
+        assertTrue(receipts.findById(id).isEmpty());
+        assertEquals(before,ReceiptSnapshot.from(receipts.findDeletedById(id).orElseThrow().transaction()));
+        assertEquals(deleted.body(),call("DELETE","/receipts/"+id,"owner",payload,"delete","1").body());
+        assertEquals(200,call("POST","/receipts/"+id+"/restore","owner",payload,"restore","2").statusCode());
+        assertEquals(3,receipts.findById(id).orElseThrow().revision());
+        assertEquals(before,ReceiptSnapshot.from(receipts.findById(id).orElseThrow().transaction()));
+    }
+
+    @Test void correctedProductsAndPaymentsRetainStableIdsAndRejectChangedPreview() throws Exception {
+        UUID id = receipt(); var old = receipts.findById(id).orElseThrow();
+        UUID line = old.transaction().getPurchaseItems().getFirst().getLineItemId(), payment = UUID.randomUUID();
+        var f = new LinkedHashMap<String,Object>();
+        f.put("reason","Correct product price and record card payment"); f.put("reportedTotal","0.81");
+        f.put("items",List.of(Map.of("lineItemId",line.toString(),"productName","Soap","regularUnitPrice","1.00","saleUnitPrice","0.80","quantity",1)));
+        f.put("payments",List.of(Map.of("paymentId",payment.toString(),"paymentType","CARD","amount","0.81")));
+        var preview = call("POST","/receipts/"+id+"/edit-preview","owner",Json.object(f),"price-preview","1");
+        assertEquals(200,preview.statusCode(),preview.body());
+        f.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken")); f.put("acknowledgeDifference",true);
+        f.put("reportedTotal","9.99");
+        assertEquals(409,call("PUT","/receipts/"+id,"owner",Json.object(f),"altered-preview","1").statusCode());
+        assertEquals(1,receipts.findById(id).orElseThrow().revision());
+        f.put("reportedTotal","0.81");
+        var saved = call("PUT","/receipts/"+id,"owner",Json.object(f),"price-save","1");
+        assertEquals(200,saved.statusCode(),saved.body());
+        var tx = receipts.findById(id).orElseThrow().transaction();
+        assertEquals(line,tx.getPurchaseItems().getFirst().getLineItemId());
+        assertEquals(new BigDecimal("0.80"),tx.getPurchaseItems().getFirst().getSaleUnitPrice());
+        assertEquals(payment,tx.getPayments().getFirst().getPaymentId());
+        assertEquals(old.transaction().getObservations(),tx.getObservations());
+    }
+
 }

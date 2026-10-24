@@ -1,6 +1,7 @@
 package coupons.repository;
 
 import coupons.CouponTransaction;
+import coupons.ClippedCoupon;
 import coupons.RegisterReward;
 import coupons.RegisterRewardRedemption;
 import java.io.ByteArrayInputStream;
@@ -62,6 +63,12 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     @Override
     public ReceiptWriteResult save(UUID id, CouponTransaction transaction, ReceiptMeta metadata,
             List<ReceiptEvidence> newEvidence, ReceiptWriteRequest request, ReceiptCreateCtx context) {
+        return saveWithCoupons(id,transaction,metadata,newEvidence,request,context,List.of());
+    }
+
+    /** Receipt and clipped-coupon redemptions commit or roll back together. */
+    public ReceiptWriteResult saveWithCoupons(UUID id,CouponTransaction transaction,ReceiptMeta metadata,
+            List<ReceiptEvidence> newEvidence,ReceiptWriteRequest request,ReceiptCreateCtx context,List<UUID> couponIds) {
         Objects.requireNonNull(id);
         Objects.requireNonNull(transaction);
         Objects.requireNonNull(newEvidence);
@@ -94,6 +101,13 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             PostgresReceiptState.promotions(connection, promotions);
             insertEvidence(connection, evidence);
             insertRedemptions(connection, snapshot.registerRewardRedemptions());
+            for(var couponId:couponIds.stream().sorted().toList()) {
+                ClippedCoupon coupon;
+                try(var p=connection.prepareStatement("SELECT payload FROM clipped_coupon_current WHERE coupon_id=? FOR UPDATE")){p.setObject(1,couponId);try(var r=p.executeQuery()){if(!r.next())throw new IllegalArgumentException("Selected coupon no longer exists.");coupon=PostgresRepositorySupport.deserialize(r.getBytes(1),ClippedCoupon.class);}}
+                if(snapshot.appliedCoupons().stream().noneMatch(x->x.getApplicationId().equals(couponId)))throw new IllegalArgumentException("Selected coupon must have one receipt discount.");
+                if(metadata==null || snapshot.observations().purchaseDate()==null)throw new IllegalArgumentException("Purchase date required to use clipped coupons.");
+                PostgresClippedCouponRepository.redeem(connection,couponId,id,snapshot.observations().purchaseDate(),coupon.revision(),context.requestedBy());
+            }
             insertHistory(connection, history);
             insertRequest(connection, request.requestId(), id, serialize(payload), result);
             return result;

@@ -193,3 +193,207 @@
     grid-template-columns: 1fr;
   }
 }
+/* Planning progress is informational; it never confirms reward receipt. */
+.promotion-progress { margin: 12px 0; padding: 12px 16px; border-radius: 10px; border: 1px solid #d4e1df; }
+.promotion-progress p { margin: 6px 0; }
+.promotion-progress-complete { background: #edf7ef; color: #245e35; }
+.promotion-progress-review { background: #f0f5f9; color: #29485d; }
+.promotion-progress button { margin: 6px 8px 0 0; }
+
+/* Keep filter labels and controls on predictable rows. */
+.filters.receipt-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #e5e9e0;
+  border-radius: 13px;
+}
+.receipt-filters > label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #526a4b;
+}
+.receipt-filters .receipt-search-label { grid-column: 1 / -1; }
+.receipt-filters .search {
+  width: 100%;
+  max-width: none;
+  height: var(--form-control-height);
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+.receipt-filters input, .receipt-filters select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--form-control-height);
+  box-sizing: border-box;
+  font-size: 13px;
+  font-weight: 400;
+}
+.receipt-filters .search input { height: 42px; font-size: 13px; }
+.receipt-filters > button { min-height: var(--form-control-height); width: 100%; }
+@media (max-width: 1000px) {
+  .filters.receipt-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .filters.receipt-filters { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .receipt-filters input, .receipt-filters select, .receipt-filters .search input { font-size: 16px; }
+}
+.receipt-period-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.receipt-period-totals > div { display: grid; gap: .5rem; }
+.receipt-period-totals strong { font-size: 1.5rem; }
+.receipt-pagination { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; padding-top: 1rem; }
+@media (max-width: 650px) {
+  .receipt-period-totals { grid-template-columns: 1fr; }
+}
+
+/* Receipt cards share the header inset; financial columns share a baseline. */
+.receipt-summary-body { padding: 0 23px 20px; }
+.receipt-summary-body > .muted { margin-top: 16px; line-height: 1.6; }
+.receipt-period-totals > div { align-content: start; grid-template-rows: minmax(36px, auto) auto; }
+.receipt-period-totals strong { font-variant-numeric: tabular-nums; }
+.receipt-table { min-width: 900px; white-space: normal; }
+.receipt-table th { vertical-align: bottom; line-height: 1.5; padding: 12px 16px; }
+.receipt-table td { vertical-align: top; line-height: 1.5; padding: 16px; }
+.receipt-table th:first-child, .receipt-table td:first-child { padding-left: 23px; }
+.receipt-table th:last-child, .receipt-table td:last-child { padding-right: 23px; }
+.receipt-table th:first-child { width: 24%; }
+.receipt-table td:first-child small { white-space: nowrap; }
+.receipt-table .receipt-money { text-align: right; font-variant-numeric: tabular-nums; }
+.receipt-value { display: block; white-space: nowrap; }
+.receipt-table .receipt-money small { max-width: 145px; margin-left: auto; line-height: 1.5; }
+.receipt-pagination { padding: 16px 23px; }
+@media (max-width: 600px) {
+  .receipt-summary-body { padding: 0 18px 18px; }
+  .receipt-period-totals > div { grid-template-rows: auto auto; }
+  .receipt-pagination { padding: 16px 18px; }
+}
+
+.receipt-period-panel .panel-head { justify-content: center; text-align: center; }
+.receipt-period-panel .receipt-summary-body { text-align: center; }
+.receipt-period-panel .receipt-period-totals > div { justify-items: center; }
+
+.receipt-editor { padding: 20px; margin: 16px 0; border: 1px solid #dce3dc; border-radius: 12px; background: #f7faf6; }
+.receipt-editor h3, .receipt-editor h4, .receipt-editor p { margin-bottom: 12px; }
+.receipt-editor h4 { margin-top: 20px; }
+.receipt-editor > form, .receipt-editor fieldset { min-width: 0; }
+
+.product-pricing-info { margin: 12px 0; padding: 12px; border-left: 3px solid #b5cbb1; background: #edf3e9; border-radius: 6px; line-height: 1.6; }
+.product-pricing-info p { margin: 0 0 8px; }
+.product-pricing-info strong, .product-pricing-info small { display: block; }
+
+/* Equal grid tracks and a common baseline for text, date and selection fields. */
+.form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
+.form-grid > label { min-width: 0; }
+.modal input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]),
+.modal select {
+  height: var(--form-control-height);
+  min-height: var(--form-control-height);
+  font-size: var(--form-control-font-size);
+}
+@media (max-width: 600px) {
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Search uses the same outer height; its borderless inner input fits inside it. */
+.search { height: var(--form-control-height); min-height: var(--form-control-height); }
+.search input, .receipt-filters .search input { height: calc(var(--form-control-height) - 2px); min-height: 0; }
+
+/* Size form columns by the dialog's usable width, not the browser window. */
+.modal { container-name: dialog; container-type: inline-size; }
+.form-grid > .field-full { grid-column: 1 / -1; }
+@container dialog (max-width: 680px) {
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+}
+.item-discount-fields { padding: 16px 0; border-top: 1px solid var(--color-border-control); }
+
+.filters input, .filters select, .search input,
+.receipt-filters input, .receipt-filters select, .receipt-filters .search input {
+  font-size: var(--form-control-font-size);
+}
+.item-discount-fields > small { display: block; margin: 8px 0; }
+.receipt-input-row > .secondary { margin: 8px 12px 8px 0; }
+
+/* Larger form fields and readable labels, requested October 23. */
+.modal { max-width: var(--dialog-max-width); }
+.modal label, .receipt-filters > label { font-size: var(--form-label-font-size); }
+.modal .receipt-editor .form-grid,
+.modal .receipt-input-row .form-grid { grid-template-columns: minmax(0, 1fr); }
+.modal textarea { font-size: var(--form-control-font-size); }
+
+/* Account detail content follows the card header insets. Tables scroll independently. */
+.account-detail-panel > .key-values,.account-detail-panel > p,.account-detail-panel > button,.account-detail-panel > form,.account-detail-panel > section{margin-left:23px;margin-right:23px}.account-detail-panel > :last-child{margin-bottom:23px}.account-detail-panel > form .form-grid{gap:18px}.account-detail-panel > p{overflow-wrap:anywhere}
+
+.printed-footer{border:1px solid var(--color-border,#dce5da);border-radius:9px;padding:16px;margin:20px 0}.printed-footer > summary{cursor:pointer;font-weight:600;margin-bottom:12px}.printed-footer:not([open]) > summary{margin-bottom:0}
+
+.receipt-period-totals > div > button { display: grid; gap: .5rem; justify-items: center; text-align: center; width: 100%; }
+.receipt-period-totals > div > button:hover { text-decoration: underline; }
+
+/* Rewards overview and account activity layout. */
+.rewards-account-filters { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 18px; margin-bottom: 23px; }
+.rewards-account-filters > label { margin-bottom: 0; }
+.rewards-account-filters > button { margin-bottom: 0; height: var(--form-control-height); min-height: var(--form-control-height); align-self: end; }
+.rewards-overview > p { margin: 18px 23px; line-height: 1.7; }
+.rewards-overview > .receipt-period-totals { padding: 0 23px; text-align: center; }
+.rewards-overview .receipt-period-totals > div { justify-items: center; }
+.rewards-overview > .notice { margin: 18px 23px; }
+.account-activity-panel > details > summary { padding: 18px 23px; cursor: pointer; }
+.account-activity-panel td details > summary { cursor: pointer; }
+@media (max-width: 600px) {
+  .rewards-account-filters { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+}
+
+.receipt-more-filters { grid-column: 1 / -1; min-width: 0; }
+.receipt-more-filters > summary { padding: 8px 0; font-weight: 600; }
+.receipt-extra-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; align-items: end; margin-top: 12px; }
+.receipt-extra-filters > label { min-width: 0; margin-bottom: 0; font-size: var(--form-label-font-size); }
+.receipt-extra-filters > button { height: var(--form-control-height); width: 100%; }
+@media (max-width: 1000px) { .receipt-extra-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .receipt-extra-filters { grid-template-columns: minmax(0, 1fr); } }
+
+.product-calculation-note { margin: 12px 0 18px; line-height: 1.7; }
+.product-entry-actions { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; margin-top: 18px; }
+.product-entry-actions > button { min-height: 44px; white-space: normal; text-align: center; }
+.product-entry-actions > .product-remove-action { color: #9c5139; }
+@media (max-width: 600px) { .product-entry-actions { flex-direction: column; } .product-entry-actions > button { width: 100%; } }
+
+.receipt-reward-card { border: 1px solid var(--color-border-control); border-radius: 12px; padding: 20px; margin-top: 18px; background: var(--color-surface); }
+.receipt-reward-layout { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 24px; align-items: start; }
+.receipt-reward-info { min-width: 0; display: grid; gap: 12px; }
+.receipt-reward-program { font-size: 13px; color: var(--color-text-muted); }
+.receipt-reward-title { font-size: 18px; line-height: 1.5; overflow-wrap: anywhere; }
+.receipt-reward-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; line-height: 1.6; }
+.receipt-reward-info details { padding-top: 8px; border-top: 1px solid var(--color-border-control); }
+.receipt-reward-info details small { display: block; margin-top: 10px; line-height: 1.7; }
+.receipt-reward-value { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+.receipt-reward-value > strong { font-size: 24px; font-variant-numeric: tabular-nums; }
+.receipt-reward-value > button { min-height: 44px; white-space: normal; }
+@media (max-width: 600px) { .receipt-reward-layout { grid-template-columns: minmax(0, 1fr); gap: 18px; } .receipt-reward-value { align-items: stretch; } }
+
+.provider-observations { margin: 0 23px 23px; }
+.provider-observations > summary { padding: 16px 0; font-weight: 600; }
+.provider-observations > section, .provider-observations > p { margin-top: 16px; line-height: 1.7; }
+
+.dashboard-section-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.dashboard-section-actions > button { min-height: 44px; }
+
+.catalog-delete { margin: 16px 0; }
+
+/* Collapsed dashboard cards retain only their header and never stretch to a neighbor. */
+.dashboard-grid { align-items: start; }
+.dashboard-card { align-self: start; min-height: 0; }
+.dashboard-card > [hidden] { display: none; }
+.dashboard-card .panel-head { flex-wrap: wrap; }
+.dashboard-card .dashboard-section-actions { display: inline-flex; gap: 16px; flex-shrink: 0; }
+.dashboard-card.is-collapsed { height: auto; }
+
+.account-balances-panel > p { margin: 0 23px 18px; line-height: 1.7; overflow-wrap: anywhere; }
+.account-balances-panel > .notice { margin-left: 23px; margin-right: 23px; }
+@media (max-width: 600px) { .account-balances-panel > p, .account-balances-panel > .notice { margin-left: 18px; margin-right: 18px; } }

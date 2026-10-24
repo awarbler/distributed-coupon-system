@@ -4,7 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import coupons.CouponTransaction;
+import coupons.*;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import coupons.PurchaseItem;
 import coupons.ReceiptTotals;
 import java.math.BigDecimal;
@@ -102,6 +103,46 @@ class PostgresTransactionRepositoryTest {
                 transaction, null, List.of(),
                 new ReceiptWriteRequest(UUID.randomUUID(), NOW),
                 new ReceiptCreateCtx("test-user")));
+    }
+
+    @Test void selectedCouponsCommitWithReceiptAndFailureRollsEverythingBack() {
+        var couponRepo=new PostgresClippedCouponRepository(connections);
+        var coupon=new coupons.ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new coupons.Coupon("Synthetic coupon",BigDecimal.ONE,1,coupons.CouponType.MANUFACTURER,java.time.LocalDate.of(2026,10,31)),coupons.CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
+        couponRepo.save(coupon,"test");
+        var id=UUID.randomUUID();var tx=transaction();
+        tx.addAppliedCoupon(new coupons.CouponApplied(coupon.couponId(),"Synthetic coupon",BigDecimal.ONE,List.of(),1,true));
+        tx.setObservations(new coupons.ReceiptObservations(java.time.LocalDate.of(2026,10,18),null,List.of(),List.of(),null,List.of(),java.util.Map.of()));
+        var metadata=new ReceiptMeta("Synthetic",id.toString(),null,null);
+        repository.saveWithCoupons(id,tx,metadata,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(coupon.couponId()));
+        assertEquals(coupons.CouponStatus.APPLIED,couponRepo.findById(coupon.couponId()).orElseThrow().status());
+        var failed=UUID.randomUUID();
+        assertThrows(IllegalArgumentException.class,()->repository.saveWithCoupons(failed,tx,metadata,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(coupon.couponId())));
+        assertTrue(repository.findById(failed).isEmpty());
+        var expired=new coupons.ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new coupons.Coupon("Expired",BigDecimal.ONE,1,coupons.CouponType.MANUFACTURER,java.time.LocalDate.of(2026,10,2)),coupons.CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
+        couponRepo.save(expired,"test");var rolledBack=UUID.randomUUID();var other=transaction();
+        other.addAppliedCoupon(new coupons.CouponApplied(expired.couponId(),"Expired",BigDecimal.ONE,List.of(),1,true));
+        other.setObservations(new coupons.ReceiptObservations(java.time.LocalDate.of(2026,10,18),null,List.of(),List.of(),null,List.of(),java.util.Map.of()));
+        assertThrows(IllegalArgumentException.class,()->repository.saveWithCoupons(rolledBack,other,new ReceiptMeta("Synthetic",rolledBack.toString(),null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(expired.couponId())));
+        assertTrue(repository.findById(rolledBack).isEmpty());assertEquals(coupons.CouponStatus.CLIPPED,couponRepo.findById(expired.couponId()).orElseThrow().status());
+
+        assertThrows(IllegalArgumentException.class,()->new PostgresPlatformRepository(connections).deleteCatalogRecord(false,coupon.couponId(),2,"test"));
+    }
+
+    @Test void permanentCatalogDeletionDetachesPlansAndRemovesUnsharedSource() {
+        var platform=new PostgresPlatformRepository(connections);
+        var coupon=new ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new Coupon("Synthetic",BigDecimal.ONE,1,CouponType.MANUFACTURER,null),CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
+        new PostgresClippedCouponRepository(connections).save(coupon,"test");
+        var source=new SourceArtifact(UUID.randomUUID(),"Synthetic","text/plain",null,NOW,new byte[]{1});
+        var deal=new AdvertisedDeal(UUID.randomUUID(),"Synthetic","Synthetic",null,null,null,List.of(source.getArtifactId()),1);
+        platform.saveDeal(deal,"test",source);
+        var plan=new ShoppingPlan(UUID.randomUUID(),"Synthetic",null,null,List.of(),1);
+        new PostgresShoppingPlanRepository(connections).save(plan,"test");
+        var item=new PlannedPurchase(UUID.randomUUID(),plan.planId(),"Synthetic",null,1,BigDecimal.TEN,deal.dealId(),List.of(coupon.couponId()),1,BigDecimal.TEN,BigDecimal.TEN,"DEAL");
+        var items=new PostgresPlannedPurchaseRepository(connections);items.save(item,"test");
+        platform.deleteCatalogRecord(true,deal.dealId(),1,"test");platform.deleteCatalogRecord(false,coupon.couponId(),1,"test");
+        var updated=items.findById(item.plannedPurchaseId()).orElseThrow();assertNull(updated.advertisedDealId());assertTrue(updated.clippedCouponIds().isEmpty());assertEquals(BigDecimal.TEN,updated.saleUnitPrice());
+        assertTrue(new PostgresDealRepository(connections).findById(deal.dealId()).isEmpty());assertTrue(new PostgresClippedCouponRepository(connections).findById(coupon.couponId()).isEmpty());
+        assertTrue(new PostgresSourceArtifactRepository(connections).findById(source.getArtifactId()).isEmpty());
     }
 
     private static CouponTransaction transaction() {

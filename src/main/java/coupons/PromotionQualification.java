@@ -9,6 +9,15 @@ public record PromotionQualification(String status, long qualifyingQuantity, Big
         String reason) {
     public static PromotionQualification evaluate(Earning earning,CouponTransaction tx) {
         var requirement=earning.requirement();if(requirement==null)return new PromotionQualification("NOT_RECORDED",0,null,"No qualification recorded");
+        if (requirement.type() == null) {
+            String reason = switch (requirement.category()) {
+                case "Purchase" -> "Purchase-based condition recorded; review receipt eligibility and reward evidence.";
+                case "ReceiptScan" -> "Receipt-scan condition recorded; submission and reward credit require separate evidence.";
+                case "Receipt" -> "Legacy receipt-based condition; purchase versus scan meaning is not established.";
+                default -> "Other recorded condition requires review; no automatic threshold verification.";
+            };
+            return new PromotionQualification("CANNOT_VERIFY",0,null,reason);
+        }
         if(earning.lineItemIds().isEmpty())return new PromotionQualification("CANNOT_VERIFY",0,null,"Select qualifying receipt lines; whole receipt does not assume eligibility");
         var ids=new HashSet<>(earning.lineItemIds());long quantity=0;boolean partial=false;
         BigDecimal subtotal=BigDecimal.ZERO;

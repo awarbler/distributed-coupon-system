@@ -17,7 +17,7 @@ final class ReceiptEarningStatusUpdate {
         if(status==RebateStatus.CREDITED||status==RebateStatus.PAID) {
             if(!confirmation||amount==null||unit==null)throw new IllegalArgumentException("Explicit confirmation of amount and original unit is required.");
             String originalUnit=recorded.kind()==BenefitKind.POINTS?"points":recorded.currency().getCurrencyCode();
-            if(!originalUnit.equals(unit)||!amount.matches("[0-9]+(\\.[0-9]+)?")||new BigDecimal(amount).compareTo(recorded.amount())!=0)
+            if(!originalUnit.equals(unit)||!amount.matches("(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)")||new BigDecimal(amount).compareTo(recorded.amount())!=0)
                 throw new IllegalArgumentException("Confirm the recorded amount and unit exactly. Amount corrections are outside this status-only workflow.");
             confirmed=recorded; // preserve original scale, point quantity, form and currency
         } else if(amount!=null||unit!=null||confirmation)throw new IllegalArgumentException("Amount confirmation is only applicable to received rewards.");

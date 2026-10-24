@@ -7,7 +7,7 @@ import { integer } from '../../api/format'
 import { Modal, Notice } from '../../components/ui'
 import type { Deal, Coupon, Plan, PlanRow, Purchase, Workspace } from '../../types/platform'
 
-export type Edit = { kind: 'plan'; plan?: Plan } | { kind: 'purchase'; row: PlanRow; item?: Purchase } | { kind: 'redeem'; coupon: Coupon } | { kind: 'coupon' }
+export type Edit = { kind: 'plan'; plan?: Plan } | { kind: 'purchase'; row: PlanRow; item?: Purchase; initialDealId?: string } | { kind: 'redeem'; coupon: Coupon } | { kind: 'coupon' }
 interface Request { path: string; method: 'POST' | 'PUT'; body: unknown; revision?: string; key: string }
 export function EditDialog({ edit, api, data, onClose, onSaved, onReview, onEdit, online }:
   { edit: Edit; api: ApiClient; data: Workspace; onClose: () => void; onSaved: () => void; onReview?: () => void; onEdit?: (edit: Edit) => void; online: boolean }) {
@@ -27,7 +27,7 @@ export function EditDialog({ edit, api, data, onClose, onSaved, onReview, onEdit
   const [createdCoupons, setCreatedCoupons] = useState<Coupon[]>([])
   const [addingDeal, setAddingDeal] = useState(false)
   const [createdDeals, setCreatedDeals] = useState<Deal[]>([])
-  const [deal, setDeal] = useState(item?.advertisedDealId || '')
+  const [deal, setDeal] = useState(item?.advertisedDealId || (edit.kind === 'purchase' ? edit.initialDealId : '') || '')
   const [coupons, setCoupons] = useState<string[]>(item?.clippedCouponIds || [])
   const [receipt, setReceipt] = useState('')
   const [error, setError] = useState('')

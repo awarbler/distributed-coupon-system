@@ -680,6 +680,8 @@ public final class ReceiptEntryApp {
         Draft draft = new Draft(id);
         draft.number = metadata == null ? null : metadata.receiptNumber();
         draft.retailer = metadata == null ? "Unknown" : metadata.retailer();
+        draft.printedTotalBasis=metadata==null?ReceiptMeta.PrintedTotalBasis.UNKNOWN:metadata.printedTotalBasis();
+        draft.paymentEntryStatus=metadata==null?ReceiptMeta.PaymentEntryStatus.UNKNOWN:metadata.paymentEntryStatus();
         draft.actor = "Local owner"; draft.correcting = true;draft.purchaseChannel=metadata==null?ReceiptMeta.PurchaseChannel.UNKNOWN:metadata.purchaseChannel();
         var o = snapshot.observations();
         draft.date=o.purchaseDate(); draft.time=o.printedTime(); draft.account=o.walgreensCash();
@@ -1034,6 +1036,7 @@ public final class ReceiptEntryApp {
     }
 
     private void editWCDeduction(Draft draft) {
+        draft.paymentEntryStatus = ReceiptMeta.PaymentEntryStatus.UNKNOWN;
         var amount=questions(()->amount("Walgreens Cash used (0 if none)",false,false));
         var matches=draft.payments.stream().filter(p->p.getPaymentType()==PaymentType.WALGREENS_CASH).toList();
         if(matches.size()>1) {output.println("Multiple WC uses exist; use PAYMENTS to select one without merging its history.");return;}
@@ -1043,6 +1046,7 @@ public final class ReceiptEntryApp {
     }
 
     private void editPayment(Draft draft) {
+        draft.paymentEntryStatus = ReceiptMeta.PaymentEntryStatus.UNKNOWN;
         record Change(int index,Payment payment) { }
         var change=questions(()-> {
             for(int i=0;i<draft.payments.size();i++) {var p=draft.payments.get(i);output.println((i+1)+". "+p.getPaymentType()+" | "+dollars(p.getAmount()));}
@@ -1181,7 +1185,9 @@ public final class ReceiptEntryApp {
                     case "DETAILS" -> {
                         var oldMetadata = metadata;
                         var entered = questions(() -> new CorrectionDetails(new ReceiptMeta(required("Retailer"), optional("Receipt number (blank unknown)"),
-                                oldMetadata == null ? null : oldMetadata.purchasedAt(), oldMetadata == null ? null : oldMetadata.storeReference(),oldMetadata==null?ReceiptMeta.PurchaseChannel.UNKNOWN:oldMetadata.purchaseChannel()),
+                                oldMetadata == null ? null : oldMetadata.purchasedAt(), oldMetadata == null ? null : oldMetadata.storeReference(),oldMetadata==null?ReceiptMeta.PurchaseChannel.UNKNOWN:oldMetadata.purchaseChannel(),
+                                oldMetadata==null?ReceiptMeta.PrintedTotalBasis.UNKNOWN:oldMetadata.printedTotalBasis(),
+                                oldMetadata==null?ReceiptMeta.PaymentEntryStatus.UNKNOWN:oldMetadata.paymentEntryStatus()),
                                 date("Receipt date (blank unknown)"), receiptTime()));
                         editedMetadata = entered.metadata();
                         LocalDate date = entered.date();
@@ -1623,6 +1629,7 @@ public final class ReceiptEntryApp {
 
     private void checkoutFields(Draft draft, BigDecimal tax) {
         draft.tax = tax;
+        draft.paymentEntryStatus = ReceiptMeta.PaymentEntryStatus.UNKNOWN;
         draft.unknownRR.clear();
         draft.knownRR.clear();
         int rewardCount;
@@ -1806,10 +1813,10 @@ public final class ReceiptEntryApp {
                         }
                         case 3 -> a.offer = optional("Offer / notes (include spend basis, e.g. P&G spend $35 at sale prices before coupons, earn $10 RR; blank unknown)");
                         case 4 -> {
-                            output.println("1. Buy a quantity\n2. Spend an amount\n3. Receipt\n4. Other");
-                            int selected = integer("Requirement", 1, 4);
+                            output.println("1. Buy a quantity\n2. Spend an amount\n3. Receipt\n4. Other\n5. Purchase-based\n6. Receipt submission / scan");
+                            int selected = integer("Requirement", 1, 6);
                             a.requirementType = selected == 1 ? PromotionType.BUY : selected == 2 ? PromotionType.SPEND : null;
-                            a.requirementCategory = selected == 3 ? "Receipt" : selected == 4 ? "Other" : null;
+                            a.requirementCategory = selected == 3 ? "Receipt" : selected == 4 ? "Other" : selected == 5 ? "Purchase" : selected == 6 ? "ReceiptScan" : null;
                         }
                         case 5 -> {
                             if (a.requirementType == PromotionType.BUY) {
@@ -3282,6 +3289,8 @@ public final class ReceiptEntryApp {
         private final List<ReceiptImportDraft.ReviewIssue> importIssues=new ArrayList<>();
         private String number, time, retailer, actor;
         private ReceiptMeta.PurchaseChannel purchaseChannel=ReceiptMeta.PurchaseChannel.UNKNOWN;
+        private ReceiptMeta.PrintedTotalBasis printedTotalBasis=ReceiptMeta.PrintedTotalBasis.UNKNOWN;
+        private ReceiptMeta.PaymentEntryStatus paymentEntryStatus=ReceiptMeta.PaymentEntryStatus.UNKNOWN;
         private LocalDate date;
         private BigDecimal tax, total, savingPercent;
         private final List<Item> items = new ArrayList<>();
@@ -3302,7 +3311,7 @@ public final class ReceiptEntryApp {
 
         Draft copy() { Draft result = new Draft(id); result.restore(this); return result; }
         void restore(Draft from) {
-            imported=from.imported;entryStage=from.entryStage;purchaseChannel=from.purchaseChannel;
+            imported=from.imported;entryStage=from.entryStage;purchaseChannel=from.purchaseChannel;printedTotalBasis=from.printedTotalBasis;paymentEntryStatus=from.paymentEntryStatus;
             importIssues.clear();importIssues.addAll(from.importIssues);
             sharedKinds.clear();sharedKinds.putAll(from.sharedKinds);
             number = from.number; time = from.time; retailer = from.retailer; actor = from.actor;
@@ -3334,7 +3343,7 @@ public final class ReceiptEntryApp {
         }
 
         /** No combined timestamp is invented from partial date/time observations. */
-        ReceiptMeta metadata() { return new ReceiptMeta(retailer, number, date==null?null:ReceiptTimeInput.parse(time).map(date::atTime).orElse(null), null,purchaseChannel); }
+        ReceiptMeta metadata() { return new ReceiptMeta(retailer, number, date==null?null:ReceiptTimeInput.parse(time).map(date::atTime).orElse(null), null,purchaseChannel,printedTotalBasis,paymentEntryStatus); }
 
         /** Creates a reviewable receipt and validates relationships before save. */
         ReceiptRecord receipt() {

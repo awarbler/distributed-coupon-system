@@ -18,12 +18,11 @@ describe('simplified reward statuses', () => {
     expect(rewardStatusLabel({ kind: 'REGISTER_REWARD', status: 'PAID' })).toBe('Printed at register')
     expect(rewardStatusLabel({ ...earning, status: 'CREDITED' })).toBe('Added to program account')
   })
-  it('requires amount, unit and explicit receipt confirmation', async () => {
+  it('marks the recorded amount received without duplicate confirmation fields', async () => {
     const { user, mutate } = form(); await user.selectOptions(screen.getByLabelText('Reward status'), 'CREDITED')
-    await user.click(screen.getByRole('button', { name: 'Save reward status' })); expect(mutate).not.toHaveBeenCalled()
-    await user.type(screen.getByLabelText('Confirm received amount'), '25.000'); await user.selectOptions(screen.getByLabelText('Confirm unit'), 'points')
-    await user.click(screen.getByRole('button', { name: 'Save reward status' })); expect(mutate).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('checkbox')); await user.click(screen.getByRole('button', { name: 'Save reward status' }))
+    expect(screen.queryByLabelText('Confirm received amount')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Confirm unit')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Save reward status' }))
     expect(mutate).toHaveBeenCalledWith('/receipts/receipt-test/earnings/earning-test/status', 'PUT', { status: 'CREDITED', amount: '25.000', unit: 'points', confirmAmountAndUnit: true }, expect.any(String), '7')
   })
   it('keeps legacy approval visible but unavailable as a new standard choice', () => {

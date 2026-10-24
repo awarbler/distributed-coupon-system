@@ -3,6 +3,7 @@ import type { FormEvent } from 'react'
 import { ApiClient, ApiError } from '../../api/client'
 import type { PlanCheckout } from '../../types/platform'
 import { Modal } from '../../components/ui'
+import { money } from '../../api/format'
 
 
 interface Props {
@@ -232,6 +233,18 @@ export function CheckoutForm({
               {checkout.summary.remainingPayment ?? 'Incomplete'}
             </strong>
           </div>
+
+          <div className="detail-row">
+            <span>{checkout.summary.rewardsComplete === false ? 'Known potential promotional rewards' : 'Potential promotional rewards'}</span>
+            <strong>
+              {checkout.summary.dealProgress?.every(deal => deal.rewardStatus === 'NOT_APPLICABLE')
+                ? 'No separate promotional rewards'
+                : checkout.summary.rewardsComplete === false
+                  ? `${money(checkout.summary.knownPotentialRewards ?? null)} — total incomplete`
+                  : checkout.summary.expectedRewards === null ? 'Unknown' : money(checkout.summary.expectedRewards)}
+            </strong>
+          </div>
+          {checkout.summary.reviewRequired && <p className="panel-note">Store/date review needed. These are potential benefits, not earned rewards.</p>}
 
           {checkout.summary.issues.map((issue, index) => (
             <p className="panel-note" key={index}>{issue}</p>

@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import type { ReactNode } from 'react'
+import { useEffect, useRef, useLayoutEffect } from 'react'
+import type { ReactNode, TextareaHTMLAttributes } from 'react'
 import { ArrowRight, CircleAlert, Inbox, X } from 'lucide-react'
 
 export function Empty({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
@@ -7,8 +7,8 @@ export function Empty({ title, children, action }: { title: string; children?: R
 }
 export function Notice({ children }: { children: ReactNode }) { return <div className="notice"><CircleAlert size={18} /><div>{children}</div></div> }
 export function Unavailable({ children }: { children: ReactNode }) { return <div className="unavailable"><span className="eyebrow">Not available yet</span><p>{children}</p></div> }
-export function Panel({ title, subtitle, action, children }: { title: string; subtitle?: string; action?: ReactNode; children: ReactNode }) {
-  return <section className="panel"><div className="panel-head"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action}</div>{children}</section>
+export function Panel({ title, subtitle, action, children, className = '' }: { className?: string; title: string; subtitle?: string; action?: ReactNode; children: ReactNode }) {
+  return <section className={`panel ${className}`}><div className="panel-head"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action}</div>{children}</section>
 }
 export function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return <div className="page-heading"><div><span className="eyebrow">Your grocery workspace</span><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>
@@ -33,3 +33,29 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   return <div className="modal-shade"><div ref={ref} className="modal" role="dialog" aria-modal="true" aria-label={title}><div className="modal-heading"><h2>{title}</h2><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 export function Loading() { return <div className="loading" role="status"><span className="spinner" />Loading your workspace…</div> }
+
+
+/** Starts at the standard control height and grows to reveal the complete value. */
+export function AutoSizeTextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const resize = () => {
+      node.style.height = 'auto'
+      const css = getComputedStyle(node)
+      const border = parseFloat(css.borderTopWidth) + parseFloat(css.borderBottomWidth)
+      node.style.height = `${Math.max(parseFloat(css.minHeight) || 0, node.scrollHeight + border)}px`
+    }
+    resize()
+    if (typeof ResizeObserver === 'undefined') return
+    let width = node.getBoundingClientRect().width
+    const observer = new ResizeObserver(() => {
+      const next = node.getBoundingClientRect().width
+      if (next !== width) { width = next; resize() }
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [props.value])
+  return <textarea {...props} ref={ref} rows={1} className={`autosize-input ${props.className ?? ''}`} />
+}

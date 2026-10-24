@@ -126,7 +126,7 @@ class OwnerReceiptActionsTest {
     }
     @Test void missingPointValuationProducesPartialTotalsInsteadOfAnInventedConversion() {
         var repo = new InMemoryTransactionRepository(); var saved = receipt(repo); var tx = saved.transaction(); var o = tx.getObservations();
-        var earnings = new ArrayList<>(o.earnings()); earnings.add(earn(EarningKind.THIRD_PARTY_REBATE,"P&G Brand",BenefitKind.POINTS,"250",null));
+        var earnings = new ArrayList<>(o.earnings()); earnings.add(earn(EarningKind.THIRD_PARTY_REBATE,"Merryfield",BenefitKind.POINTS,"250",null));
         tx.setObservations(new ReceiptObservations(o.purchaseDate(),o.printedTime(),earnings,o.unidentifiedRR(),o.walgreensCash(),o.savings(),o.discountKinds()));
         repo.update(saved.transactionId(),1,tx,saved.metadata(),List.of(),request(),new ReceiptChangeContext("AJ","Add PG","AJ",Instant.now()));
         var output = run(repo,"2\nR1\nFULL\nBACK\n9\n");

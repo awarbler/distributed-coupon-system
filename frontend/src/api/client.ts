@@ -60,11 +60,17 @@ saveCheckout(
     revision
   ) as Promise<PlanCheckout>
 }
+  workspaceAt(asOf: string, signal?: AbortSignal) { return this.get<Workspace>(`/workspace?asOf=${encodeURIComponent(asOf)}`, signal) }
+  account(provider: string, from: string, to: string, signal?: AbortSignal) { return this.get<import('../types/platform').AccountReport>(`/accounts/activity?provider=${encodeURIComponent(provider)}&from=${from}&to=${to}`, signal) }
+  async standaloneRewards(signal?: AbortSignal) { const value = await this.get<import('../types/platform').StandaloneRR[]>('/rewards/register-rewards',signal); if(!Array.isArray(value))throw new ApiError(502,'Restart the updated API to load rewards without receipts.'); return value }
+  receiptReport(metric: string, from: string, to: string, search: string, sort: string, signal?: AbortSignal) { return this.get<import('../types/platform').ReceiptReport>(`/receipts/report?${new URLSearchParams({metric,from,to,search,sort})}`,signal) }
+  receiptSummary(from: string, to: string, signal?: AbortSignal) { return this.get<import('../types/platform').Savings>(`/receipts/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, signal) }
+  rrMatches(id: string, signal?: AbortSignal) { return this.get<import('../types/platform').RRMatchUse[]>(`/receipts/${encodeURIComponent(id)}/rr-matches`,signal) }
   receipt(id: string, signal?: AbortSignal) { return this.get<Receipt>(`/receipts/${encodeURIComponent(id)}`, signal) }
   history(id: string, signal?: AbortSignal) { return this.get<History[]>(`/receipts/${encodeURIComponent(id)}/history`, signal) }
   totals(id: string, signal?: AbortSignal) { return this.get<Totals>(`/receipts/${encodeURIComponent(id)}/totals`, signal) }
   async evidence(receipt: string, id: string) { return (await this.request(`/receipts/${encodeURIComponent(receipt)}/evidence/${encodeURIComponent(id)}`)).blob() }
-  async mutate(path: string, method: 'POST' | 'PUT', body: unknown, key: string, revision?: string): Promise<unknown> {
+  async mutate(path: string, method: 'POST' | 'PUT' | 'DELETE', body: unknown, key: string, revision?: string): Promise<unknown> {
     const response = await this.request(path, { method, body: JSON.stringify(body), headers: {
       'Content-Type': 'application/json', 'Idempotency-Key': key, ...(revision ? { 'If-Match-Revision': revision } : {}),
     } })

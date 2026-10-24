@@ -1,5 +1,10 @@
 package coupons;
 
+import coupons.ProviderBalanceSummary.AccountActivityView;
+
+import java.time.*;
+import java.util.*;
+
 import coupons.ReceiptObservations.*;
 import coupons.repository.*;
 import java.io.ByteArrayOutputStream;
@@ -14,6 +19,18 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ProviderBalanceSummaryTest {
+    @Test void memberRewardExpirationSurvivesSerializationAndAppearsInActivity() throws Exception {
+        var day=LocalDate.of(2026,10,24);var expiry=day.plusDays(30);
+        var value=new AccountAdjustment(UUID.randomUUID(),day,"ECB",null,BigDecimal.ONE,"Member reward: bonus","test",Instant.now(),expiry);
+        var bytes=new ByteArrayOutputStream();try(var out=new java.io.ObjectOutputStream(bytes)){out.writeObject(value);}
+        AccountAdjustment restored;try(var in=new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray()))){restored=(AccountAdjustment)in.readObject();}
+        assertEquals(expiry,restored.expirationDate());
+        var repository=new InMemoryTransactionRepository();repository.recordAccountAdjustment(restored);
+        assertTrue(new ProviderBalanceSummary(repository).movements(List.of()).getFirst().source().contains("Expires "+expiry));
+        assertNull(new AccountAdjustment(UUID.randomUUID(),day,"ECB",null,BigDecimal.ONE,"Legacy","test",Instant.now()).expirationDate());
+        assertThrows(IllegalArgumentException.class,()->new AccountAdjustment(UUID.randomUUID(),day,"ECB",null,BigDecimal.ONE,"Bad date","test",Instant.now(),day.minusDays(1)));
+    }
+
     private static final LocalDate DAY = LocalDate.of(2026, 10, 4);
     private static final Currency USD = Currency.getInstance("USD");
 
@@ -81,12 +98,12 @@ class ProviderBalanceSummaryTest {
     @Test
     void missingValuationAndStartingBalancesAreNotInventedAndPendingIsExcluded() {
         var summary = new ProviderBalanceSummary();
-        summary.recordOpening(DAY, "Fetch", BigDecimal.ONE, false);
+        summary.recordOpening(DAY, "Merryfield", BigDecimal.ONE, false);
         summary.recordOpening(DAY, "Ibotta", new BigDecimal("10"), false);
         String output = print(summary, List.of(receipt(DAY, List.of(
-                earned(EarningKind.THIRD_PARTY_REBATE, "Fetch", BenefitKind.POINTS, "25", RebateStatus.CREDITED, null),
+                earned(EarningKind.THIRD_PARTY_REBATE, "Merryfield", BenefitKind.POINTS, "25", RebateStatus.CREDITED, null),
                 earned(EarningKind.THIRD_PARTY_REBATE, "Ibotta", BenefitKind.CASH, "3.05", RebateStatus.APPROVED, null)), false)));
-        assertTrue(output.contains("Fetch | Missing data | $1.00 | Missing data"), output);
+        assertTrue(output.contains("Merryfield | Missing data | $1.00 | Missing data"), output);
         assertTrue(output.contains("Ibotta | Missing data | $10.00 | $10.00"), output);
         assertEquals(new BigDecimal("10"),summary.balance(DAY,"Ibotta",List.of()).endUsd());
         assertTrue(output.contains("partial"));
@@ -101,5 +118,35 @@ class ProviderBalanceSummaryTest {
         assertEquals(BigDecimal.ONE, summary.openingHistory().get(0).value());
         assertTrue(print(summary, List.of()).contains("Swagbucks | Missing data | $9.95 | $9.95"));
         assertThrows(UnsupportedOperationException.class, () -> summary.openingHistory().clear());
+    }
+}
+
+class AccountActivityViewTest {
+    @Test void linksExistingEarningAndUseWithoutAddingAMovementAndCarriesOpening() {
+        var day=LocalDate.of(2026,10,5);var source=UUID.randomUUID();var spent=UUID.randomUUID();var event=UUID.randomUUID();var earning=UUID.randomUUID();
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ZERO));
+        var e=new Earning(earning,EarningKind.REGISTER_REWARD,"Walgreens","Neutrogena — Buy 2, Get $7 RR",Scope.RECEIPT,List.of(),null,new RebateBenefit(BenefitKind.STORE_COUPON,new BigDecimal("7"),Currency.getInstance("USD"),"Walgreens"),RebateStatus.PAID,null,null,null,List.of());
+        tx.setObservations(new ReceiptObservations(day,"8:17 AM",List.of(e),List.of(),null,List.of(),Map.of()));
+        var used=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ZERO));used.setObservations(new ReceiptObservations(day,"10:13 AM",List.of(),List.of(new UnidentifiedRR(event,new BigDecimal("7"),"RR")),null,List.of(),Map.of()));
+        var records=List.of(new ReceiptRecord(source,ReceiptStatus.ACTIVE,1,tx,new ReceiptMeta("Walgreens","earned",null,null)),new ReceiptRecord(spent,ReceiptStatus.ACTIVE,1,used,new ReceiptMeta("Walgreens","used",null,null)));
+        var summary=new ProviderBalanceSummary();summary.recordOpening(day.minusDays(1),"Register Rewards",new BigDecimal("2"),false);
+        var link=new RRUsageLink(earning,true,event,spent,new BigDecimal("7"),"Confirmed","owner",Instant.now());
+        var rows=AccountActivityView.project(summary,records,List.of(link));assertEquals(2,rows.size());
+        assertEquals(new BigDecimal("2"),rows.getFirst().beforeUsd());assertEquals(new BigDecimal("9"),rows.getFirst().afterUsd());assertEquals(new BigDecimal("2"),rows.getLast().afterUsd());
+        assertEquals(source,rows.getLast().rewards().getFirst().receiptId());assertEquals(spent,rows.getFirst().rewards().getFirst().spentReceiptId());
+        assertTrue(rows.getLast().description().startsWith("Used "));assertEquals(BigDecimal.ZERO,rows.stream().map(a->a.movement().usd()).reduce(BigDecimal.ZERO,BigDecimal::add));
+        assertEquals(new BigDecimal("2"),summary.balance(day.plusDays(1),"Register Rewards",records).startUsd());
+        assertNull(AccountActivityView.project(new ProviderBalanceSummary(),records,List.of(link)).getFirst().beforeUsd());
+    }
+    @Test void unvaluedPointsKeepNativeBalancesWithoutInventingDollarsOrPayouts() {
+        var day=LocalDate.of(2026,10,5);var summary=new ProviderBalanceSummary();
+        summary.recordOpening(day,"Merryfield",new BigDecimal("100"),null,false,"No dollar valuation","Confirmed points");
+        var e=new Earning(UUID.randomUUID(),EarningKind.THIRD_PARTY_REBATE,"Merryfield","Receipt scan",Scope.RECEIPT,List.of(),null,new RebateBenefit(BenefitKind.POINTS,new BigDecimal("25"),null,"Merryfield"),RebateStatus.CREDITED,null,null,null,List.of());
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ZERO));
+        tx.setObservations(new ReceiptObservations(day,"9:00 AM",List.of(e),List.of(),null,List.of(),Map.of()));
+        var record=new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,tx);
+        var row=AccountActivityView.project(summary,List.of(record),List.of()).getFirst();
+        assertEquals(new BigDecimal("100"),row.beforePoints());assertEquals(new BigDecimal("125"),row.afterPoints());
+        assertNull(row.movement().usd());assertNull(row.beforeUsd());assertNull(row.afterUsd());assertNull(row.valuationBasis());assertTrue(row.rewards().isEmpty());
     }
 }

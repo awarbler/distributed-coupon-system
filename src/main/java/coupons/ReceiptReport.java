@@ -136,6 +136,12 @@ public final class ReceiptReport {
             row(output, "Calculated checkout:", calculator.calculateExpectedCheckoutAmount(transaction));
             row(output, "Difference (reported minus calculated):", difference);
         }
+        var paymentReview = calculator.reconcilePayments(transaction, receipt.metadata());
+        output.println("ACTUAL OUT OF POCKET (recorded payment evidence)");
+        if (paymentReview.recordedCashCardPaid() == null) output.println("Actual cash/card paid: Not recorded / completeness unknown");
+        else row(output, "Actual cash/card paid:", paymentReview.recordedCashCardPaid());
+        output.println("Printed-total basis: " + paymentReview.printedTotalBasis());
+        output.println("Payment reconciliation: " + paymentReview.status() + " — " + paymentReview.reason());
         var tenders = transaction.getPayments().stream().filter(p -> p.getPaymentType() != PaymentType.WALGREENS_CASH
                 && p.getPaymentType() != PaymentType.REGISTER_REWARD).toList();
         output.println();

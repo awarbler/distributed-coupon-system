@@ -42,6 +42,90 @@ class SavingsReportTest {
                 earning(EarningKind.THIRD_PARTY_REBATE,"Fetch","25",BenefitKind.POINTS,RebateStatus.CREDITED,n("0.025")),
                 earning(EarningKind.THIRD_PARTY_REBATE,"P&G Brand","250",BenefitKind.POINTS,RebateStatus.CREDITED,n("250").divide(n("150"),MathContext.DECIMAL128))),DAY);
     }
+    @Test void rewardsOverviewAddsClosingBalancesToOutstandingExpectedRewardsOnce() {
+        var summary=new ProviderBalanceSummary();summary.recordOpening(DAY,"Walgreens Cash",n("20"),false);
+        var r=receipt("Rewards","10","0","2","2","0","0","0","0",List.of(
+                earning(EarningKind.WALGREENS_CASH,"Walgreens","3",BenefitKind.STORE_REWARD,RebateStatus.CREDITED,null),
+                earning(EarningKind.THIRD_PARTY_REBATE,"Ibotta","5",BenefitKind.CASH,RebateStatus.EXPECTED,null),
+                earning(EarningKind.THIRD_PARTY_REBATE,"Ibotta","99",BenefitKind.CASH,RebateStatus.REJECTED,null)),DAY);
+        var result=PostgresPlatformRepository.rewardsOverview(summary,List.of(r),DAY,List.of("Walgreens Cash"));
+        assertEquals(0,n("23").compareTo((BigDecimal)result.get("available")));
+        assertEquals(0,n("5").compareTo((BigDecimal)result.get("expected")));
+        assertEquals(0,n("28").compareTo((BigDecimal)result.get("total")));
+        assertEquals(1,result.get("expectedCount"));
+    }
+    @Test void benefitReportIncludesExistingPrintedWcFallbackWithoutCreatingAnEarning() {
+        var r=receipt("Footer","10","0","2","2","0","0","0","0",List.of(),DAY);
+        r.transaction().setObservations(new ReceiptObservations(DAY,null,List.of(),List.of(),new WalgreensCashAccount(n("5"),BigDecimal.ZERO,n("2.66"),n("7.66")),List.of(),Map.of()));
+        var report=PostgresPlatformRepository.receiptReport(List.of(r),"benefits",null,null,"","newest");
+        assertEquals(n("2.66"),report.get("matchedTotal"));
+        assertTrue(r.transaction().getObservations().earnings().isEmpty());
+    }
+    @Test void benefitReportSeparatesConfirmedExpectedAndRejectedValues() {
+        var receipt=receipt("Benefits","10","0","2","2","0","0","0","0",List.of(
+                earning(EarningKind.WALGREENS_CASH,"Walgreens","7",BenefitKind.STORE_REWARD,RebateStatus.CREDITED,null),
+                earning(EarningKind.WALGREENS_CASH,"Walgreens","5",BenefitKind.STORE_REWARD,RebateStatus.EXPECTED,null),
+                earning(EarningKind.WALGREENS_CASH,"Walgreens","9",BenefitKind.STORE_REWARD,RebateStatus.REJECTED,null)),DAY);
+        var report=PostgresPlatformRepository.receiptReport(List.of(receipt),"benefits",DAY,DAY,"","oldest");
+        assertEquals(0,n("7").compareTo((BigDecimal)report.get("matchedTotal")));
+        assertEquals(0,n("5").compareTo((BigDecimal)report.get("unconfirmedTotal")));
+        assertEquals(3,((List<?>)report.get("rows")).size());
+        var filtered=PostgresPlatformRepository.receiptReport(List.of(receipt),"benefits",DAY,DAY,"Unconfirmed","oldest");
+        assertEquals(1,((List<?>)filtered.get("rows")).size());
+        assertEquals(0,n("7").compareTo((BigDecimal)((Map<?,?>)filtered.get("summary")).get("newlyEarned")));
+    }
+    @Test void receiptMetricReportsReconcileAndFilterWithoutChangingPeriodTotals() {
+        var first=first();var records=List.of(first,second());
+        for(var metric:List.of("regular","oop","saved","net")) {
+            var report=PostgresPlatformRepository.receiptReport(records,metric,DAY,DAY,"","newest");
+            var summary=(Map<?,?>)report.get("summary");
+            String key=switch(metric){case "regular"->"regularWithTax";case "oop"->"recordedCashCardPaid";case "saved"->"totalSaved";default->"paidAfterRebates";};
+            assertEquals(0,((BigDecimal)summary.get(key)).compareTo((BigDecimal)report.get("matchedTotal")));
+        }
+        var regular=PostgresPlatformRepository.receiptReport(records,"regular",DAY,DAY,"Products","item");
+        assertEquals(2,((List<?>)regular.get("rows")).size());
+        assertEquals(n("69.10"),regular.get("matchedTotal"));
+        var oop=PostgresPlatformRepository.receiptReport(List.of(first),"oop",DAY,DAY,"Cash","store");
+        assertEquals(0,n("3.60").compareTo((BigDecimal)oop.get("matchedCash")));
+        assertEquals(BigDecimal.ZERO,oop.get("matchedCard"));
+        var deleted=new ReceiptRecord(first.transactionId(),ReceiptStatus.DELETED,2,first.transaction(),first.metadata(),first.evidenceIds());
+        assertTrue(((List<?>)PostgresPlatformRepository.receiptReport(List.of(first,deleted),"regular",null,null,"","oldest").get("rows")).isEmpty());
+    }
+    @Test void productLookupUsesLatestActiveRevisionsAndRetainsSkuConflictsAndZeros() {
+        var a=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));
+        a.addPurchaseItem(new PurchaseItem("Soap","00123",n("1"),n("1"),4));
+        var first=new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,a);
+        var b=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));
+        b.addPurchaseItem(new PurchaseItem("Soap","00123",n("2.49"),n("2.49"),2));
+        var latest=new ReceiptRecord(first.transactionId(),ReceiptStatus.ACTIVE,2,b);
+        var c=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));
+        c.addPurchaseItem(new PurchaseItem("Different description","00123",n("3"),n("3"),1));
+        var other=new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,c);
+        var suggestions=PostgresPlatformRepository.productLookup(List.of(first,latest,other));
+        assertEquals(2,suggestions.size());assertTrue(suggestions.stream().allMatch(r->"00123".equals(r.get("sku"))));
+        assertEquals(n("2.49"),suggestions.stream().filter(r->"Soap".equals(r.get("description"))).findFirst().orElseThrow().get("regularPrice"));
+        var deleted=new ReceiptRecord(first.transactionId(),ReceiptStatus.DELETED,3,b);
+        assertEquals(1,PostgresPlatformRepository.productLookup(List.of(first,latest,other,deleted)).size());
+    }
+    @Test void existingPgAndFetchPointsWithoutValuationsUseAutomaticRatesWithoutMutation() {
+        var pg=earning(EarningKind.THIRD_PARTY_REBATE,"P&G Brand","100",BenefitKind.POINTS,RebateStatus.CREDITED,null);
+        var fetch=earning(EarningKind.THIRD_PARTY_REBATE,"Fetch","25",BenefitKind.POINTS,RebateStatus.CREDITED,null);
+        var r=receipt("Auto","10","0","2","2","0","0","0","0",List.of(pg,fetch),DAY);
+        var totals=SavingsReport.calculate(List.of(r));
+        assertTrue(totals.earningsKnown()); assertEquals(0,totals.newlyEarned().compareTo(n("0.425")));
+        assertEquals(0,totals.paidAfterRebates().compareTo(n("1.575")));
+        assertNull(pg.valuation()); assertNull(fetch.valuation());
+        var explicit=earning(EarningKind.THIRD_PARTY_REBATE,"P&G Brand","100",BenefitKind.POINTS,RebateStatus.CREDITED,n("0.60"));
+        assertEquals(n("0.60"),SavingsReport.effectiveValuation(explicit).amount());
+    }
+    @Test void dateRangesIncludeEndpointsAndExcludeDeletedLatestRevisions() {
+        var first = first(); var second = second();
+        var deleted = new ReceiptRecord(second.transactionId(), ReceiptStatus.DELETED, 2, second.transaction(), second.metadata(), second.evidenceIds());
+        assertEquals(List.of(first), SavingsReport.range(List.of(first, second, deleted), DAY, DAY));
+        assertTrue(SavingsReport.range(List.of(first), DAY.plusDays(1), DAY.plusDays(3)).isEmpty());
+        assertThrows(IllegalArgumentException.class, () -> SavingsReport.range(List.of(first), DAY.plusDays(1), DAY));
+        assertEquals(SavingsReport.calculate(List.of(first)).paidAfterRebates(), SavingsReport.calculate(SavingsReport.range(List.of(first), DAY.minusDays(1), DAY.plusDays(1))).paidAfterRebates());
+    }
     @Test void detailedReportsSeparateRewardProgramsPaymentsAndProvidersWithoutChangingTotals() {
         var r=first();r.transaction().addPayment(new Payment(PaymentType.CARD,n("1.00")));
         var before=ReceiptSnapshot.from(r.transaction());
@@ -93,12 +177,12 @@ class SavingsReportTest {
     }
     @Test void missingValuationAndPendingValuesAreNotInventedAndPercentIsUnavailable() {
         var receipt=receipt("Missing","10","0","10","10","0","0","0","0",List.of(
-                earning(EarningKind.THIRD_PARTY_REBATE,"Fetch","25",BenefitKind.POINTS,RebateStatus.CREDITED,null),
+                earning(EarningKind.THIRD_PARTY_REBATE,"Merryfield","25",BenefitKind.POINTS,RebateStatus.CREDITED,null),
                 earning(EarningKind.THIRD_PARTY_REBATE,"Ibotta","99",BenefitKind.CASH,RebateStatus.PENDING,null)),DAY);
         var t=SavingsReport.calculate(List.of(receipt));assertFalse(t.earningsKnown());assertNull(t.percentSaved());
-        assertEquals(BigDecimal.ZERO,t.newlyEarned());assertEquals(Set.of("Fetch"),t.unvaluedApps());
+        assertEquals(BigDecimal.ZERO,t.newlyEarned());assertEquals(Set.of("Merryfield"),t.unvaluedApps());
         var bytes=new ByteArrayOutputStream();SavingsReport.print("Day",List.of(receipt),new PrintStream(bytes));
-        assertTrue(bytes.toString().contains("missing USD valuation for Fetch"));assertFalse(bytes.toString().contains("$99.00"));
+        assertTrue(bytes.toString().contains("missing USD valuation for Merryfield"));assertFalse(bytes.toString().contains("$99.00"));
         var zero=receipt("Zero","0","0","0","0","0","0","0","0",List.of(),DAY);
         assertNull(SavingsReport.calculate(List.of(zero)).percentSaved());
     }
@@ -146,5 +230,19 @@ class SavingsReportTest {
         }
         tx.setObservations(new ReceiptObservations(DAY,"9:00 AM",List.of(),List.of(),footer,List.of(),Map.of()));
         assertEquals(0,n("5").compareTo(SavingsReport.calculate(List.of(new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,tx,null,List.of()))).newlyEarned()));
+    }
+    @Test void webPaidAfterRebatesIsExactlyTheExistingCliValueWithoutCompletenessMetadata() {
+        for(var receipt:List.of(first(),second())) {
+            var before=ReceiptSnapshot.from(receipt.transaction());
+            var cli=SavingsReport.calculate(List.of(receipt));
+            var totals=PostgresPlatformRepository.totals(receipt);
+            @SuppressWarnings("unchecked") var savings=(Map<String,Object>)totals.get("savings");
+            assertEquals(cli.paidAfterRebates(),savings.get("paidAfterRebates"));
+            assertNotNull(savings.get("paidAfterRebates"));assertNull(totals.get("benefitAdjustedCashSpending"));
+            assertEquals(ReceiptMeta.PaymentEntryStatus.UNKNOWN,receipt.metadata().paymentEntryStatus());
+            assertEquals(before,ReceiptSnapshot.from(receipt.transaction()));
+            var out=new ByteArrayOutputStream();SavingsReport.print("Spreadsheet",List.of(receipt),new PrintStream(out));
+            assertTrue(out.toString().contains("-$"+cli.paidAfterRebates().abs().setScale(2,RoundingMode.HALF_UP).toPlainString()),out.toString());
+        }
     }
 }

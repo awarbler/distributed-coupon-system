@@ -1,5 +1,10 @@
 package coupons;
 
+import coupons.repository.*;
+import coupons.ReceiptObservations.*;
+import java.util.*;
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -300,5 +305,103 @@ class TransactionCalculatorTest {
                 new BigDecimal("5.00"),
                 calculator.calculateReceiptDifference(transaction)
         );
+    }
+
+    private CouponTransaction splitPaymentReceipt() {
+        var tx = new CouponTransaction(new ReceiptTotals(new BigDecimal("1.98"), new BigDecimal("25.96")));
+        tx.addPurchaseItem(new PurchaseItem("Basket", null, new BigDecimal("44.96"), new BigDecimal("31.98"), 1));
+        tx.addAppliedCoupon(new CouponApplied(UUID.randomUUID(), "Recorded discounts", new BigDecimal("8"), List.of(), null, true));
+        tx.addPayment(new Payment(PaymentType.WALGREENS_CASH, new BigDecimal("20")));
+        tx.addPayment(new Payment(PaymentType.CARD, new BigDecimal("5.96")));
+        return tx;
+    }
+    private coupons.repository.ReceiptMeta paymentMetadata(
+            coupons.repository.ReceiptMeta.PrintedTotalBasis basis,
+            coupons.repository.ReceiptMeta.PaymentEntryStatus entry) {
+        return new coupons.repository.ReceiptMeta("Walgreens", "test", null, null,
+                coupons.repository.ReceiptMeta.PurchaseChannel.IN_STORE, basis, entry);
+    }
+    @Test void splitFundingBalancesWithoutChangingLegacyDifference() {
+        var tx = splitPaymentReceipt();
+        var review = calculator.reconcilePayments(tx, paymentMetadata(
+                coupons.repository.ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,
+                coupons.repository.ReceiptMeta.PaymentEntryStatus.COMPLETE));
+        assertEquals(TransactionCalculator.ReconciliationStatus.BALANCED, review.status());
+        assertEquals(0, review.recordedCashCardPaid().compareTo(new BigDecimal("5.96")));
+        assertEquals(0, review.difference().signum());
+        assertEquals(0, review.purchaseDifference().signum());
+        assertEquals(0, calculator.calculateReceiptDifference(tx).compareTo(new BigDecimal("20")));
+        org.junit.jupiter.api.Assertions.assertFalse(review.acknowledgementRequired());
+    }
+    @Test void onePaymentDoesNotEstablishCompletenessAndUnknownBasisIsPreserved() {
+        var tx = splitPaymentReceipt();
+        var partial = calculator.reconcilePayments(tx, paymentMetadata(
+                coupons.repository.ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,
+                coupons.repository.ReceiptMeta.PaymentEntryStatus.PARTIAL));
+        assertEquals(TransactionCalculator.ReconciliationStatus.INCOMPLETE, partial.status());
+        assertNull(partial.difference());
+        var unknown = calculator.reconcilePayments(tx, new coupons.repository.ReceiptMeta("Walgreens", null, null, null));
+        assertEquals(TransactionCalculator.ReconciliationStatus.CANNOT_VERIFY, unknown.status());
+        assertNull(unknown.calculatedPurchaseTotal());
+        assertNull(unknown.difference());
+    }
+    @Test void legacyOtherAndRegisterRewardTenderRemainUnresolved() {
+        var tx = splitPaymentReceipt();
+        tx.addPayment(new Payment(PaymentType.OTHER, BigDecimal.ONE));
+        tx.addPayment(new Payment(PaymentType.REGISTER_REWARD, BigDecimal.ONE));
+        var result = calculator.reconcilePayments(tx, paymentMetadata(
+                coupons.repository.ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,
+                coupons.repository.ReceiptMeta.PaymentEntryStatus.COMPLETE));
+        assertEquals(2, result.unresolvedPaymentIds().size());
+        assertEquals(TransactionCalculator.ReconciliationStatus.INCOMPLETE, result.status());
+        assertNull(result.difference());
+    }
+    @Test void afterRedemptionTotalDoesNotCountWalgreensCashTwice() {
+        var tx = new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO, new BigDecimal("5")));
+        tx.addPurchaseItem(new PurchaseItem("Soap", null, new BigDecimal("25"), new BigDecimal("25"), 1));
+        tx.addPayment(new Payment(PaymentType.WALGREENS_CASH, new BigDecimal("20")));
+        tx.addPayment(new Payment(PaymentType.CASH, new BigDecimal("5")));
+        var result = calculator.reconcilePayments(tx, paymentMetadata(
+                coupons.repository.ReceiptMeta.PrintedTotalBasis.AFTER_REWARD_REDEMPTIONS,
+                coupons.repository.ReceiptMeta.PaymentEntryStatus.COMPLETE));
+        assertEquals(TransactionCalculator.ReconciliationStatus.BALANCED, result.status());
+        assertEquals(0, result.knownFundingSubtotal().compareTo(new BigDecimal("5")));
+    }
+    @Test void explicitOtherDeductionIsNotFundingAndUnrecordedZeroIsNotInvented() {
+        var tx = new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO, BigDecimal.ZERO));
+        var other = new Payment(PaymentType.OTHER, new BigDecimal("2")); tx.addPayment(other);
+        var o = tx.getObservations();
+        tx.setObservations(new ReceiptObservations(o.purchaseDate(), o.printedTime(), o.earnings(), o.unidentifiedRR(),
+                o.walgreensCash(), o.savings(), o.discountKinds(), o.receiptSavingValuePercent(), o.promotionLinks(),
+                new ReceiptWorksheetData(java.util.Map.of(), java.util.Map.of(other.getPaymentId(),
+                        new ReceiptWorksheetData.Use(List.of(), null, true)), null), o.footerStatus()));
+        var result = calculator.reconcilePayments(tx, null);
+        assertEquals(TransactionCalculator.PaymentRole.CHECKOUT_DEDUCTION, calculator.paymentRole(tx, other));
+        assertEquals(0, result.knownFundingSubtotal().signum()); assertNull(result.recordedCashCardPaid());
+    }
+
+}
+class RecordedCalculationChecksTest {
+    @Test void showsBothCalculationsForHistoricalReceiptsWithoutChangingTheirFacts() {
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,new BigDecimal("25.96")));
+        tx.addPurchaseItem(new PurchaseItem("Product",null,new BigDecimal("25.96"),new BigDecimal("25.96"),1));
+        tx.addPayment(new Payment(PaymentType.WALGREENS_CASH,new BigDecimal("20")));tx.addPayment(new Payment(PaymentType.CARD,new BigDecimal("5.96")));
+        var metadata=new ReceiptMeta("Walgreens","original",null,null);var before=ReceiptSnapshot.from(tx);var calculator=new TransactionCalculator();
+        var result=calculator.recordedChecks(tx,metadata);
+        assertEquals(new BigDecimal("25.96"),result.beforeFunding().calculatedTotal());assertEquals(new BigDecimal("5.96"),result.afterRewards().calculatedTotal());
+        assertEquals(0,result.beforeFunding().purchaseDifference().signum());assertEquals(0,result.beforeFunding().paymentDifference().signum());
+        assertEquals(new BigDecimal("20.00"),result.afterRewards().purchaseDifference());assertFalse(result.beforeFunding().verified());assertFalse(result.afterRewards().verified());
+        assertEquals(before,ReceiptSnapshot.from(tx));assertEquals(ReceiptMeta.PrintedTotalBasis.UNKNOWN,metadata.printedTotalBasis());assertNull(calculator.reconcilePayments(tx,metadata).calculatedPurchaseTotal());
+    }
+    @Test void zerosAreDisplayedButVerificationStillRequiresExplicitBasisAndCompleteResolvedEntry() {
+        var tx=new CouponTransaction(new ReceiptTotals(new BigDecimal("0.21"),new BigDecimal("0.79")));
+        tx.addPurchaseItem(new PurchaseItem("Nivea",null,new BigDecimal("3.79"),new BigDecimal("3.79"),2));
+        tx.addPayment(new Payment(PaymentType.WALGREENS_CASH,new BigDecimal("2")));tx.addPayment(new Payment(PaymentType.CASH,new BigDecimal("0.79")));
+        tx.setObservations(new ReceiptObservations(null,null,List.of(),List.of(new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("5"),"Lysol")),null,List.of(),Map.of()));
+        var metadata=new ReceiptMeta("Walgreens",null,null,null,ReceiptMeta.PurchaseChannel.UNKNOWN,ReceiptMeta.PrintedTotalBasis.AFTER_REWARD_REDEMPTIONS,ReceiptMeta.PaymentEntryStatus.COMPLETE);
+        var calculator=new TransactionCalculator();var checks=calculator.recordedChecks(tx,metadata);
+        assertEquals(new BigDecimal("0.79"),checks.afterRewards().calculatedTotal());assertEquals(0,checks.afterRewards().purchaseDifference().signum());assertEquals(0,checks.afterRewards().paymentDifference().signum());assertTrue(checks.afterRewards().verified());assertFalse(checks.beforeFunding().verified());
+        tx.addPayment(new Payment(PaymentType.OTHER,BigDecimal.ONE));
+        assertFalse(calculator.recordedChecks(tx,metadata).afterRewards().verified());
     }
 }

@@ -241,4 +241,28 @@ class PostgresApiIntegrationTest {
         UUID another=UUID.randomUUID();f.put("transactionId",another);var duplicate=call("POST","/receipts/preview",Json.object(f),null,null);assertEquals(200,duplicate.statusCode());assertTrue(duplicate.body().contains(id.toString()));
         f.put("reviewToken",Json.parseObject(duplicate.body()).get("reviewToken"));assertEquals(409,call("POST","/receipts",Json.object(f),"duplicate-metadata",null).statusCode());assertTrue(receipts.findById(another).isEmpty());
     }
+
+    @Test void planningProgressRoundTripsThroughWorkspaceAndCheckoutWithoutReceiptCredit() throws Exception {
+        UUID planId = UUID.randomUUID(), dealId = UUID.randomUUID();
+        plans.save(new ShoppingPlan(planId, "Potential", null, null, List.of(), 1), "test");
+        var terms = new DealTerms(DealTerms.Type.QUANTITY_REWARD, "Dove", null, null, 2, null,
+                0, new BigDecimal("5"), false, null, List.of(), null, null, null);
+        var source = new SourceArtifact(UUID.randomUUID(), "Test terms", "application/json", null,
+                Instant.now(), "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        new PostgresDealRepository(db).save(new AdvertisedDeal(dealId, "Dove", "Buy two", "Walgreens",
+                LocalDate.of(2026, 10, 18), LocalDate.of(2026, 10, 24), List.of(source.getArtifactId()), 1, terms), "test", source);
+        new PostgresPlatformRepository(db).savePurchase(planId, UUID.randomUUID(), "Dove", null, 2,
+                new BigDecimal("6"), new BigDecimal("5"), "MANUAL", dealId, List.of(), 0, "test");
+        var response = call("GET", "/workspace", null, null, null);
+        assertEquals(200, response.statusCode(), response.body());
+        assertTrue(response.body().contains("\"rewardStatus\":\"KNOWN\""));
+        assertTrue(response.body().contains("\"storeStatus\":\"NOT_RECORDED\""));
+        assertTrue(response.body().contains("\"potentialReward\":5"));
+        var checkoutResponse = call("GET", "/shopping-plans/" + planId + "/checkout", null, null, null);
+        assertEquals(200, checkoutResponse.statusCode(), checkoutResponse.body());
+        assertTrue(checkoutResponse.body().contains("\"reviewRequired\":true"));
+        assertTrue(checkoutResponse.body().contains("\"rewardsComplete\":true"));
+        var workspace = Json.parseObject(response.body());
+        assertTrue(((List<?>) workspace.get("receiptEarnings")).isEmpty());
+    }
 }

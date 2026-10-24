@@ -1,6 +1,16 @@
 
 package coupons.repository;
 
+import coupons.repository.PostgresPlatformRepository.ReceiptRRMatching;
+
+import coupons.ReceiptObservations.*;
+import java.time.*;
+
+import coupons.*;
+import java.time.LocalDate;
+import java.util.*;
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -189,5 +199,149 @@ class PostgresPlanCheckoutCalculationTest {
 
         assertNull(summary(result).get("amountDue"));
         assertEquals(false, result.get("estimateComplete"));
+    }
+
+    @Test void unknownRewardsDoNotAlterAmountDueAndRemainIncomplete() {
+        var pricing = new ShoppingEstimate(money("10"), money("10"), money("0"), money("0"),
+                null, money("10"), null, List.of(), List.of(), money("5"), false, true);
+        var result = PostgresPlanCheckoutRepository.calculateView(checkout(), pricing);
+        var summary = (Map<?, ?>) result.get("summary");
+        assertNull(summary.get("expectedRewards"));
+        assertEquals(money("5"), summary.get("knownPotentialRewards"));
+        assertEquals(false, summary.get("rewardsComplete"));
+        assertEquals(true, summary.get("reviewRequired"));
+        assertEquals(money("10.83"), summary.get("amountDue"));
+        assertTrue(((List<?>) summary.get("issues")).size() >= 2);
+    }
+}
+
+class ReceiptPeriodsTest {
+    private ReceiptRecord receipt(String date, String paid, boolean payment) {
+        var tx = new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO, new BigDecimal(paid)));
+        tx.addPurchaseItem(new PurchaseItem("Synthetic", null, new BigDecimal("10"), new BigDecimal(paid), 1));
+        if (payment) tx.addPayment(new Payment(PaymentType.CARD, new BigDecimal(paid)));
+        tx.setObservations(new ReceiptObservations(LocalDate.parse(date), "940 am", List.of(), List.of(), null, List.of(), Map.of()));
+        return new ReceiptRecord(UUID.randomUUID(), ReceiptStatus.ACTIVE, 1, tx, null);
+    }
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> summary(Map<String, Object> periods, String key) {
+        return (Map<String, Object>) periods.get(key);
+    }
+    @Test void groupsAllReceiptsAcrossWeekMonthAndYearBoundariesWithoutPagination() {
+        var records = new ArrayList<ReceiptRecord>();
+        for (int i = 0; i < 6; i++) records.add(receipt("2026-10-07", "1.01", true));
+        records.add(receipt("2026-10-08", "2", true));
+        records.add(receipt("2026-10-29", "3", true));
+        records.add(receipt("2026-11-01", "4", true));
+        records.add(receipt("2027-01-01", "5", true));
+        var deleted = receipt("2026-10-07", "100", true);
+        records.add(deleted);
+        records.add(new ReceiptRecord(deleted.transactionId(), ReceiptStatus.DELETED, 2, deleted.transaction(), null));
+        var periods = PostgresPlatformRepository.receiptPeriods(records);
+        assertEquals(6, summary(periods, "week:2026-10:1").get("receipts"));
+        assertEquals(new BigDecimal("6.06"), summary(periods, "day:2026-10-07").get("recordedCashCardPaid"));
+        assertEquals(1, summary(periods, "week:2026-10:2").get("receipts"));
+        assertEquals(1, summary(periods, "week:2026-10:5").get("receipts"));
+        assertEquals(8, summary(periods, "month:2026-10").get("receipts"));
+        assertEquals(1, summary(periods, "month:2026-11").get("receipts"));
+        assertEquals(1, summary(periods, "month:2027-01").get("receipts"));
+        assertEquals(0, summary(periods, "empty").get("receipts"));
+    }
+    @Test void missingPaymentKeepsKnownSubtotalSeparateFromUnknownSavings() {
+        var periods = PostgresPlatformRepository.receiptPeriods(List.of(receipt("2026-10-01", "2", false), receipt("2026-10-02", "1.23", true)));
+        var totals = summary(periods, "month:2026-10");
+        assertEquals(new BigDecimal("1.23"), totals.get("recordedCashCardPaid"));
+        assertEquals(false, totals.get("recordedCashCardComplete"));
+        assertNull(totals.get("totalSaved"));
+        assertFalse(((List<?>) totals.get("issues")).isEmpty());
+    }
+    @Test void shoppingWeeksIncludeCrossMonthAndCrossYearDates() {
+        var periods = PostgresPlatformRepository.receiptPeriods(List.of(
+                receipt("2026-09-27", "1", true), receipt("2026-10-01", "2", true),
+                receipt("2026-10-03", "3", true), receipt("2026-10-04", "4", true),
+                receipt("2027-01-01", "5", true)));
+        assertEquals(3, summary(periods, "shoppingWeek:2026-09-27").get("receipts"));
+        assertEquals(new BigDecimal("6"), summary(periods, "shoppingWeek:2026-09-27").get("recordedCashCardPaid"));
+        assertEquals(1, summary(periods, "shoppingWeek:2026-10-04").get("receipts"));
+        assertEquals(1, summary(periods, "shoppingWeek:2026-12-27").get("receipts"));
+    }
+
+    @Test void separatesPromotionsManufacturerStoreAndUnclassifiedWithoutChangingTotal() {
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ZERO));
+        var kinds=new HashMap<UUID,ReceiptObservations.DiscountKind>();
+        var values=List.of(ReceiptObservations.DiscountKind.SALE_PROMOTION,ReceiptObservations.DiscountKind.MANUFACTURER,ReceiptObservations.DiscountKind.STORE_COUPON,ReceiptObservations.DiscountKind.STORE,ReceiptObservations.DiscountKind.OTHER);
+        for(int i=0;i<6;i++) {
+            UUID id=UUID.randomUUID();
+            tx.addAppliedCoupon(new CouponApplied(id,"Do not infer manufacturer from this label",new BigDecimal("1.01"),List.of(),null,true));
+            if(i<values.size()) kinds.put(id,values.get(i));
+        }
+        tx.setObservations(new ReceiptObservations(null,null,List.of(),List.of(),null,List.of(),kinds));
+        var split=PostgresPlatformRepository.discountBreakdown(tx);
+        assertEquals(new BigDecimal("1.01"),split.get("salePromotions"));
+        assertEquals(new BigDecimal("1.01"),split.get("manufacturerCoupons"));
+        assertEquals(new BigDecimal("2.02"),split.get("storeDiscounts"));
+        assertEquals(new BigDecimal("2.02"),split.get("unclassified"));
+        assertEquals(new TransactionCalculator().calculateCouponTotal(tx),split.values().stream().map(v->(BigDecimal)v).reduce(BigDecimal.ZERO,BigDecimal::add));
+    }
+
+}
+
+class ReceiptRRMatchingTest {
+    final InMemoryStore store=new InMemoryStore();
+    final InMemoryTransactionRepository repo=new InMemoryTransactionRepository(store,Clock.systemUTC());
+    final LocalDate day=LocalDate.of(2026,10,5);
+    UUID save(LocalDate date,String time,List<Earning> earnings,List<UnidentifiedRR> uses) {
+        UUID id=UUID.randomUUID();var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ZERO));
+        tx.setObservations(new ReceiptObservations(date,time,earnings,uses,null,List.of(),Map.of()));
+        repo.save(id,tx,new ReceiptMeta("Walgreens",id.toString(),null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));return id;
+    }
+    Earning earning(String amount,LocalDate expiry,RebateStatus status) {
+        return new Earning(UUID.randomUUID(),EarningKind.REGISTER_REWARD,"Walgreens","Lysol — Buy 2, Get $5 RR",Scope.RECEIPT,List.of(),null,new RebateBenefit(BenefitKind.STORE_COUPON,new BigDecimal(amount),Currency.getInstance("USD"),"Walgreens"),status,expiry,null,null,List.of());
+    }
+    @Test void listsOnlyUnusedPrintedUnexpiredEqualValueEarlierRewardsAndDoesNotWrite() {
+        var valid=earning("5",day.plusDays(1),RebateStatus.PAID);save(day.minusDays(1),"9:56 AM",List.of(valid),List.of());
+        save(day.minusDays(1),"9 AM",List.of(earning("7",null,RebateStatus.PAID),earning("5",day.minusDays(1),RebateStatus.PAID),earning("5",null,RebateStatus.CREDITED)),List.of());
+        save(day,"5 PM",List.of(earning("5",null,RebateStatus.PAID)),List.of());
+        var use=new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("5"),"Lysol");var spent=save(day,"4:23 PM",List.of(),List.of(use));
+        var state=store.state;var options=ReceiptRRMatching.options(state,spent);
+        assertSame(state,store.state);assertTrue(repo.rrUsageLinks().isEmpty());assertEquals(1,options.getFirst().options().size());assertEquals(valid.earningId(),options.getFirst().options().getFirst().sourceId());
+        repo.linkRRUsage(new RRUsageLink(valid.earningId(),true,use.eventId(),spent,use.amount(),"Matched","owner",Instant.now()));
+        var after=ReceiptRRMatching.options(store.state,spent).getFirst();assertTrue(after.matched());assertTrue(after.options().isEmpty());
+        var next=save(day,"6 PM",List.of(),List.of(new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("5"),"Another RR")));
+        assertTrue(ReceiptRRMatching.options(store.state,next).getFirst().options().stream().noneMatch(o->o.sourceId().equals(valid.earningId())));
+    }
+    @Test void permitsEligibleStandaloneCouponWithoutInventingAnEarningReceipt() {
+        var reward=new RegisterReward("Standalone Lysol RR",new BigDecimal("5"),day.minusDays(1),day.plusDays(3),null);repo.issuedRewards().save(reward);
+        var id=save(day,"4 PM",List.of(),List.of(new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("5"),"Printed RR")));
+        var option=ReceiptRRMatching.options(store.state,id).getFirst().options().getFirst();
+        assertFalse(option.receiptEarning());assertEquals(reward.getRewardId(),option.sourceId());assertNull(option.sourceReceiptNumber());
+    }
+    @Test void recordsUnknownSourceWithoutReceiptDateOrAnotherMoneyMovement() {
+        var use=new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("2"),"Palmolive");var receipt=save(day,"4 PM",List.of(),List.of(use));
+        var before=store.state;var movements=new ProviderBalanceSummary(repo).movements(List.of(repo.findById(receipt).orElseThrow()));
+        var result=ReceiptRRMatching.standalone(before,receipt,1,use.eventId(),UUID.randomUUID(),"Palmolive RR",null,null,"Earning source unknown","owner");
+        assertSame(before,store.state);assertNull(result.reward().getEarnedReceiptId());assertNull(result.reward().getEarnedDate());assertNull(result.reward().getExpirationDate());
+        assertEquals(use.amount(),result.reward().getFaceValue());assertFalse(result.link().receiptEarning());
+        repo.issuedRewards().save(result.reward());repo.linkRRUsage(result.link());
+        assertEquals(movements,new ProviderBalanceSummary(repo).movements(List.of(repo.findById(receipt).orElseThrow())));
+        assertTrue(repo.findById(receipt).orElseThrow().transaction().getObservations().earnings().isEmpty());
+        assertThrows(IllegalArgumentException.class,()->ReceiptRRMatching.standalone(store.state,receipt,1,use.eventId(),UUID.randomUUID(),"Duplicate",null,null,"Unknown","owner"));
+    }
+    @Test void unknownSourceStillRejectsKnownConflictingDatesAndStaleRevision() {
+        var use=new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("2"),"Palmolive");var receipt=save(day,"4 PM",List.of(),List.of(use));var before=store.state;
+        assertThrows(IllegalArgumentException.class,()->ReceiptRRMatching.standalone(before,receipt,1,use.eventId(),UUID.randomUUID(),"Palmolive",day.plusDays(1),null,"Unknown receipt","owner"));
+        assertThrows(IllegalArgumentException.class,()->ReceiptRRMatching.standalone(before,receipt,1,use.eventId(),UUID.randomUUID(),"Palmolive",null,day.minusDays(1),"Unknown receipt","owner"));
+        assertThrows(ConcurrentModificationException.class,()->ReceiptRRMatching.standalone(before,receipt,2,use.eventId(),UUID.randomUUID(),"Palmolive",null,null,"Unknown receipt","owner"));
+        assertSame(before,store.state);
+    }
+    @Test void unusedRewardCanBeSavedBeforeAnyReceiptAndMatchedLaterWithUnknownHistoryConfirmation() {
+        var reward=new RegisterReward("Palmolive RR",new BigDecimal("2"),null,null,null);repo.issuedRewards().save(reward);
+        assertTrue(store.state.receipts().isEmpty());assertTrue(repo.rrUsageLinks().isEmpty());
+        var use=new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("2"),"Palmolive");var receipt=save(day,"4 PM",List.of(),List.of(use));
+        var before=store.state;var option=ReceiptRRMatching.options(before,receipt).getFirst().options().getFirst();assertTrue(option.historyUnknown());
+        assertThrows(IllegalArgumentException.class,()->ReceiptRRMatching.select(before,receipt,use.eventId(),reward.getRewardId(),false,false));
+        assertEquals(reward.getRewardId(),ReceiptRRMatching.select(before,receipt,use.eventId(),reward.getRewardId(),false,true).sourceId());assertSame(before,store.state);
+        repo.linkRRUsage(new RRUsageLink(reward.getRewardId(),false,use.eventId(),receipt,use.amount(),"Confirmed available, date unknown","owner",Instant.now()));
+        assertTrue(ReceiptRRMatching.options(store.state,receipt).getFirst().matched());assertTrue(repo.findById(receipt).orElseThrow().transaction().getObservations().earnings().isEmpty());
     }
 }

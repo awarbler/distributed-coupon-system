@@ -371,6 +371,9 @@ public final class PostgresPlanCheckoutRepository {
         BigDecimal registerCost = pricing.registerCost();
 
         List<String> issues = new ArrayList<>();
+        if (pricing.reviewRequired()) issues.add("Potential rewards require store/date review; they are not earned benefits.");
+        if (!pricing.rewardsComplete()) issues.add("Potential reward total is incomplete; qualifying information is missing.");
+        for (var deal : pricing.dealProgress()) issues.addAll(deal.messages());
 
         BigDecimal promo = value(result, "promoDiscount");
         BigDecimal rr = value(result, "registerRewardsCoupon");
@@ -453,6 +456,10 @@ public final class PostgresPlanCheckoutRepository {
                 tax == null ? null : remaining
         );
         summary.put("expectedRewards", pricing.expectedRewards());
+        summary.put("dealProgress", pricing.dealProgress());
+        summary.put("knownPotentialRewards", pricing.knownPotentialRewards());
+        summary.put("rewardsComplete", pricing.rewardsComplete());
+        summary.put("reviewRequired", pricing.reviewRequired());
         summary.put("issues", issues);
 
         result.put("summary", summary);

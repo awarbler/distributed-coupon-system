@@ -17,7 +17,7 @@ import { CheckoutForm } from './features/shopping/CheckoutForm'
 const navigation = [
   { id: 'dashboard', name: 'Overview', icon: LayoutDashboard }, { id: 'shopping', name: 'Shopping plans', icon: ClipboardList },
   { id: 'receipts', name: 'Receipts', icon: ReceiptText }, { id: 'coupons', name: 'Coupons', icon: Ticket },
-  { id: 'deals', name: 'Deals & promotions', icon: ShoppingBag }, { id: 'rewards', name: 'Rewards & accounts', icon: Wallet },
+  { id: 'deals', name: 'Deals & promotions', icon: ShoppingBag }, { id: 'rewards', name: 'Rewards & Accounts', icon: Wallet },
   { id: 'inventory', name: 'Inventory', icon: Package }, { id: 'rebates', name: 'Rebates', icon: Coins },
 ] as const
 interface InstallEvent extends Event { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
@@ -98,6 +98,8 @@ export default function App() {
         {message && <div className="success" role="status">{message}<button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage('')}><X size={16} /></button></div>}
         {refreshing && !data ? <Loading /> : <WorkspacePages
           data={data}
+          api={api}
+          onChanged={() => void refresh()}
           page={page}
           writable={writable}
           onPage={navigate}
@@ -127,7 +129,7 @@ export default function App() {
         }}
       />
     )}
-    {creating && <ReceiptCreate offers={data?.rewardOffers} api={api} enabled={writable} onClose={closeCreate} onReview={reviewSaved} onSaved={id => { setCreating(false); setReceipt(id); setMessage('Receipt saved to PostgreSQL.'); void refresh() }} />}
+    {creating && <ReceiptCreate coupons={data?.coupons} products={data?.productLookup} offers={data?.rewardOffers} api={api} enabled={writable} onClose={closeCreate} onReview={reviewSaved} onSaved={id => { setCreating(false); setReceipt(id); setMessage('Receipt saved.'); void refresh() }} />}
     {receipt && <ReceiptDetail offers={data?.rewardOffers} id={receipt} api={api} onClose={closeReceipt} writable={writable} onChanged={() => void refresh()} />}
     {settings && <Modal title="Your workspace" onClose={closeSettings}><p>This connection serves one owner’s database. The web app does not read or migrate local receipt files.</p><div className="key-values"><div><span>Access</span><strong>{data.canWrite ? 'Owner / write' : 'Read only'}</strong></div><div><span>Data storage</span><strong>Backend database</strong></div><div><span>Offline financial storage</span><strong>Disabled</strong></div></div>{install ? <button className="primary" onClick={() => void installApp()}><Download size={18} />Install application</button> : <p className="muted">Install using your browser’s app menu. On iPhone: Share → Add to Home Screen. HTTPS is required outside localhost.</p>}<div className="form-actions"><button className="secondary" onClick={logout}><LogOut size={17} />Disconnect and clear screen</button></div></Modal>}
   </div>

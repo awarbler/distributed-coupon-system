@@ -248,3 +248,15 @@ describe('shopping plan checkout', () => {
         ).toBeEnabled()
     })
 })
+
+it('shows an incomplete potential reward subtotal without changing the saved amount due', async () => {
+    const api = new ApiClient('test')
+    const checkout = checkoutFixture()
+    checkout.summary = { ...checkout.summary, expectedRewards: null, knownPotentialRewards: '5', rewardsComplete: false, reviewRequired: true }
+    vi.spyOn(api, 'checkout').mockResolvedValue(checkout)
+    render(<CheckoutForm api={api} planId="plan" planName="Trip" writable onClose={vi.fn()} onSaved={vi.fn()} />)
+    expect(await screen.findByText('Known potential promotional rewards')).toBeInTheDocument()
+    expect(screen.getByText('$5.00 — total incomplete')).toBeInTheDocument()
+    expect(screen.getByText(/These are potential benefits, not earned rewards/)).toBeInTheDocument()
+    expect(screen.getAllByText('25.98').length).toBeGreaterThan(0)
+})

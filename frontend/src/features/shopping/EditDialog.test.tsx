@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { EditDialog } from './EditDialog'
 import { ApiClient } from '../../api/client'
-import { workspace } from '../../api/fixtures.test-support'
+import { workspace, planningRow } from '../../api/fixtures.test-support'
 
 describe('inline plan entry', () => {
   it('creates and links a deal without losing entered product or prices', async () => {
@@ -158,4 +158,11 @@ describe('inline plan entry', () => {
     expect(body.accountRestriction).toBeNull()
     expect(body.source).toBe('PAPER_MANUFACTURER')
   })
+})
+
+it('preselects the originating deal for a new planned item', () => {
+  const data = workspace(); const row = planningRow()
+  data.deals = [{ dealId: 'deal-progress', title: 'Dove reward', interpretedTerms: 'Buy two', retailer: 'Walgreens', validFrom: null, validThrough: null, sourceArtifactIds: [], revision: '1' }]
+  render(<EditDialog edit={{ kind: 'purchase', row, initialDealId: 'deal-progress' }} data={data} api={new ApiClient('test')} onClose={vi.fn()} onSaved={vi.fn()} online />)
+  expect(screen.getByRole('combobox', { name: /Advertised deal/ })).toHaveValue('deal-progress')
 })

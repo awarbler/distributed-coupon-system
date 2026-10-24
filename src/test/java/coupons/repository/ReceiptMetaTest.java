@@ -71,4 +71,45 @@ class ReceiptMetaTest {
         assertEquals("000124", corrected.receiptNumber());
         assertNotEquals(original, corrected);
     }
+
+    @Test void oldSerializedMetadataDefaultsNewEvidenceFieldsToUnknown(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+        var source = directory.resolve("coupons/repository/ReceiptMeta.java");
+        java.nio.file.Files.createDirectories(source.getParent());
+        java.nio.file.Files.writeString(source, """
+                package coupons.repository;
+                public record ReceiptMeta(String retailer, String receiptNumber,
+                    java.time.LocalDateTime purchasedAt, String storeReference,
+                    PurchaseChannel purchaseChannel) implements java.io.Serializable {
+                    public enum PurchaseChannel { IN_STORE, ONLINE, UNKNOWN }
+                }
+                """);
+        assertEquals(0, javax.tools.ToolProvider.getSystemJavaCompiler().run(null, null, null,
+                "-d", directory.toString(), source.toString()));
+        byte[] bytes;
+        try (var loader = new java.net.URLClassLoader(new java.net.URL[]{directory.toUri().toURL()},
+                ClassLoader.getPlatformClassLoader())) {
+            var old = loader.loadClass("coupons.repository.ReceiptMeta");
+            var channel = loader.loadClass("coupons.repository.ReceiptMeta$PurchaseChannel");
+            Object value = old.getConstructors()[0].newInstance("Walgreens", "000123", null, null, channel.getEnumConstants()[0]);
+            var output = new java.io.ByteArrayOutputStream();
+            try (var stream = new java.io.ObjectOutputStream(output)) { stream.writeObject(value); }
+            bytes = output.toByteArray();
+        }
+        try (var stream = new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytes))) {
+            var current = (ReceiptMeta) stream.readObject();
+            assertEquals("000123", current.receiptNumber());
+            assertEquals(ReceiptMeta.PurchaseChannel.IN_STORE, current.purchaseChannel());
+            assertEquals(ReceiptMeta.PrintedTotalBasis.UNKNOWN, current.printedTotalBasis());
+            assertEquals(ReceiptMeta.PaymentEntryStatus.UNKNOWN, current.paymentEntryStatus());
+        }
+        var explicit = new ReceiptMeta("Walgreens", "test", null, null, ReceiptMeta.PurchaseChannel.IN_STORE,
+                ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING, ReceiptMeta.PaymentEntryStatus.COMPLETE);
+        var bytesOut = new java.io.ByteArrayOutputStream();
+        try (var stream = new java.io.ObjectOutputStream(bytesOut)) { stream.writeObject(explicit); }
+        try (var stream = new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytesOut.toByteArray()))) {
+            assertEquals(explicit, stream.readObject());
+        }
+    }
+
 }

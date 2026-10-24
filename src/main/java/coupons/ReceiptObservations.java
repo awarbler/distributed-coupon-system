@@ -179,7 +179,7 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
             if (type != PromotionType.SPEND && spendBasis != SpendBasis.UNKNOWN)
                 throw new IllegalArgumentException("A spend basis applies only to spend requirements.");
             if (type == null) {
-                if (amount != null || !("Receipt".equals(category) || "Other".equals(category))) {
+                if (amount != null || !("Receipt".equals(category) || "Other".equals(category) || "Purchase".equals(category) || "ReceiptScan".equals(category))) {
                     throw new IllegalArgumentException("Receipt/Other requirements have a category and no quantity or spend amount.");
                 }
             } else {

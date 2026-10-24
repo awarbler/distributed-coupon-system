@@ -30,6 +30,8 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
 import coupons.ClippedCoupon;
+import coupons.ProviderBalanceSummary;
+import coupons.PurchaseItem;
 import coupons.EarningDetails;
 import coupons.PromotionQualification;
 import coupons.RebateStatus;
@@ -128,6 +130,8 @@ public final class CouponApiService implements HttpHandler {
             send(exchange, new Response(404, Json.object(Map.of("error", "Resource not found."))));
         } catch (ConcurrentModificationException error) {
             send(exchange, new Response(409, Json.object(Map.of("error", "Revision changed; retrieve the current resource."))));
+        } catch (ReceiptCorrection.InvalidFields error) {
+            send(exchange,new Response(400,Json.object(Map.of("error",error.getMessage()))));
         } catch (IllegalArgumentException | DateTimeParseException error) {
             send(exchange, new Response(400, Json.object(Map.of("error", "Invalid request fields or resource state."))));
         } catch (Exception error) {
@@ -151,6 +155,9 @@ public final class CouponApiService implements HttpHandler {
         boolean write = !method.equals("GET");
         String principal = authorize(e, write);
         String[] parts = path.split("/", -1);
+        if(parts.length==3 && (parts[1].equals("deals") || parts[1].equals("clipped-coupons")) && method.equals("DELETE")) {
+            requirePlatform();return write(e,principal,request->{known(Json.parseObject(request));platform.deleteCatalogRecord(parts[1].equals("deals"),UUID.fromString(parts[2]),revision(e),principal);return json(200,fields("deleted",true));});
+        }
         if (path.equals("/deals")) {
             requireMethod(method, "POST");
             requirePlatform();
@@ -175,8 +182,8 @@ public final class CouponApiService implements HttpHandler {
                 if (!input.reviewToken().equals(input.suppliedReviewToken())) {
                     throw new ApiError(409, "Receipt changed since preview. Review the current values before saving.");
                 }
-                if (new TransactionCalculator().calculateReceiptDifference(input.transaction()).signum() != 0 && !input.acknowledgeDifference()) {
-                    throw new ApiError(400, "Confirm the reported/calculated difference before saving.");
+                if (new TransactionCalculator().reconcilePayments(input.transaction(), input.metadata()).acknowledgementRequired() && !input.acknowledgeDifference()) {
+                    throw new ApiError(400, "Confirm the recorded purchase/payment difference before saving.");
                 }
                 if (receipts.findById(input.id()).or(() -> receipts.findDeletedById(input.id())).isPresent()) {
                     throw new ApiError(409, "Receipt UUID already exists; creation cannot overwrite it.");
@@ -184,15 +191,87 @@ public final class CouponApiService implements HttpHandler {
                 if (!possibleDuplicates(input).isEmpty()) {
                     throw new ApiError(409, "Possible existing receipt found. Review it before creating another receipt.");
                 }
-                var result = receipts.save(input.id(), input.transaction(), input.metadata(), input.evidence(), new ReceiptWriteRequest(UUID.randomUUID(), java.time.Instant.now()), new ReceiptCreateCtx(principal));
+                var selected=ReceiptInput.ids(Json.parseObject(request),"clippedCouponIds");
+                if(selected.size()>100 || new java.util.HashSet<>(selected).size()!=selected.size())throw new ApiError(400,"Select each clipped coupon once.");
+                var writeRequest=new ReceiptWriteRequest(UUID.randomUUID(),java.time.Instant.now());
+                var result = selected.isEmpty()?receipts.save(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal)):
+                    receipts instanceof coupons.repository.PostgresTransactionRepository postgres?postgres.saveWithCoupons(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal),selected):null;
+                if(result==null)throw new ApiError(400,"Clipped coupon receipt entry requires PostgreSQL.");
                 e.getResponseHeaders().set("Location", "/receipts/" + input.id());
                 return json(201, result);
             });
         }
+        if(path.equals("/accounts/activity")) {
+            requireMethod(method,"GET"); requirePlatform();
+            var provider=query(e.getRequestURI(),"provider");var from=query(e.getRequestURI(),"from");var to=query(e.getRequestURI(),"to");
+            if(provider==null || provider.isBlank() || from==null || to==null) throw new ApiError(400,"Select an account and date range.");
+            return json(200,platform.account(provider,LocalDate.parse(from),LocalDate.parse(to)));
+        }
+        if(path.equals("/accounts/member-rewards")) {
+            requireMethod(method,"POST");requirePlatform();
+            return write(e,principal,request->{
+                var f=Json.parseObject(request);known(f,"eventId","provider","date","amount","description","expirationDate");
+                String provider=ProviderBalanceSummary.accountName(required(f,"provider"));
+                if(!Set.of("Walgreens Cash","Register Rewards","ECB","Walmart Cash").contains(provider))throw new ApiError(400,"Select a supported member reward account.");
+                var amount=ReceiptInput.decimal(f,"amount",false);if(amount.signum()<=0)throw new ApiError(400,"Enter an amount greater than zero.");
+                var value=new coupons.repository.AccountAdjustment(ReceiptInput.uuid(f,"eventId"),LocalDate.parse(required(f,"date")),provider,null,amount,"Member reward: "+required(f,"description"),principal,java.time.Instant.now(),optional(f,"expirationDate")==null?null:LocalDate.parse(optional(f,"expirationDate")));
+                platform.saveMemberReward(value);return json(201,value);
+            });
+        }
+        if(path.equals("/accounts/openings")) {
+            requireMethod(method,"POST"); requirePlatform();
+            return write(e,principal,request -> {
+                var f=Json.parseObject(request); known(f,"observationId","provider","date","points","usd","valuationBasis","sourceNote","confirmedBeginningOfDay");
+                if(!ReceiptInput.flag(f,"confirmedBeginningOfDay")) throw new ApiError(400,"Confirm this is a beginning-of-day balance.");
+                var opening=new coupons.repository.AccountOpening(ReceiptInput.uuid(f,"observationId"),LocalDate.parse(required(f,"date")),ProviderBalanceSummary.accountName(required(f,"provider")),ReceiptInput.decimal(f,"points",true),ReceiptInput.decimal(f,"usd",true),false,required(f,"valuationBasis"),required(f,"sourceNote")+" | "+principal,java.time.Instant.now());
+                platform.saveOpening(opening); return json(201,opening);
+            });
+        }
+        if(path.equals("/rewards/register-rewards")) {
+            requirePlatform();if(method.equals("GET"))return json(200,platform.standaloneRewards());
+            requireMethod(method,"POST");return write(e,principal,request->{
+                var f=Json.parseObject(request);known(f,"rewardId","description","amount","earnedDate","expirationDate","confirmAvailable");
+                if(!ReceiptInput.flag(f,"confirmAvailable"))throw new ApiError(400,"Confirm this is an unused RR coupon available to use.");
+                String earned=optional(f,"earnedDate"),expires=optional(f,"expirationDate");
+                var amount=ReceiptInput.decimal(f,"amount",false);if(amount.signum()<=0)throw new ApiError(400,"Enter a reward amount greater than zero.");
+                var reward=new coupons.RegisterReward(ReceiptInput.uuid(f,"rewardId"),required(f,"description"),amount,earned==null?null:LocalDate.parse(earned),expires==null?null:LocalDate.parse(expires),null);
+                platform.addStandaloneReward(reward);return json(201,fields("rewardId",reward.getRewardId(),"status","UNUSED"));
+            });
+        }
+        if(parts.length==5 && parts[1].equals("receipts") && parts[3].equals("rr-matches") && parts[4].equals("unknown-source")) {
+            requireMethod(method,"POST");requirePlatform();
+            return write(e,principal,request->{
+                var f=Json.parseObject(request);known(f,"usageEventId","rewardId","description","earnedDate","expirationDate","reason","confirmRecordedUse");
+                if(!ReceiptInput.flag(f,"confirmRecordedUse"))throw new ApiError(400,"Confirm this RR was used on the receipt; an earning receipt is optional.");
+                String earned=optional(f,"earnedDate"),expires=optional(f,"expirationDate");
+                try {return json(201,platform.addStandaloneMatch(UUID.fromString(parts[2]),revision(e),ReceiptInput.uuid(f,"usageEventId"),ReceiptInput.uuid(f,"rewardId"),required(f,"description"),earned==null?null:LocalDate.parse(earned),expires==null?null:LocalDate.parse(expires),required(f,"reason"),principal));}
+                catch(IllegalArgumentException error){throw new ApiError(400,"Check the source description and known dates. The RR use must be unmatched; known dates must fit this purchase.");}
+            });
+        }
+        if(parts.length==4 && parts[1].equals("receipts") && parts[3].equals("rr-matches")) {
+            requirePlatform();var id=UUID.fromString(parts[2]);
+            if(method.equals("GET"))return json(200,platform.rrOptions(id));
+            requireMethod(method,"POST");return write(e,principal,request->{
+                var f=Json.parseObject(request);known(f,"usageEventId","sourceId","receiptEarning","reason","confirmUnknownHistory");
+                try {return json(201,platform.matchRR(id,revision(e),ReceiptInput.uuid(f,"usageEventId"),ReceiptInput.uuid(f,"sourceId"),ReceiptInput.flag(f,"receiptEarning"),optional(f,"reason")==null || optional(f,"reason").isBlank() ? "Matched recorded RR use to selected reward" : optional(f,"reason").trim(),principal,ReceiptInput.flag(f,"confirmUnknownHistory")));}
+                catch(IllegalArgumentException error) {throw new ApiError(400,"The RR cannot be matched. Refresh available rewards and check the receipt date, amount and source.");}
+            });
+        }
+        if(path.equals("/receipts/report")) {
+            requireMethod(method,"GET");requirePlatform();
+            var from=query(e.getRequestURI(),"from");var to=query(e.getRequestURI(),"to");
+            return json(200,platform.receiptReport(Objects.toString(query(e.getRequestURI(),"metric"),"regular"),from==null||from.isBlank()?null:LocalDate.parse(from),to==null||to.isBlank()?null:LocalDate.parse(to),query(e.getRequestURI(),"search"),query(e.getRequestURI(),"sort")));
+        }
+        if (path.equals("/receipts/summary")) {
+            requireMethod(method, "GET");
+            requirePlatform();
+            if (query(e.getRequestURI(), "from") == null || query(e.getRequestURI(), "to") == null) throw new ApiError(400, "Choose a start and end date.");
+            return json(200, platform.receiptRange(LocalDate.parse(query(e.getRequestURI(), "from")), LocalDate.parse(query(e.getRequestURI(), "to"))));
+        }
         if (path.equals("/workspace")) {
             requireMethod(method, "GET");
             requirePlatform();
-            var data = new LinkedHashMap<>(platform.workspace());
+            var data = new LinkedHashMap<>(platform.workspace(query(e.getRequestURI(),"asOf")==null?null:LocalDate.parse(query(e.getRequestURI(),"asOf"))));
             data.put("canWrite", principal.equals("api-owner"));
             return json(200, data);
         }
@@ -273,8 +352,7 @@ public final class CouponApiService implements HttpHandler {
                     throw new ConcurrentModificationException();
                 }
                 var f = Json.parseObject(request);
-                known(f, "lineItemIds", "qualifyingQuantities");
-                var lines = ReceiptInput.ids(f, "lineItemIds");
+                known(f, "lineItemIds", "qualifyingQuantities", "expirationDate");
                 var tx = old.transaction();
                 var obs = tx.getObservations();
                 var earnings = new ArrayList<>(obs.earnings());
@@ -289,12 +367,15 @@ public final class CouponApiService implements HttpHandler {
                     throw new NoSuchElementException();
                 }
                 var previous = earnings.get(index);
+                var lines=f.containsKey("lineItemIds")?ReceiptInput.ids(f,"lineItemIds"):previous.lineItemIds();
+                var expiry=f.containsKey("expirationDate")?(optional(f,"expirationDate")==null?null:LocalDate.parse(optional(f,"expirationDate"))):previous.expirationDate();
+                if(expiry!=null && obs.purchaseDate()!=null && expiry.isBefore(obs.purchaseDate()))throw new ApiError(400,"Expiration must be on or after the purchase date.");
                 var detail = previous.details();
-                var nextDetails = new EarningDetails(ReceiptInput.quantities(f), detail == null ? null : detail.payoutDestination(), detail == null ? null : detail.submittedOn(), detail == null ? null : detail.submissionReference(), detail == null ? null : detail.confirmationReference());
-                earnings.set(index, new ReceiptObservations.Earning(previous.earningId(), previous.kind(), previous.provider(), previous.offerReference(), lines.isEmpty() ? ReceiptObservations.Scope.RECEIPT : lines.size() == 1 ? ReceiptObservations.Scope.ITEM : ReceiptObservations.Scope.MULTI_ITEM, lines, previous.expected(), previous.confirmed(), previous.status(), previous.expirationDate(), previous.instrumentId(), previous.claimId(), previous.evidenceIds(), previous.recordedLifecycle(), previous.requirement(), previous.valuation(), nextDetails));
+                var nextDetails = new EarningDetails(f.containsKey("qualifyingQuantities")?ReceiptInput.quantities(f):detail==null?Map.of():detail.qualifyingQuantities(), detail == null ? null : detail.payoutDestination(), detail == null ? null : detail.submittedOn(), detail == null ? null : detail.submissionReference(), detail == null ? null : detail.confirmationReference());
+                earnings.set(index, new ReceiptObservations.Earning(previous.earningId(), previous.kind(), previous.provider(), previous.offerReference(), lines.isEmpty() ? ReceiptObservations.Scope.RECEIPT : lines.size() == 1 ? ReceiptObservations.Scope.ITEM : ReceiptObservations.Scope.MULTI_ITEM, lines, previous.expected(), previous.confirmed(), previous.status(), expiry, previous.instrumentId(), previous.claimId(), previous.evidenceIds(), previous.recordedLifecycle(), previous.requirement(), previous.valuation(), nextDetails));
                 tx.setObservations(new ReceiptObservations(obs.purchaseDate(), obs.printedTime(), earnings, obs.unidentifiedRR(), obs.walgreensCash(), obs.savings(), obs.discountKinds(), obs.receiptSavingValuePercent(), obs.promotionLinks(), obs.worksheet(), obs.footerStatus()));
                 var now = java.time.Instant.now();
-                return json(200, receipts.update(receiptId, old.revision(), tx, old.metadata(), List.of(), new ReceiptWriteRequest(UUID.randomUUID(), now), new ReceiptChangeContext(principal, "Updated earning product associations: " + earningId, principal, now)));
+                return json(200, receipts.update(receiptId, old.revision(), tx, old.metadata(), List.of(), new ReceiptWriteRequest(UUID.randomUUID(), now), new ReceiptChangeContext(principal, "Updated earning product associations / expiration: " + earningId, principal, now)));
             });
         }
         if (parts.length == 6 && parts[1].equals("receipts") && parts[3].equals("earnings") && parts[5].equals("status")) {
@@ -334,14 +415,51 @@ public final class CouponApiService implements HttpHandler {
             });
         }
 
+        if (parts.length == 4 && parts[1].equals("receipts") && parts[3].equals("edit-preview")) {
+            requireMethod(method, "POST");
+            var old = receipts.findById(UUID.fromString(parts[2])).orElseThrow();
+            if (old.revision() != revision(e)) throw new ApiError(409, "Receipt changed; refresh before editing.");
+            var correction = ReceiptCorrection.read(old, Json.parseObject(body(e, MAX_BODY)));
+            var candidate = new ReceiptRecord(old.transactionId(), old.status(), old.revision(), correction.transaction(), correction.metadata(), old.evidenceIds());
+            return json(200, fields("reviewToken", correction.token(), "totals", PostgresPlatformRepository.totals(candidate)));
+        }
+        if (parts.length == 4 && parts[1].equals("receipts") && parts[3].equals("restore")) {
+            requireMethod(method, "POST");
+            return write(e, principal, request -> {
+                var f = Json.parseObject(request); known(f,"reason","confirmed");
+                if (!Boolean.TRUE.equals(f.get("confirmed"))) throw new ApiError(400,"Confirm restoration.");
+                var now = java.time.Instant.now();
+                return json(200, receipts.restore(UUID.fromString(parts[2]), revision(e), new ReceiptWriteRequest(UUID.randomUUID(),now),
+                        new ReceiptChangeContext(principal,required(f,"reason"),principal,now)));
+            });
+        }
         if (parts.length == 3 && parts[1].equals("receipts")) {
+            UUID mutationId = UUID.fromString(parts[2]);
+            if (method.equals("PUT")) return write(e, principal, request -> {
+                var old = receipts.findById(mutationId).orElseThrow();
+                if (old.revision() != revision(e)) throw new ApiError(409,"Receipt changed; refresh before editing.");
+                var f = Json.parseObject(request);
+                var correction = ReceiptCorrection.read(old,f);
+                if (!correction.token().equals(optional(f,"reviewToken"))) throw new ApiError(409,"Review the updated totals before saving.");
+                if (new TransactionCalculator().reconcilePayments(correction.transaction(),correction.metadata()).acknowledgementRequired() && !Boolean.TRUE.equals(f.get("acknowledgeDifference")))
+                    throw new ApiError(400,"Acknowledge the recorded difference before saving.");
+                var now = java.time.Instant.now();
+                return json(200,receipts.update(mutationId,old.revision(),correction.transaction(),correction.metadata(),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),now),
+                        new ReceiptChangeContext(principal,correction.reason(),principal,now)));
+            });
+            if (method.equals("DELETE")) return write(e, principal, request -> {
+                var f = Json.parseObject(request); known(f,"reason","confirmed");
+                if (!Boolean.TRUE.equals(f.get("confirmed"))) throw new ApiError(400,"Confirm deletion.");
+                var now = java.time.Instant.now();
+                return json(200,receipts.softDelete(mutationId,revision(e),new ReceiptWriteRequest(UUID.randomUUID(),now),new ReceiptChangeContext(principal,required(f,"reason"),principal,now)));
+            });
             requireMethod(method, "GET");
             UUID receiptId = UUID.fromString(parts[2]);
             ReceiptRecord r = receipts.findById(receiptId).or(() -> receipts.findDeletedById(receiptId)).orElseThrow();
             e.getResponseHeaders().set("ETag", "\"" + r.revision() + "\"");
             return json(200, fields("transactionId", r.transactionId(), "revision", r.revision(),
                     "status", r.status(), "metadata", r.metadata(), "evidenceIds", r.evidenceIds(),
-                    "contents", ReceiptSnapshot.from(r.transaction())));
+                    "paymentRoles", r.transaction().getPayments().stream().collect(java.util.stream.Collectors.toMap(p->p.getPaymentId().toString(),p->new TransactionCalculator().paymentRole(r.transaction(),p))), "rrUses", platform == null ? List.of() : platform.rewardUses(r.transactionId()), "contents", ReceiptSnapshot.from(r.transaction()), "editDiscounts", ReceiptCorrection.editDiscounts(r), "preservePriceLineIds", r.transaction().getPurchaseItems().stream().filter(item -> item.getRegularUnitPrice() != null && item.getRegularUnitPrice().compareTo(item.getSaleUnitPrice()) < 0).map(PurchaseItem::getLineItemId).toList()));
         }
         if (parts.length == 4
                 && parts[1].equals("shopping-plans")

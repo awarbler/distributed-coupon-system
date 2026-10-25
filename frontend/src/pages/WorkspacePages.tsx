@@ -1,13 +1,16 @@
+import { scenarioRequest, activeScenarioCoupons, zeroScenarioAmount } from '../api/client'
+import { CouponForm } from '../features/shopping/CouponForm'
+import type { PlanScenario, ScenarioEstimate, PlanReceiptDraft } from '../types/platform'
 import { EarningStatusForm } from '../features/receipts/EarningStatusForm'
 import type { ApiClient } from '../api/client'
 import { useEffect, useState, useCallback } from 'react'
 import { browseReceipts, receiptTime, shoppingWeekLabel } from '../api/format'
 import { ArrowUpRight, CalendarDays, Check, ClipboardList, Coins, Plus, Search, ShoppingBasket, Ticket, Wallet } from 'lucide-react'
-import { date, decimal, label, money, shortId } from '../api/format'
+import { date, decimal, integer, label, money, shortId } from '../api/format'
 import { rewardStatusLabel } from '../features/receipts/rewardStatus'
 import { AutoSizeTextArea, Badge, Empty, LinkButton, Notice, PageHeader, Panel, Unavailable, Modal } from '../components/ui'
 import type { Edit } from '../features/shopping/EditDialog'
-import type { Plan, PlanRow, Workspace, RewardProjection, AccountReport, RewardLink, StandaloneRR, Savings, ReceiptReport } from '../types/platform'
+import type { Inventory as InventoryItem, Plan, PlanRow, Workspace, RewardProjection, AccountReport, RewardLink, StandaloneRR, Savings, ReceiptReport } from '../types/platform'
 
 export type Page = 'dashboard' | 'receipts' | 'shopping' | 'coupons' | 'deals' | 'rewards' | 'inventory' | 'rebates'
 interface Props {
@@ -21,6 +24,8 @@ interface Props {
   onEdit: (edit: Edit) => void
   onAddReceipt: () => void
   onCheckout: (plan: Plan) => void
+  onPlanReceipt?: (draft:PlanReceiptDraft)=>void
+  onResumeReceiptDraft?:(id:string)=>void
 }
 export function WorkspacePages(props: Props) {
   const { page } = props
@@ -50,7 +55,7 @@ function Dashboard({ data, writable, onPage, onEdit, onReceipt }: Props) {
     <div className="metrics">{metrics.map(m => <section className="metric" key={m.title}><div className="metric-top"><span>{m.title}</span><span className={`icon-tile ${m.color}`}><m.icon size={19} /></span></div><strong>{m.value}</strong><small>{m.description}</small></section>)}</div>
     {summary.issues.length > 0 && <Notice>{summary.issues.length} recorded information issue(s) affect these totals. Review receipt details for missing values.</Notice>}
     <div className="dashboard-grid"><Panel className={`dashboard-card${collapsed.plans ? ' is-collapsed' : ''}`} title="Your next shopping trip" subtitle="A little preparation goes a long way." action={<div className="dashboard-section-actions">{toggle('plans')}<LinkButton onClick={() => onPage('shopping')}>All plans</LinkButton></div>}><div id="dashboard-plans" hidden={!!collapsed.plans}>
-      {data.plans.length ? data.plans.slice(0, 3).map(row => <button className="plan-preview" key={row.plan.planId} onClick={() => onPage('shopping')}><span className="icon-tile mint"><ClipboardList size={21} /></span><span><strong>{row.plan.name}</strong><small>{row.plan.retailer || 'Store not selected'} · {row.items.length} items</small></span><span className="preview-date">{date(row.plan.shoppingDate)}<ArrowUpRight size={17} /></span></button>) : <Empty title="Start with a shopping plan">Gather the essentials before your next trip.<button disabled={!writable} className="text-button" onClick={() => onEdit({ kind: 'plan' })}>Create your first plan <Plus size={15} /></button></Empty>}
+      {data.plans.some(row=>!row.plan.purchasedReceiptId) ? data.plans.filter(row=>!row.plan.purchasedReceiptId).slice(0, 3).map(row => <button className="plan-preview" key={row.plan.planId} onClick={() => onPage('shopping')}><span className="icon-tile mint"><ClipboardList size={21} /></span><span><strong>{row.plan.name}</strong><small>{row.plan.retailer || 'Store not selected'} · {row.plan.scenario?.items.length??row.items.length} items</small></span><span className="preview-date">{date(row.plan.shoppingDate)}<ArrowUpRight size={17} /></span></button>) : <Empty title="Start with a shopping plan">Gather the essentials before your next trip.<button disabled={!writable} className="text-button" onClick={() => onEdit({ kind: 'plan' })}>Create your first plan <Plus size={15} /></button></Empty>}
       <div className="tip"><span className="icon-tile yellow"><Check size={20} /></span><p><strong>Plan first. Shop with confidence.</strong><br />Keep product quantities, target prices, and coupon associations together.</p></div>
      </div></Panel><Panel className={`dashboard-card${collapsed.accounts ? ' is-collapsed' : ''}`} title="Rewards to keep track of" subtitle="Calculated account balances" action={<div className="dashboard-section-actions">{toggle('accounts')}<LinkButton onClick={() => onPage('rewards')}>All accounts</LinkButton></div>}><div id="dashboard-accounts" hidden={!!collapsed.accounts}>
         {data.balances.length ? data.balances.slice(0, 4).map((b, i) => <div className="account-preview" key={b.provider}><span className={`account-avatar ${['mint', 'lilac', 'peach', 'yellow'][i % 4]}`}>{b.provider.slice(0, 1)}</span><span><strong>{b.provider}</strong><small>{b.balance.endPoints != null ? `${b.balance.endPoints} points` : 'Recorded account value'}</small></span><strong>{money(b.balance.endUsd)}</strong></div>) : <Empty title="No account records yet">Balances appear when openings and activity are recorded.</Empty>}
@@ -63,7 +68,13 @@ function Dashboard({ data, writable, onPage, onEdit, onReceipt }: Props) {
 function ReceiptTable({ rows, onReceipt }: { rows: Workspace['receipts']; onReceipt: (id: string) => void }) {
   return <div className="table-wrap"><table className="receipt-table"><thead><tr><th>Store / receipt</th><th>Date & time</th><th className="receipt-money">Receipt total</th><th className="receipt-money">Actual OOP</th><th className="receipt-money">Confirmed benefit value</th><th className="receipt-money">Total saved</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map(r => <tr key={r.transactionId}><td><strong>{r.metadata?.retailer || 'Store not recorded'}</strong><small>{r.metadata?.receiptNumber || shortId(r.transactionId)}</small></td><td>{date(r.date)}<small>{receiptTime(r)}</small></td><td className="receipt-money"><span className="receipt-value">{money(r.totals.reportedDue)}</span></td><td className="receipt-money"><span className="receipt-value">{money(r.totals.paymentReview?.recordedCashCardPaid)}</span>{r.totals.paymentReview && r.totals.paymentReview.paymentEntryStatus !== 'COMPLETE' && <small>Payment details incomplete</small>}</td><td className="receipt-money"><span className="receipt-value">{money(r.totals.savings.newlyEarned)}</span></td><td className="receipt-money"><span className="receipt-value">{money(r.totals.savings.totalSaved)}</span>{r.totals.savings.totalSaved == null && <small>Savings inputs incomplete</small>}</td><td><Badge>{label(r.status)}</Badge></td><td><button className="icon-button" aria-label={`Open receipt ${r.metadata?.receiptNumber || shortId(r.transactionId)}`} onClick={() => onReceipt(r.transactionId)}><ArrowUpRight size={19} /></button></td></tr>)}</tbody></table></div>
 }
-function Receipts({ data, api, onChanged, onReceipt, writable, onAddReceipt }: Props) {
+function SavedReceiptDrafts({data,api,writable,onChanged,onResume}:{data:Workspace;api?:ApiClient;writable:boolean;onChanged?:()=>void;onResume?:(id:string)=>void}) {
+ const [error,setError]=useState(''),[busy,setBusy]=useState(false)
+ async function remove(id:string,revision:string){if(!api||!window.confirm('Delete this saved draft? No saved receipt or purchase will be deleted.'))return;setBusy(true);setError('');try{await api.mutate(`/receipt-drafts/${id}`,'DELETE',{},crypto.randomUUID(),revision);onChanged?.()}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
+ if(!writable||!data.receiptDrafts?.length)return null
+ return <Panel title="Saved receipt drafts"><details open><summary>{data.receiptDrafts.length} saved draft(s) — Show / Hide</summary>{error&&<Notice>{error}</Notice>}{data.receiptDrafts.map(d=><section className="receipt-input-row" key={d.draftId}><strong>{d.store||'Untitled receipt'} · {d.receiptNumber||'Receipt number not entered'}</strong><p>Saved {new Date(d.updatedAt).toLocaleString()}</p><div className="form-actions"><button className="secondary" disabled={busy||!onResume} onClick={()=>onResume?.(d.draftId)}>Resume draft</button><button className="secondary" disabled={busy||!api} onClick={()=>void remove(d.draftId,d.revision)}>Delete draft</button></div></section>)}</details></Panel>
+}
+function Receipts({ data, api, onChanged, onReceipt, writable, onAddReceipt, onResumeReceiptDraft }: Props) {
   const [metric,setMetric]=useState('')
   const closeMetric=useCallback(()=>setMetric(''),[])
   const [search, setSearch] = useState(''), [status, setStatus] = useState('ALL')
@@ -95,6 +106,7 @@ function Receipts({ data, api, onChanged, onReceipt, writable, onAddReceipt }: P
   const periodLabel = rangeActive ? `${date(from)} – ${date(to)}` : day ? date(day) : month ? monthLabel(month) : 'All time'
   return <>
     <PageHeader title="Your receipts" subtitle="Original records, item details, and the full revision trail." action={<button className="primary" disabled={!writable} onClick={onAddReceipt}><Plus size={16} />Add receipt</button>} />
+    <SavedReceiptDrafts data={data} api={api} writable={writable} onChanged={onChanged} onResume={onResumeReceiptDraft}/>
     <div className="filters receipt-filters">
       <label className="receipt-search-label"><span>Search receipts</span><span className="search"><Search size={18} aria-hidden="true" /><input aria-label="Search store, receipt number, or date" placeholder="Store, receipt number, or date" value={search} onChange={e => { setSearch(e.target.value); setPage(0) }} /></span></label>
       <details className="receipt-more-filters"><summary>More filters — Show / Hide</summary><div className="receipt-extra-filters">
@@ -498,7 +510,7 @@ function PlanCard({
   )
 }
 
-function Shopping({ data, writable, onEdit, onCheckout }: Props) {
+function Shopping({ data, api, onChanged, writable, onEdit, onCheckout, onPlanReceipt, onReceipt }: Props) {
   const [search, setSearch] = useState('')
   const [store, setStore] = useState('ALL')
   const [dateFilter, setDateFilter] = useState('ALL')
@@ -507,6 +519,16 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
   const [dateTo, setDateTo] = useState('')
   const [sort, setSort] = useState('NEWEST')
   const [openPlanIds, setOpenPlanIds] = useState<string[]>([])
+  const [scenarioPlan,setScenarioPlan]=useState<Plan|null|undefined>(undefined)
+  const [deleteError,setDeleteError]=useState('')
+  const [deletingPlan,setDeletingPlan]=useState<string|null>(null)
+  async function deletePlan(plan:Plan) {
+    if(!api||!window.confirm(`Permanently delete “${plan.name}” and its products, scenario, checkout drafts and plan history? This cannot be undone. Saved receipts and coupon/reward records are kept.`))return
+    setDeleteError('');setDeletingPlan(plan.planId)
+    try{await api.mutate(`/shopping-plans/${plan.planId}`,'DELETE',{},crypto.randomUUID(),plan.revision);onChanged?.()}
+    catch(e){setDeleteError((e as Error).message)}finally{setDeletingPlan(null)}
+  }
+
   const stores = [...new Set(
     data.plans
       .map(row => row.plan.retailer)
@@ -582,6 +604,7 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
 
   return (
     <>
+      {scenarioPlan!==undefined&&api&&<PlanScenarioEditor key={scenarioPlan?.planId||'new'} plan={scenarioPlan} data={data} api={api} writable={writable} onClose={()=>setScenarioPlan(undefined)} onChanged={onChanged} onReceipt={draft=>{setScenarioPlan(undefined);onPlanReceipt?.(draft)}}/>}
       <PageHeader
         title="Shopping plans"
         subtitle="Search, organize, and manage your shopping trips."
@@ -589,7 +612,7 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
           <button
             className="primary"
             disabled={!writable}
-            onClick={() => onEdit({ kind: 'plan' })}
+            onClick={() => setScenarioPlan(null)}
           >
             <Plus size={18} />
             New plan
@@ -597,9 +620,12 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
         }
       />
 
+      {deleteError&&<Notice>{deleteError}</Notice>}
       <Panel title="Find shopping plans">
-        <div className="filters">
-          <label className="search">
+        <div className="filters shopping-plan-filters">
+          <label className="shopping-plan-search-field">
+            Search plans
+            <span className="search">
             <Search size={18} />
             <input
               aria-label="Search shopping plans"
@@ -607,9 +633,10 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
+            </span>
           </label>
 
-          <select
+          <label>Store<select
             aria-label="Filter by store"
             value={store}
             onChange={e => setStore(e.target.value)}
@@ -620,9 +647,9 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
                 {value}
               </option>
             ))}
-          </select>
+          </select></label>
 
-          <select
+          <label>Date<select
             aria-label="Filter by date"
             value={dateFilter}
             onChange={e => setDateFilter(e.target.value)}
@@ -630,9 +657,9 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
             <option value="ALL">All dates</option>
             <option value="SPECIFIC">Specific date</option>
             <option value="RANGE">Date range</option>
-          </select>
+          </select></label>
 
-          <select
+          <label>Sort plans<select
             aria-label="Sort shopping plans"
             value={sort}
             onChange={e => setSort(e.target.value)}
@@ -641,22 +668,22 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
             <option value="OLDEST">Oldest first</option>
             <option value="NAME">Plan name</option>
             <option value="STORE">Store name</option>
-          </select>
+          </select></label>
         </div>
 
         {dateFilter === 'SPECIFIC' && (
-          <label>
+          <div className="shopping-plan-date-fields"><label>
             Shopping date
             <input
               type="date"
               value={selectedDate}
               onChange={e => setSelectedDate(e.target.value)}
             />
-          </label>
+          </label></div>
         )}
 
         {dateFilter === 'RANGE' && (
-          <div className="form-grid">
+          <div className="form-grid shopping-plan-date-fields">
             <label>
               From
               <input
@@ -679,7 +706,7 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
           </div>
         )}
 
-        <div className="panel-bottom">
+        <div className="panel-bottom shopping-plan-filter-footer">
           <strong> {filteredPlans.length} of {data.plans.length} plans</strong>
           <button
             type="button"
@@ -695,7 +722,7 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
         return (
           <div key={planId} className="shopping-plan-entry">
             <Panel title={row.plan.name}
-              subtitle={`${row.plan.retailer || 'Store not selected'} · ${date(row.plan.shoppingDate)} · ${shoppingWeekLabel(row.plan.shoppingDate)} · ${row.items.length} items`}
+              subtitle={`${row.plan.retailer || 'Store not selected'} · ${date(row.plan.shoppingDate)} · ${shoppingWeekLabel(row.plan.shoppingDate)} · ${row.plan.scenario?.items.length??row.items.length} items`}
               action={<div className="form-actions">
                 <button
                   type="button"
@@ -712,11 +739,13 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
                   onClick={() => onEdit({ kind: 'plan', plan: row.plan })
                   } > Edit
                 </button>
+                <Badge>{row.plan.purchasedReceiptId?'Purchased':'Planned'}</Badge>{row.plan.purchasedReceiptId&&<button type="button" className="secondary" onClick={()=>onReceipt(row.plan.purchasedReceiptId!)}>View receipt</button>}<button type="button" className="secondary" disabled={!writable||!api} onClick={()=>setScenarioPlan(row.plan)}>Plan products, coupons &amp; rewards</button>
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => onCheckout(row.plan)}
+                  disabled={!!row.plan.purchasedReceiptId} onClick={() => row.plan.scenario?setScenarioPlan(row.plan):onCheckout(row.plan)}
                 > Checkout </button>
+                <button type="button" className="secondary" disabled={!writable||!api||!!deletingPlan} onClick={()=>void deletePlan(row.plan)}>{deletingPlan===planId?'Deleting…':'Delete plan'}</button>
               </div>
               }
             >
@@ -727,12 +756,13 @@ function Shopping({ data, writable, onEdit, onCheckout }: Props) {
 
             {isOpen && (
               <div className="shopping-plan-expanded">
-                <PlanCard
+                {row.plan.scenario && <>{row.scenarioEstimate&&<ScenarioBreakdown report={row.scenarioEstimate}/>}<p className="panel-note">This plan uses the deal scenario editor for its products, coupon checks and WC/RR what-if totals.</p><button className="secondary" onClick={()=>setScenarioPlan(row.plan)}>Open scenario breakdown</button></>}
+                {!row.plan.scenario && <PlanCard
                   row={row}
                   data={data}
                   writable={writable}
                   onEdit={onEdit}
-                  embedded />
+                  embedded />}
               </div>)}</div>)})}
 
         {filteredPlans.length === 0 && (
@@ -762,7 +792,26 @@ function Coupons({ data, api, onChanged, writable, onEdit, onReceipt }: Props) {
 function Deals({ data, api, writable, onChanged }: Props) { return <><PageHeader title="Deals & promotions" subtitle="Source-backed offers and recorded rebate qualification programs." /><div className="card-grid">{data.deals.map(d => <article className="deal-card" key={d.dealId}><div className="card-top"><span className="icon-tile peach"><Ticket size={20} /></span><Badge>{d.retailer || 'Store not recorded'}</Badge></div><h2>{d.title}</h2><p>{d.interpretedTerms}</p><div className="coupon-dates"><CalendarDays size={15} />{date(d.validFrom)} – {date(d.validThrough)}</div><small>{d.sourceArtifactIds.length} source artifact(s) · revision {d.revision}</small><CatalogDelete api={api} writable={writable} path={`/deals/${d.dealId}`} revision={d.revision} name={d.title} onChanged={onChanged}/></article>)}</div>{!data.deals.length && <Panel title="Advertised deals"><Empty title="No advertised deals recorded">Saved source-backed offers will appear here.</Empty></Panel>}<Panel title="Gift-card promotion progress" subtitle="Qualification records only. These amounts are not available gift-card balances.">{data.promotions.length ? data.promotions.map(p => <details className="promotion" key={p.id}><summary><span><strong>{p.name}</strong><small>{label(p.status)} · threshold {money(p.threshold)}</small></span><Badge>Potential gift card {money(p.giftCardValue)}</Badge></summary><p>{p.terms}</p>{Object.values(p.contributions).map(c => <div className="detail-row" key={c.receiptId}><div>Receipt {data.receipts.find(r => r.transactionId === c.receiptId)?.metadata?.receiptNumber || shortId(c.receiptId)}<small>Reviewed revision {c.reviewedRevision} · {c.note}</small></div><strong>Recorded contribution {money(c.reviewedAmount)}</strong></div>)}</details>) : <Empty title="No programs recorded">Promotion contributions appear after they are recorded.</Empty>}</Panel><Unavailable>Editing source-backed offers and confirming current promotion eligibility are not web operations yet. Recorded contributions are not presented as confirmed combined progress.</Unavailable></> }
 function Rewards(props: Props) { return <RewardsAccounts data={props.data} api={props.api} writable={props.writable} onReceipt={props.onReceipt} onChanged={props.onChanged} /> }
 
-function Inventory({ data }: Props) { return <><PageHeader title="Your inventory" subtitle="Recorded whole-package quantities, separate from receipt history." /><Panel title={`${data.inventory.length} inventory balances`}><div className="table-wrap"><table><thead><tr><th>Catalog product</th><th>Packages on hand</th><th>Revision</th><th>Inventory ID</th></tr></thead><tbody>{data.inventory.map(item => <tr key={item.inventoryId}><td><strong>Product {shortId(item.productId)}</strong><small>{item.productId}</small></td><td>{item.quantityOnHand}</td><td>{item.revision}</td><td><code>{shortId(item.inventoryId)}</code></td></tr>)}</tbody></table></div>{!data.inventory.length && <Empty title="No inventory balances recorded">Products are not automatically added from receipts.</Empty>}</Panel><Unavailable>Inventory adjustments require an authenticated approval workflow. The current API does not establish an independent approver, so this screen is read-only. Product names also require the catalog API.</Unavailable></> }
+function Inventory({data,api,writable,onChanged,onReceipt}:Props) {
+ const [collapsed,setCollapsed]=useState<Record<string,boolean>>({})
+ const collapseControl=(key:string)=><button type="button" className="secondary" aria-expanded={!collapsed[key]} aria-controls={`inventory-${key}`} onClick={()=>setCollapsed({...collapsed,[key]:!collapsed[key]})}>{collapsed[key]?'Expand':'Collapse'}</button>
+ const [search,setSearch]=useState(''),[sort,setSort]=useState('NAME'),[reviewOnly,setReviewOnly]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[editing,setEditing]=useState<InventoryItem|null>(null)
+ const [action,setAction]=useState('SET'),[quantity,setQuantity]=useState(''),[location,setLocation]=useState(''),[packSize,setPackSize]=useState(''),[unitName,setUnitName]=useState(''),[countUnit,setCountUnit]=useState('PACKAGE'),[lowStock,setLowStock]=useState(''),[note,setNote]=useState(''),[pending,setPending]=useState<{path:string;method:'POST'|'PUT';body:unknown;key:string;revision?:string}|null>(null)
+ const [descending,setDescending]=useState(false)
+ const columns=[['NAME','Product name'],['SKU','SKU / UPC'],['PURCHASED','Quantity purchased'],['ON_HAND','Quantity on hand'],['LOCATION','Location'],['DATE','Last purchased']]
+ function sortColumn(key:string){if(key===sort)setDescending(value=>!value);else{setSort(key);setDescending(false)}}
+ const rows=data.inventory.filter(item=>`${item.productName??''} ${item.sku??''} ${item.location??''}`.toLowerCase().includes(search.toLowerCase())&&(!reviewOnly||item.needsProductReview)).sort((a,b)=>{
+  const value=(item:InventoryItem)=>sort==='PURCHASED'?item.totalPurchased:sort==='ON_HAND'?item.quantityOnHand:sort==='DATE'?item.lastPurchased:sort==='SKU'?item.sku:sort==='LOCATION'?item.location:item.productName??item.productId
+  const left=value(a),right=value(b)
+  if(left==null||left==='')return right==null||right===''?0:1
+  if(right==null||right==='')return -1
+  const comparison=sort==='PURCHASED'||sort==='ON_HAND'?Number(left)-Number(right):String(left).localeCompare(String(right),undefined,{sensitivity:'base'})
+  return (descending?-comparison:comparison)||a.productId.localeCompare(b.productId)
+ })
+ async function send(request:{path:string;method:'POST'|'PUT';body:unknown;key:string;revision?:string}) {if(!api)return;setBusy(true);setError('');setMessage('');setPending(request);try{const result=await api.mutate(request.path,request.method,request.body,request.key,request.revision) as {products?:string;receiptLines?:string;purchasedPackages?:string};setPending(null);setEditing(null);setMessage(request.method==='POST'?`Receipt purchases synchronized: ${result.products} products, ${result.receiptLines} receipt lines, ${result.purchasedPackages} packages. Stock is tracked from purchases; counting is optional.`:'Inventory updated.');onChanged?.()}catch(e){setError((e as Error).message);if([400,404,409,412].includes((e as {status?:number}).status??0))setPending(null)}finally{setBusy(false)}}
+ function edit(item:InventoryItem){setEditing(item);setAction('DETAILS');setQuantity(item.quantityOnHand??'');setLocation(item.location??'');setPackSize(item.unitsPerPackage??'');setUnitName(item.unitName??'');setCountUnit(item.countUnit??'PACKAGE');setLowStock(item.lowStockLevel??'');setNote('');setError('')}
+ return <><PageHeader title="Household inventory" subtitle="Stock tracked automatically from receipt purchases." action={<button type="button" className="primary" disabled={!api||!writable||busy||!!pending} onClick={()=>void send({path:'/inventory/import-receipts',method:'POST',body:{},key:crypto.randomUUID()})}>{busy?'Synchronizing…':'Import / sync receipts'}</button>}/>{error&&<div className="error" role="alert">{error}</div>}{message&&<Notice>{message}</Notice>}{pending&&!busy&&<button type="button" className="secondary" onClick={()=>void send(pending)}>Retry same inventory request</button>}<Panel title="Find inventory" action={collapseControl('filters')}><div id="inventory-filters" hidden={!!collapsed.filters}><div className="inventory-filters"><label>Search products<input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Product, SKU or location"/></label><label>Sort inventory<select value={sort} onChange={e=>{setSort(e.target.value);setDescending(e.target.value==='DATE'||e.target.value==='PURCHASED')}}>{columns.map(([key,name])=><option key={key} value={key}>{name}</option>)}</select></label><label className="check"><input type="checkbox" checked={reviewOnly} onChange={e=>setReviewOnly(e.target.checked)}/>Needs product review</label></div></div></Panel><Panel title={`${rows.length} inventory products`} action={collapseControl('products')}><div id="inventory-products" hidden={!!collapsed.products}><p className="inventory-explanation">Quantity purchased is supported by active receipts. Quantity on hand starts from purchased amounts and updates with receipts and recorded usage. A physical count is optional and can be entered later. Location is optional. Matching SKU / UPC values preserve leading zeros; missing SKUs stay separate, and conflicting names are flagged for review.</p><div className="table-wrap"><table><thead><tr>{columns.map(([key,name])=><th key={key} aria-sort={sort===key?(descending?'descending':'ascending'):'none'}><button type="button" className="text-button" onClick={()=>sortColumn(key)}>{name}{sort===key?<span aria-hidden="true"> {descending?'↓':'↑'}</span>:null}</button></th>)}<th>Details</th></tr></thead><tbody>{rows.map(item=><tr key={item.inventoryId}><td><strong>{item.productName??`Product ${shortId(item.productId)}`}</strong>{item.needsProductReview&&<small>Review SKU / product naming</small>}{item.lowStockLevel!=null&&item.quantityOnHand!=null&&Number(item.quantityOnHand)<=Number(item.lowStockLevel)&&<small>Low stock</small>}</td><td><span className="raw-value">{item.sku??'Not recorded'}</span></td><td>{item.totalPurchased??'Not recorded'} package(s){item.individualPurchased!=null&&<small>{item.individualPurchased} {item.unitName||'items'}</small>}</td><td>{item.quantityOnHand??'Needs confirmation'}{item.quantityConfirmed===false&&<small>Purchase-based estimate</small>}{item.quantityOnHand!=null&&<small>{item.countUnit==='ITEM'?item.unitName||'items':'Packages'}</small>}{item.countUnit!=='ITEM'&&item.individualOnHand!=null&&<small>{item.individualOnHand} {item.unitName||'items'} in full packs</small>}</td><td>{item.location||'Not recorded'}</td><td>{date(item.lastPurchased)}</td><td><button type="button" className="secondary" disabled={!!pending} onClick={()=>edit(item)}>View / update</button></td></tr>)}</tbody></table></div>{!rows.length&&<Empty title="No inventory products">Import receipt purchases to begin, or change your search.</Empty>}</div></Panel>{editing&&<Modal title={editing.productName??'Inventory item'} onClose={()=>{if(!busy&&!pending)setEditing(null)}}><details open><summary>Product summary</summary><p>SKU / UPC: <span className="raw-value">{editing.sku??'Not recorded'}</span> · Quantity purchased: {editing.totalPurchased??'Not recorded'} · Quantity on hand: {editing.quantityOnHand??'Needs confirmation'}</p></details>{error&&<div className="error" role="alert">{error}</div>}<details open><summary>Update stock</summary><p>Receipt quantities are purchased packages. Enter items per package to show their contents. You do not need to count now. Purchased package contents appear automatically; an individual-item count can be entered later.</p><form onSubmit={e=>{e.preventDefault();if(!api)return;void send(pending??{path:`/inventory/${editing.inventoryId}`,method:'PUT',key:crypto.randomUUID(),revision:editing.revision,body:{action,quantity:action==='DETAILS'?0:integer(quantity,action==='SET'?0:1),location:location.trim()||null,note:note.trim()||null,lowStockLevel:lowStock.trim()?integer(lowStock,0):null,unitsPerPackage:packSize.trim()?integer(packSize):null,unitName:unitName.trim()||null,countUnit}})}}><fieldset disabled={!writable||!api||busy||!!pending||!editing.productName}><div className="form-grid"><label>Inventory action<select aria-label="Inventory action" value={action} onChange={e=>{setAction(e.target.value);setQuantity(e.target.value==='SET'?editing.quantityOnHand??'':'1')}}><option value="SET">Count / correct quantity on hand (optional)</option><option value="DETAILS">Update package details / location only</option>{['USE','RETURN','DONATE','DISCARD'].map(v=><option key={v} value={v} disabled={editing.quantityOnHand==null}>{label(v)}</option>)}</select></label><label>{action==='SET'?'Quantity on hand':countUnit==='ITEM'?'Items removed':'Packages removed'}<input required={action!=='DETAILS'} disabled={action==='DETAILS'} inputMode="numeric" pattern={action==='SET'?'[0-9]+':action==='DETAILS'?undefined:'[1-9][0-9]*'} value={quantity} onChange={e=>setQuantity(e.target.value)}/></label><label>Items per package {countUnit==='ITEM'?'(required)':'(optional)'}<input inputMode="numeric" required={countUnit==='ITEM'} pattern="[1-9][0-9]*" value={packSize} onChange={e=>setPackSize(e.target.value)}/></label><label>Item unit name (optional)<input maxLength={80} placeholder="Razors, rolls, bottles" value={unitName} onChange={e=>setUnitName(e.target.value)}/></label><label>Track stock as<select aria-label="Track stock as" value={countUnit} onChange={e=>{setCountUnit(e.target.value);setAction('SET');setQuantity('')}}><option value="PACKAGE">Packages</option><option value="ITEM">Individual items</option></select></label><label>Location (optional)<input maxLength={200} value={location} onChange={e=>setLocation(e.target.value)}/></label><label>Low-stock alert level (optional)<input inputMode="numeric" pattern="[0-9]+" value={lowStock} onChange={e=>setLowStock(e.target.value)}/></label><label>Adjustment note (optional)<input value={note} onChange={e=>setNote(e.target.value)}/></label></div></fieldset><button type="submit" className="primary" disabled={!writable||!api||busy||!editing.productName}>{busy?'Saving…':pending?'Retry same adjustment':'Save inventory'}</button></form></details><details open><summary>Purchase evidence</summary>{editing.sources?.map(source=><p key={`${source.receiptId}-${source.lineItemId}`}><button className="text-button" onClick={()=>{setEditing(null);onReceipt(source.receiptId)}}>{source.receiptNumber||shortId(source.receiptId)}</button> · {source.store||'Store not recorded'} · {date(source.date)} · {source.quantity} package(s) · Revision {source.revision} · {source.active?'Active purchase':'Removed / deleted purchase'}</p>)}</details><details><summary>Stock history</summary>{editing.history?.map((entry,i)=><p key={i}>{new Date(entry.at).toLocaleString()} · {entry.before} → {entry.after} · {entry.reason}</p>)}</details></Modal>}</>
+}
 function Rebates({ data, onReceipt }: Props) { return <><PageHeader title="Rebates" subtitle="Track expected and confirmed benefits without counting them twice." /><Panel title="Receipt-linked rebates and points"><div className="stack">{data.receiptEarnings?.filter(row => row.earning.kind === 'THIRD_PARTY_REBATE').map(row => <div className="detail-row" key={`${row.receiptId}-${row.earning.earningId}`}><div><strong>{row.earning.provider} · {row.earning.offerReference || 'Receipt reward'}</strong><small>{rewardStatusLabel(row.earning)} · receipt {row.receiptNumber || shortId(row.receiptId)} · {label(row.receiptStatus)}</small><small>Expected {row.earning.expected?.amount} {row.earning.expected?.kind === 'POINTS' ? 'points' : row.earning.expected?.currency} · confirmed {row.earning.confirmed?.amount || 'not recorded'}</small>{row.earning.details?.payoutDestination && <small>Payout destination: {label(row.earning.details.payoutDestination)} (context only)</small>}</div><button className="text-button" onClick={() => onReceipt(row.receiptId)}>Open receipt</button></div>)}</div>{!data.receiptEarnings?.some(row => row.earning.kind === 'THIRD_PARTY_REBATE') && <p className="muted">No receipt-linked rebates yet. Open a receipt’s Rewards tab to add one.</p>}</Panel><div className="card-grid">{data.rebates.map(r => <article className="deal-card" key={r.claimId}><div className="card-top"><span className="icon-tile mint"><Coins size={20} /></span><Badge>{label(r.status)}</Badge></div><h2>{r.provider}</h2><p>{r.externalClaimRef || shortId(r.claimId)}</p><h3>Expected</h3>{r.expectedBenefits.map((b, i) => <p key={i}>{b.kind === 'POINTS' ? `${b.amount} points` : `${b.currency || ''} ${b.amount}`} · {label(b.kind)}</p>)}<h3>Confirmed</h3>{r.confirmedBenefits.length ? r.confirmedBenefits.map((b, i) => <p key={i}>{b.kind === 'POINTS' ? `${b.amount} points` : `${b.currency || ''} ${b.amount}`} · {label(b.kind)}</p>) : <p className="muted">Not confirmed</p>}<small>Receipt: {r.transactionId ? data.receipts.find(row => row.transactionId === r.transactionId)?.metadata?.receiptNumber || r.transactionId : 'Not linked'}</small><small>Submitted {date(r.submittedOn)} · fulfilled {date(r.fulfilledOn)}</small>{r.providerStatus && <p>{r.providerStatus}</p>}</article>)}</div>{!data.rebates.length && <Panel title="Rebate claims"><Empty title="No rebate claims recorded">Receipt earnings and formal rebate claims are separate records.</Empty></Panel>}<Unavailable>Receipt-linked earnings and their submission notes can be added on receipts. Standalone claim lifecycle management and external payout confirmation are not exposed here.</Unavailable></> }
 
 
@@ -828,7 +877,7 @@ export function StandaloneRewardPanel({api,writable,onChanged}:{api?:ApiClient;w
 export function MemberRewardEntry({provider,api,writable,day,onSaved}:{provider:string;api?:ApiClient;writable:boolean;day:string;onSaved:()=>void}) {
  const [open,setOpen]=useState(false),[date,setDate]=useState(day),[amount,setAmount]=useState(''),[description,setDescription]=useState(''),[expiration,setExpiration]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('')
  const [pending,setPending]=useState<{key:string;body:unknown}|null>(null)
- async function save(e:React.FormEvent){e.preventDefault();if(!api)return;setBusy(true);setError('');const request=pending??{key:crypto.randomUUID(),body:{eventId:crypto.randomUUID(),provider,date,amount,description,...(provider==='ECB'&&expiration?{expirationDate:expiration}:{})}};setPending(request);try{await api.mutate('/accounts/member-rewards','POST',request.body,request.key);setPending(null);setAmount('');setDescription('');setExpiration('');setOpen(false);onSaved()}catch(ex){setError((ex as Error).message);if((ex as {status?:number}).status===400)setPending(null)}finally{setBusy(false)}}
+ async function save(e?:React.FormEvent){e?.preventDefault();if(!api)return;setBusy(true);setError('');const request=pending??{key:crypto.randomUUID(),body:{eventId:crypto.randomUUID(),provider,date,amount,description,...(provider==='ECB'&&expiration?{expirationDate:expiration}:{})}};setPending(request);try{await api.mutate('/accounts/member-rewards','POST',request.body,request.key);setPending(null);setAmount('');setDescription('');setExpiration('');setOpen(false);onSaved()}catch(ex){setError((ex as Error).message);if((ex as {status?:number}).status===400)setPending(null)}finally{setBusy(false)}}
  return <Panel className="account-detail-panel" title="Member Rewards Without Receipts"><button type="button" className="secondary" disabled={!writable||!api} onClick={()=>setOpen(!open)}>Add member reward without a receipt</button><p>Record a reward already received in {provider}. It increases the account balance without creating a receipt or changing receipt savings. Do not enter the same earning again on a receipt.</p>{provider==='Register Rewards'&&<p>For a coupon you need to match to a receipt, also use Rewards Without Receipts below. That coupon inventory entry does not add another account earning.</p>}{open&&<form onSubmit={save}>{error&&<Notice>{error}</Notice>}<fieldset disabled={busy||!!pending}><div className="form-grid"><label>Reward date<input type="date" required value={date} onChange={e=>setDate(e.target.value)}/></label><label>Member reward amount<input required inputMode="decimal" pattern="([0-9]+([.][0-9]+)?|[.][0-9]+)" value={amount} onChange={e=>setAmount(e.target.value)}/></label>{provider==='ECB'&&<label>ECB expiration date (optional)<input type="date" min={date||undefined} value={expiration} onChange={e=>setExpiration(e.target.value)}/></label>}<label className="field-full">Member reward name / description<input required value={description} onChange={e=>setDescription(e.target.value)}/></label></div></fieldset><div className="form-actions"><button type="submit" className="primary" disabled={busy||!writable}>{pending?'Retry same reward':'Save member reward'}</button></div></form>}</Panel>
 }
 
@@ -836,4 +885,60 @@ function CatalogDelete({api,writable,path,revision,name,onChanged}:{api?:ApiClie
  const [busy,setBusy]=useState(false),[error,setError]=useState('')
  async function remove(){if(!api||!window.confirm(`Permanently delete ${name}? Its current plan associations will be removed.`))return;setBusy(true);setError('');try{await api.mutate(path,'DELETE',{},crypto.randomUUID(),revision);onChanged?.()}catch(ex){setError((ex as Error).message)}finally{setBusy(false)}}
  return <div className="catalog-delete">{error&&<Notice>{error}</Notice>}<button type="button" className="secondary" disabled={!api||!writable||busy} onClick={()=>void remove()}>Delete {path.startsWith('/deals/')?'deal':'coupon'}</button></div>
+}
+
+const scenarioLine=()=>({id:crypto.randomUUID(),name:'',sku:null as string|null,regular:'',sale:null as string|null,quantity:'1'})
+function completeScenarioSlots(current:PlanScenario):PlanScenario {
+   const missing=current.items.filter(l=>!current.coupons.some(c=>!c.wholeReceipt&&c.lineIds.length===1&&c.lineIds[0]===l.id));
+   if(!missing.length&&current.payments!=null)return current;
+   const rows=current.payments??[...([['WALGREENS_CASH',current.walgreensCashUsed],['REGISTER_REWARD',current.registerRewardsUsed],['GIFT_CARD',current.giftCardUsed]] as const).filter(([,a])=>!/^0+(?:[.]0+)?$/.test(a)).map(([type,amount])=>({id:crypto.randomUUID(),type,amount,notes:current.fundingNotes})),{id:crypto.randomUUID(),type:current.paymentMethod,amount:current.manualOop??'',notes:''}];
+   return {...current,payments:rows,coupons:[...current.coupons,...missing.map(l=>({id:crypto.randomUUID(),description:'',amount:'',requiredQuantity:'1',kind:'MANUFACTURER',lineIds:[l.id],savedCouponId:null}))]}
+}
+export function ProductCouponSubtotal({line,coupons,api}:{line:PlanScenario['items'][number];coupons:PlanScenario['coupons'];api:ApiClient}) {
+ const key=JSON.stringify({line,coupons}),[result,setResult]=useState<{key:string;amount:string}|null>(null)
+ useEffect(()=>{let active=true;const timer=setTimeout(()=>{try{
+  const value=JSON.parse(key) as {line:PlanScenario['items'][number];coupons:PlanScenario['coupons']}
+  const scenario={items:[{...value.line,sku:value.line.sku||null,sale:value.line.sale||null,quantity:integer(String(value.line.quantity))}],coupons:activeScenarioCoupons(value.coupons).map(c=>({...c,requiredQuantity:integer(String(c.requiredQuantity))})),promotions:[],tax:'0',walgreensCashUsed:'0',registerRewardsUsed:'0',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:''}
+  void api.mutate('/shopping-plans/scenario/preview','POST',{scenario},crypto.randomUUID()).then(value=>{const row=(value as ScenarioEstimate).items.find(x=>x.id===line.id);if(active&&row)setResult({key,amount:row.itemOopBeforeTaxAndFunding})}).catch(()=>{if(active)setResult(null)})
+ }catch{if(active)setResult(null)}},250);return()=>{active=false;clearTimeout(timer)}},[api,key,line.id])
+ return <p className="planning-calculated" role="status">Total minus coupons: <strong>{result?.key===key?money(result.amount):'—'}</strong><small>Product coupons only · before tax and whole-receipt discounts</small></p>
+}
+export function PlanScenarioEditor({plan,data,api,writable,onClose,onChanged,onReceipt}:{plan:Plan|null;data:Workspace;api:ApiClient;writable:boolean;onClose:()=>void;onChanged?:()=>void;onReceipt:(draft:PlanReceiptDraft)=>void}) {
+ const [saved,setSaved]=useState<Plan|null>(plan),[id]=useState(()=>plan?.planId??crypto.randomUUID()),[name,setName]=useState(plan?.name??''),[store,setStore]=useState(plan?.retailer??'Walgreens'),[day,setDay]=useState(plan?.shoppingDate??'')
+ const [scenario,setScenarioState]=useState<PlanScenario>(()=>completeScenarioSlots(plan?.scenario??{items:data.plans.find(r=>r.plan.planId===plan?.planId)?.items.map(p=>({id:p.plannedPurchaseId,name:p.productName,sku:p.productCode,regular:p.regularUnitPrice??p.targetUnitPrice??'',sale:p.saleUnitPrice??null,quantity:p.quantity})).filter(Boolean).length?data.plans.find(r=>r.plan.planId===plan?.planId)!.items.map(p=>({id:p.plannedPurchaseId,name:p.productName,sku:p.productCode,regular:p.regularUnitPrice??p.targetUnitPrice??'',sale:p.saleUnitPrice??null,quantity:p.quantity})):[scenarioLine()],coupons:[],promotions:[],tax:'0',taxRate:'8.25',walgreensCashUsed:'0',registerRewardsUsed:'0',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:''}))
+ const [focus,setFocus]=useState('')
+ const [preview,setPreview]=useState<{key:string;value:ScenarioEstimate}|null>(null),[previewError,setPreviewError]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[pending,setPending]=useState<{key:string;body:unknown;path:string;method:'POST'|'PUT';revision?:string}|null>(null),[couponForm,setCouponForm]=useState<string|null>(null)
+ function setScenario(value:PlanScenario){setScenarioState(completeScenarioSlots(value))}
+ function cleanScenario(value:PlanScenario):PlanScenario{return {...value,paymentMethod:value.payments?.find(p=>['CASH','CARD'].includes(p.type))?.type??value.paymentMethod,coupons:activeScenarioCoupons(value.coupons),promotions:value.promotions.filter(p=>(p.description.trim()||p.rewardAmount.trim())&&!zeroScenarioAmount(p.rewardAmount)).map(p=>({...p,requiredQuantity:p.requiredQuantity||'0',requiredSpend:p.requiredSpend.trim()||'0'})),payments:value.payments?.filter(p=>p.amount.trim())}}
+ const raw=JSON.stringify(scenario),report=preview?.key===raw?preview.value:null
+ function payload(){return scenarioRequest(JSON.parse(raw) as PlanScenario)}
+ useEffect(()=>{let active=true;const timer=setTimeout(()=>{try{const body=scenarioRequest(JSON.parse(raw) as PlanScenario);void api.mutate('/shopping-plans/scenario/preview','POST',{scenario:body},crypto.randomUUID()).then(r=>{if(active){setPreview({key:raw,value:r as ScenarioEstimate});setPreviewError('')}}).catch(e=>{if(active)setPreviewError((e as Error).message)})}catch(e){if(active)setPreviewError((e as Error).message)}},350);return()=>{active=false;clearTimeout(timer)}},[api,raw])
+
+ function changeLine(id:string,key:string,value:string){setScenario({...scenario,items:scenario.items.map(x=>x.id===id?{...x,[key]:value}:x)})}
+ const amount=(label:string,value:string|null,change:(v:string)=>void,required=true)=><label>{label}<input required={required} inputMode="decimal" pattern="([0-9]+([.][0-9]+)?|[.][0-9]+)" value={value??''} onChange={e=>change(e.target.value)}/></label>
+ const selectProducts=(ids:string[],set:(ids:string[])=>void)=><div className="check-list">{scenario.items.map((l,i)=><label className="check" key={l.id}><input type="checkbox" checked={ids.includes(l.id)} onChange={e=>set(e.target.checked?[...ids,l.id]:ids.filter(id=>id!==l.id))}/>{i+1}. {l.name||'New product'} · quantity {l.quantity}</label>)}</div>
+ function addCoupon(lineId?:string,kind='MANUFACTURER',wholeReceipt=false){const nextId=crypto.randomUUID();setFocus(nextId);setScenario({...scenario,coupons:[...scenario.coupons,{id:nextId,description:'',amount:'',requiredQuantity:'1',kind,wholeReceipt,lineIds:wholeReceipt?[]:lineId?[lineId]:scenario.items.map(x=>x.id),savedCouponId:null}]})}
+ function addPromotion(lineId?:string){const nextId=crypto.randomUUID();setFocus(nextId);setScenario({...scenario,promotions:[...scenario.promotions,{id:nextId,description:'',rewardType:'REGISTER_REWARD',rewardAmount:'',requiredQuantity:'1',requiredSpend:'0',spendBasis:'BEFORE_COUPONS',allowsWalgreensCash:true,allowsWalmartCash:true,wholeReceipt:!lineId,lineIds:lineId?[lineId]:[]}]})}
+ async function save(e?:React.FormEvent){e?.preventDefault();setError('');if(!report){setError('Complete the inputs and wait for the current Java breakdown before saving.');return}setBusy(true);try{const request=pending??{key:crypto.randomUUID(),method:saved?'PUT' as const:'POST' as const,path:saved?`/shopping-plans/${id}`:'/shopping-plans',revision:saved?.revision,body:{planId:id,name:name.trim(),retailer:store.trim()||null,shoppingDate:day||null,scenario:payload()}};setPending(request);const result=await api.mutate(request.path,request.method,request.body,request.key,request.revision) as Plan;setSaved(result);setPending(null);onChanged?.();return result}catch(e){setError((e as Error).message);if((e as {status?:number}).status===400)setPending(null)}finally{setBusy(false)}}
+ async function copyReceipt(id:string){if(!id)return;setError('');try{const receipt=await api.receipt(id);if(scenario.items.some(l=>l.name)&&!window.confirm('Replace this draft’s products and remove its coupon/promotion associations?'))return;setScenario({...scenario,items:receipt.contents.purchaseItems.map(l=>({id:crypto.randomUUID(),name:l.productName,sku:l.productCode,regular:l.regularUnitPrice??'',sale:null,quantity:l.quantity})),coupons:[],promotions:[]});setStore(receipt.metadata?.retailer||store)}catch(e){setError((e as Error).message)}}
+ function couponFields(c:PlanScenario['coupons'][number]) {
+  const i=scenario.coupons.findIndex(x=>x.id===c.id),filled=!!(c.description.trim()||c.amount.trim())&&!zeroScenarioAmount(c.amount);
+  const change=(key:string,value:string)=>setScenario({...scenario,coupons:scenario.coupons.map(x=>x.id===c.id?{...x,[key]:value}:x)});
+  return <section className="scenario-coupon" key={c.id}><div className="scenario-row"><label>Coupon description {i+1}<input autoFocus={focus===c.id} required={filled} value={c.description} onChange={e=>change('description',e.target.value)}/></label><label>Coupon type {i+1}<select aria-label={`Coupon type ${i+1}`} value={c.kind??'MANUFACTURER'} onChange={e=>change('kind',e.target.value)}><option value="MANUFACTURER">Mfg</option><option value="STORE_COUPON">Store coupon</option><option value="SALE_PROMOTION">Store promotion discount</option></select></label></div><div className="scenario-row">{amount(`Coupon amount ${i+1}`,c.amount,v=>change('amount',v),filled)}<label>Required coupon quantity {i+1}<input required={filled} pattern={filled?'[1-9][0-9]*':undefined} value={c.requiredQuantity} onChange={e=>change('requiredQuantity',e.target.value)}/></label></div><div className="product-entry-actions"><button type="button" className="secondary" disabled={c.kind==='SALE_PROMOTION'||!!c.savedCouponId||!c.description||!c.amount} onClick={()=>setCouponForm(c.id)}>{c.savedCouponId?'Saved to Coupons':'Add to Coupons (optional)'}</button><button type="button" className="secondary" onClick={()=>setScenario({...scenario,coupons:scenario.coupons.filter(x=>x.id!==c.id)})}>Remove coupon {i+1}</button></div></section>
+ }
+ const selectedCoupon=scenario.coupons.find(c=>c.id===couponForm)
+ if(selectedCoupon)return <Modal title="Add planned coupon to Coupons" onClose={()=>setCouponForm(null)}><CouponForm api={api} initialValues={{description:selectedCoupon.description,amount:selectedCoupon.amount,requiredQuantity:selectedCoupon.requiredQuantity,provider:scenario.items.find(l=>selectedCoupon.lineIds.includes(l.id))?.name.split(' ')[0]||store,source:selectedCoupon.kind==='STORE_COUPON'?'PAPER_STORE':'PAPER_MANUFACTURER',couponType:selectedCoupon.kind==='STORE_COUPON'?'STORE':'MANUFACTURER'}} onCancel={()=>setCouponForm(null)} onSaved={rows=>{setScenario({...scenario,coupons:scenario.coupons.map(c=>c.id===selectedCoupon.id?{...c,savedCouponId:rows[0].couponId}:c)});setCouponForm(null);onChanged?.()}}/></Modal>
+ return <Modal title={saved?'Edit deal scenario':'Plan a shopping deal'} onClose={onClose}><p>Try coupons, tax, WC and RR without spending rewards or creating a receipt. Rewards below are possible, not earned. Copying an older plan brings its products; review and add its coupon/promotion terms here.</p>{error&&<Notice>{error}</Notice>}<form className="deal-scenario-form" onSubmit={save}><fieldset disabled={!writable||busy||!!pending}><div className="scenario-row"><label>Plan name<input required value={name} onChange={e=>setName(e.target.value)}/></label><label>Store<input required value={store} onChange={e=>setStore(e.target.value)}/></label><label>Shopping date<input type="date" value={day} onChange={e=>setDay(e.target.value)}/></label><label>Copy products from receipt<select value="" onChange={e=>void copyReceipt(e.target.value)}><option value="">Choose a receipt (optional)</option>{data.receipts.filter(r=>r.status==='ACTIVE').map(r=><option value={r.transactionId} key={r.transactionId}>{r.date} · {r.metadata?.retailer} · {r.metadata?.receiptNumber}</option>)}</select></label></div>
+ <h3>Products</h3>{scenario.items.map((l,i)=><details key={l.id} className="receipt-input-row" open><summary>Product {i+1} · {l.name||'New product'} — Show / Hide</summary><div className="scenario-row"><label>Product {i+1}<input autoFocus={focus===l.id} required value={l.name} onChange={e=>changeLine(l.id,'name',e.target.value)}/></label><label>SKU {i+1}<input value={l.sku??''} onChange={e=>{const match=data.productLookup?.find(p=>p.sku===e.target.value);setScenario({...scenario,items:scenario.items.map(x=>x.id===l.id?{...x,sku:e.target.value,...(match?{name:match.description,regular:match.regularPrice??x.regular}:{})}:x)})}}/></label></div><div className="scenario-row">{amount(`Regular price ${i+1}`,l.regular,v=>changeLine(l.id,'regular',v))}{amount(`Sale price ${i+1} (optional)`,l.sale,v=>changeLine(l.id,'sale',v),false)}</div><div className="scenario-row"><label>Quantity {i+1}<input required inputMode="numeric" pattern="[1-9][0-9]*" value={l.quantity} onChange={e=>changeLine(l.id,'quantity',e.target.value)}/></label><div className="planning-calculated">Total: <strong>{report?.items.find(x=>x.id===l.id)?money(report.items.find(x=>x.id===l.id)!.totalPrice):'Calculated when entries are complete'}</strong></div></div><h4>Coupons</h4><p className="muted">Optional. Leave blank when no coupon applies.</p>{scenario.coupons.filter(c=>!c.wholeReceipt&&c.lineIds.length===1&&c.lineIds[0]===l.id).map(c=>couponFields(c))}<ProductCouponSubtotal line={l} coupons={scenario.coupons.filter(c=>!c.wholeReceipt&&c.lineIds.length===1&&c.lineIds[0]===l.id)} api={api}/><div className="product-entry-actions"><button type="button" className="secondary" onClick={()=>addCoupon(l.id)}>Add another coupon for product {i+1}</button><button type="button" className="secondary" onClick={()=>addCoupon(l.id,'SALE_PROMOTION')}>Add store promotion discount for product {i+1}</button><button type="button" className="secondary" onClick={()=>addPromotion(l.id)}>Add promotion for product {i+1}</button><button type="button" className="secondary" disabled={scenario.items.length===1} onClick={()=>setScenario({...scenario,items:scenario.items.filter(x=>x.id!==l.id),coupons:scenario.coupons.map(c=>({...c,lineIds:c.lineIds.filter(id=>id!==l.id)})).filter(c=>c.wholeReceipt||c.lineIds.length),promotions:scenario.promotions.map(p=>({...p,lineIds:p.lineIds.filter(id=>id!==l.id)})).filter(p=>p.wholeReceipt||p.lineIds.length)})}>Remove product {i+1}</button></div></details>)}<button className="secondary" type="button" onClick={()=>{const line=scenarioLine();setFocus(line.id);setScenario({...scenario,items:[...scenario.items,line]})}}>Add product</button>
+ {scenario.coupons.some(c=>!c.wholeReceipt&&c.lineIds.length>1)&&<details className="receipt-input-row"><summary>Existing shared coupons</summary>{scenario.coupons.filter(c=>!c.wholeReceipt&&c.lineIds.length>1).map(c=>couponFields(c))}</details>}
+ <section className="receipt-input-row"><h3>Whole-receipt discounts</h3><p>For online coupon codes, order-wide coupons and store promotions. Each amount is deducted once from the whole purchase, including products added later. Leave blank rows empty when unused.</p>{scenario.coupons.filter(c=>c.wholeReceipt).map(c=>couponFields(c))}<button type="button" className="secondary" onClick={()=>addCoupon(undefined,'STORE_COUPON',true)}>Add whole-receipt coupon or promotion</button></section>
+ <section className="receipt-input-row"><h3>Tax</h3><div className="scenario-row scenario-three"><label>Tax calculation<select aria-label="Tax calculation" value={scenario.taxRate==null?'AMOUNT':'RATE'} onChange={e=>setScenario({...scenario,taxRate:e.target.value==='RATE'?'8.25':null})}><option value="RATE">Calculate</option><option value="AMOUNT">Enter amount</option></select></label>{scenario.taxRate!=null?amount('Tax rate (%)',scenario.taxRate,taxRate=>setScenario({...scenario,taxRate})):amount('Tax amount',scenario.tax,tax=>setScenario({...scenario,tax}))}<div className="planning-calculated"><span>Tax amount</span><strong>{report?money(report.tax):'—'}</strong></div></div><p className="planning-calculated">Total with tax <strong>{report?money(report.totalWithTax??report.receiptTotalBeforeFunding??report.calculatedOop):'—'}</strong></p></section>
+ <section className="receipt-input-row"><h3>Payment or Rewards</h3><p className="muted">Cash or credit left blank uses the calculated remaining amount. Enter amounts to plan specific payments.</p>{(scenario.payments??[]).map((p,i)=><div className="scenario-payment" key={p.id}><div className="scenario-row scenario-three"><label>Payment or reward {i+1}<select aria-label={`Payment or reward ${i+1}`} value={p.type} onChange={e=>setScenario({...scenario,payments:scenario.payments!.map(x=>x.id===p.id?{...x,type:e.target.value}:x)})}>{[['WALGREENS_CASH','Walgreens Cash'],...(/^walmart(?:\s|#|$)/i.test(store.trim())||p.type==='WALMART_CASH'?[['WALMART_CASH','Walmart Cash']]:[]),['REGISTER_REWARD','Register Rewards'],['ECB','ECB'],['GIFT_CARD','Gift Cards'],['CASH','Cash'],['CARD','Credit']].map(([v,t])=><option key={v} value={v}>{t}</option>)}</select></label>{amount(`Payment amount ${i+1}`,p.amount,v=>setScenario({...scenario,payments:scenario.payments!.map(x=>x.id===p.id?{...x,amount:v}:x)}),false)}<label>Payment description {i+1}<input value={p.notes} onChange={e=>setScenario({...scenario,payments:scenario.payments!.map(x=>x.id===p.id?{...x,notes:e.target.value}:x)})}/></label></div><button type="button" className="secondary" onClick={()=>setScenario({...scenario,payments:scenario.payments!.filter(x=>x.id!==p.id)})}>Remove payment {i+1}</button></div>)}<button type="button" className="secondary" onClick={()=>setScenario({...scenario,payments:[...(scenario.payments??[]),{id:crypto.randomUUID(),type:'CASH',amount:'',notes:''}]})}>Add another payment or reward</button></section>
+ <details open className="receipt-input-row"><summary>Rebates — Show / Hide</summary><p>Enter each expected rebate once. Fetch points convert automatically at 1,000 points = $1; P&amp;G Brand uses 250 points = $1. Cash rebates include Ibotta, PayPal, Venmo and Swagbucks dollar values even before withdrawal limits are reached.</p>{scenario.promotions.map((p,i)=><section className="receipt-input-row" key={p.id}><div className="scenario-row scenario-rebate-main"><label>Rebate type {i+1}<select aria-label={`Rebate type ${i+1}`} value={p.rewardType} onChange={e=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,rewardType:e.target.value,rewardAmount:''}:x)})}>{[['FETCH','Fetch'],['REGISTER_REWARD','Register Reward'],['WALGREENS_CASH','Walgreens Cash'],['WALMART_CASH','Walmart Cash'],['IBOTTA','Ibotta'],['PAYPAL','PayPal'],['VENMO','Venmo'],['SWAGBUCKS','Swagbucks (dollar value)'],['PG_BRAND','P&G Brand'],['ECB','CVS ExtraBucks'],['CASH','Other cash rebate']].map(([v,t])=><option value={v} key={v}>{t}</option>)}</select></label><label>Rebate description {i+1}<input autoFocus={focus===p.id} required={!!(p.description.trim()||p.rewardAmount.trim())&&!zeroScenarioAmount(p.rewardAmount)} value={p.description} onChange={e=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,description:e.target.value}:x)})}/></label>{amount(`${['FETCH','PG_BRAND'].includes(p.rewardType)?'Rebate points':'Rebate amount'} ${i+1}`,p.rewardAmount,v=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,rewardAmount:v}:x)}),!!(p.description.trim()||p.rewardAmount.trim())&&!zeroScenarioAmount(p.rewardAmount))}{['FETCH','PG_BRAND'].includes(p.rewardType)&&<div className="planning-calculated"><span>Converted USD {i+1}</span><strong>{report?.promotions.find(x=>x.id===p.id)?.usdValue!=null?money(report.promotions.find(x=>x.id===p.id)!.usdValue!):'Calculated when entries are complete'}</strong></div>}</div><div className="scenario-row scenario-three"><label>Required promotion quantity {i+1}<input pattern="[0-9]+" value={p.requiredQuantity} onChange={e=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,requiredQuantity:e.target.value}:x)})}/></label>{amount(`Required spend ${i+1}`,p.requiredSpend,v=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,requiredSpend:v}:x)}),false)}<label>Spend basis {i+1}<select value={p.spendBasis} onChange={e=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,spendBasis:e.target.value}:x)})}><option value="BEFORE_COUPONS">Sale prices before coupons</option><option value="AFTER_COUPONS">After coupons</option><option value="AFTER_REWARDS_USED">After coupons and WC/RR used (conservative)</option></select></label></div><label>Rebate applies to {i+1}<select aria-label={`Rebate applies to ${i+1}`} value={p.wholeReceipt?'WHOLE_RECEIPT':'PRODUCTS'} onChange={e=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,wholeReceipt:e.target.value==='WHOLE_RECEIPT',lineIds:e.target.value==='WHOLE_RECEIPT'?[]:scenario.items.map(l=>l.id)}:x)})}><option value="WHOLE_RECEIPT">Whole receipt</option><option value="PRODUCTS">Selected products</option></select></label><details><summary>Product and payment details (optional)</summary>{!p.wholeReceipt&&selectProducts(p.lineIds,lineIds=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,lineIds}:x)}))}{/^walgreens(?:\s|#|$)/i.test(store.trim())&&<label className="check"><input type="checkbox" checked={p.allowsWalgreensCash} onChange={e=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,allowsWalgreensCash:e.target.checked}:x)})}/>This rebate permits paying with Walgreens Cash</label>}{/^walmart(?:\s|#|$)/i.test(store.trim())&&<label className="check"><input type="checkbox" checked={p.allowsWalmartCash??true} onChange={e=>setScenario({...scenario,promotions:scenario.promotions.map(x=>x.id===p.id?{...x,allowsWalmartCash:e.target.checked}:x)})}/>This rebate permits paying with Walmart Cash</label>}</details><button className="secondary" type="button" onClick={()=>setScenario({...scenario,promotions:scenario.promotions.filter(x=>x.id!==p.id)})}>Remove rebate {i+1}</button></section>)}<button className="secondary" type="button" onClick={()=>addPromotion()}>Add another rebate</button></details>
+</fieldset>
+ {previewError&&!report&&<div className="error" role="alert">{previewError}</div>}{report?<ScenarioBreakdown report={report}/>:<p role="status">Complete product prices for a Java-calculated breakdown.</p>}
+ <div className="form-actions"><button className="secondary" type="button" disabled={busy} onClick={onClose}>Close scenario</button><button className="secondary" type="button" disabled={!report||busy||!!pending||!name||!writable||!!saved?.purchasedReceiptId} onClick={async()=>{const source=await save();if(source&&report)onReceipt({plan:{...source,scenario:cleanScenario(scenario)},estimate:report})}}>Start receipt draft</button><button className="primary" disabled={!writable||busy||!report}>{busy?'Saving…':pending?'Retry same plan':'Save scenario'}</button></div>{saved&&<p className="muted">Saved plan revision {saved.revision}. Further edits need Save scenario.</p>}</form></Modal>
+}
+export function ScenarioBreakdown({report:r}:{report:ScenarioEstimate}) {
+ return <section className="scenario-breakdown"><h3>Planning breakdown</h3><div className="table-wrap"><table><thead><tr>{['Product','Total price','Coupons applied','Item OOP before tax / funding','Possible rewards'].map(t=><th key={t}>{t}</th>)}</tr></thead><tbody>{r.items.map(l=><tr key={l.id}><td>{l.name}</td><td>{money(l.totalPrice)}</td><td>{money(l.couponsApplied)}</td><td>{money(l.itemOopBeforeTaxAndFunding)}</td><td>{money(l.possibleRewards)}</td></tr>)}</tbody></table></div><p className="muted">Shared rewards are attributed once to the first selected product so they are not counted several times. Item OOP excludes receipt-level tax and WC/RR funding.</p><details><summary>Coupon and rebate checks (optional)</summary>{r.coupons.map(c=><p key={c.id}>{c.description} — Coupon qualifies: <strong>{c.applied?'Yes':'No'}</strong> · {c.reason}</p>)}{r.promotions.map(p=><p key={p.id}>{p.description} — Quantity met: <strong>{p.quantityMet?'Yes':'No'}</strong> · Spend threshold met: <strong>{p.spendMet?'Yes':'No'}</strong> · Reward-payment rule met: <strong>{p.walgreensCashAllowed?'Yes':'No'}</strong> · Possible reward {money(p.potentialReward)}</p>)}</details><section className="planning-calculated"><h4>OOP before rewards, after tax</h4><strong>{money(r.calculatedOop)}</strong><small>After coupons, tax and checkout funding; before subtracting rewards and rebates earned.</small></section><div className="key-values">{Object.entries({'Regular merchandise':r.regularTotal,'Sale merchandise':r.saleTotal,'Total coupons applied':r.couponTotal,'Cash OOP before tax':r.merchandiseAfterCoupons,'Sales tax':r.tax,'Total rebates':r.potentialRewards,...(r.cashRebates!=null?{'Cash rebates':r.cashRebates,'Other rebates':r.otherRebates!,'After cash rebates (including tax)':r.afterCashRebates!,'After cash rebates (before tax)':r.beforeTaxAfterCashRebates!,'Net before tax':r.netBeforeTax!}:{}),'Net including tax':r.afterPotentialRewards}).map(([label,value])=><div key={label}><span>{label}</span><strong>{money(value)}</strong></div>)}</div><details><summary>Payment scenario details (optional)</summary><div className="key-values">{Object.entries({'RR used':r.registerRewardsUsed,'WC used':r.walgreensCashUsed,...(r.walmartCashUsed!=null?{'Walmart Cash used':r.walmartCashUsed}:{}),'Gift card used':r.giftCardUsed,'Selected cash/card OOP':r.selectedOop,'Manual / calculated difference':r.manualDifference,'Funding above purchase total':r.overFunding}).map(([label,value])=><div key={label}><span>{label}</span><strong>{money(value)}</strong></div>)}</div></details><p className="muted">Quantity and spend checks use entered terms, not a guarantee of store eligibility. Possible rewards never reduce the amount due at checkout.</p></section>
 }

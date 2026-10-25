@@ -60,10 +60,10 @@ describe('workspace UI', () => {
   it('requires a connection and presents no demo values', () => { render(<App />); expect(screen.getByRole('heading', { name: 'Welcome to your workspace' })).toBeInTheDocument(); expect(screen.queryByText('Total saved')).not.toBeInTheDocument() })
   it('renders every grocery screen and approval limitations', async () => {
     const { user } = await connect()
-    for (const [link, heading] of [['Receipts', 'Your receipts'], ['Shopping plans', 'Shopping plans'], ['Coupons', 'Coupons'], ['Deals & promotions', 'Deals & promotions'], ['Rewards & Accounts', 'Rewards & Accounts'], ['Inventory', 'Your inventory'], ['Rebates', 'Rebates']]) { await user.click(screen.getByRole('link', { name: link })); expect(
+    for (const [link, heading] of [['Receipts', 'Your receipts'], ['Shopping plans', 'Shopping plans'], ['Coupons', 'Coupons'], ['Deals & promotions', 'Deals & promotions'], ['Rewards & Accounts', 'Rewards & Accounts'], ['Inventory', 'Household inventory'], ['Rebates', 'Rebates']]) { await user.click(screen.getByRole('link', { name: link })); expect(
   screen.getByRole('heading', { name: heading, level: 1 })
 ).toBeInTheDocument() }
-    await user.click(screen.getByRole('link', { name: 'Inventory' })); expect(screen.getByText(/authenticated approval workflow/)).toBeInTheDocument(); expect(screen.queryByRole('button', { name: /adjust/i })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('link', { name: 'Inventory' })); expect(screen.getByRole('button', { name: 'Import / sync receipts' })).toBeInTheDocument()
   })
   it('disables read-only writes and clears the workspace on disconnect', async () => {
     const { user } = await connect(true); expect(screen.getByRole('button', { name: 'New shopping plan' })).toBeDisabled()

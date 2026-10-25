@@ -46,6 +46,15 @@ public final class PostgresShoppingPlanRepository implements ShoppingPlanReposit
             history(c,plan,actor,reason); return plan;
         });
     }
+    static void markPurchased(Connection c,UUID id,long expected,UUID receiptId,String actor)throws SQLException {
+        ShoppingPlan old;
+        try(var p=c.prepareStatement("SELECT payload FROM shopping_plan_current WHERE plan_id=? FOR UPDATE")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new IllegalArgumentException("Shopping plan no longer exists.");old=PostgresRepositorySupport.deserialize(r.getBytes(1),ShoppingPlan.class);}}
+        if(old.purchasedReceiptId()!=null)throw new ConcurrentModificationException("This plan is already purchased. Open its linked receipt.");
+        if(old.revision()!=expected)throw new ConcurrentModificationException("Plan changed since this draft was opened. Review the current plan before saving.");
+        var next=new ShoppingPlan(old.planId(),old.name(),old.retailer(),old.shoppingDate(),old.plannedPurchaseIds(),Math.addExact(expected,1),old.scenario(),receiptId);
+        try(var p=c.prepareStatement("UPDATE shopping_plan_current SET revision=?,payload=? WHERE plan_id=?")){p.setLong(1,next.revision());p.setBytes(2,PostgresRepositorySupport.serialize(next));p.setObject(3,id);p.executeUpdate();}
+        history(c,next,actor,"Purchased on receipt "+receiptId);
+    }
     private static void bind(PreparedStatement p,ShoppingPlan x)throws SQLException{p.setObject(1,x.planId());p.setString(2,x.name());p.setString(3,x.retailer());p.setObject(4,x.shoppingDate());p.setLong(5,x.revision());}
     private static void history(Connection c,ShoppingPlan x,String actor,String reason)throws SQLException{
         try(PreparedStatement p=c.prepareStatement("INSERT INTO shopping_plan_history(plan_id,revision,name,changed_by,reason,payload) VALUES (?,?,?,?,?,?)")){p.setObject(1,x.planId());p.setLong(2,x.revision());p.setString(3,x.name());p.setString(4,actor);p.setString(5,reason);p.setBytes(6,PostgresRepositorySupport.serialize(x));p.executeUpdate();}

@@ -7,8 +7,8 @@ import { integer } from '../../api/format'
 import type { Coupon } from '../../types/platform'
 
 /** Shared by Coupons and inline shopping-plan entry. */
-export function CouponForm({ api, onSaved, onCancel }: { api: ApiClient; onSaved: (coupons: Coupon[]) => void; onCancel: () => void }) {
-  const [f, setF] = useState<Record<string, string>>(() => ({ source: 'PAPER_MANUFACTURER', couponType: 'MANUFACTURER', discount: 'DOLLARS', copies: '1', requiredQuantity: '1', usageLimit: '1', status: 'CLIPPED', clippedOn: new Date().toISOString().slice(0, 10) }))
+export function CouponForm({ api, onSaved, onCancel, initialValues={} }: { initialValues?:Record<string,string>; api: ApiClient; onSaved: (coupons: Coupon[]) => void; onCancel: () => void }) {
+  const [f, setF] = useState<Record<string, string>>(() => ({ source: 'PAPER_MANUFACTURER', couponType: 'MANUFACTURER', discount: 'DOLLARS', copies: '1', requiredQuantity: '1', usageLimit: '1', status: 'CLIPPED', clippedOn: new Date().toISOString().slice(0, 10), ...initialValues }))
   const [fileBusy,setFileBusy]=useState(false)
   const [attachment, setAttachment] = useState<Upload | null>(null)
   const [error, setError] = useState(''); const [busy, setBusy] = useState(false)

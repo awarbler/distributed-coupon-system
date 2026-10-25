@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import coupons.*;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import coupons.PurchaseItem;
 import coupons.ReceiptTotals;
 import java.math.BigDecimal;
@@ -41,6 +42,8 @@ class PostgresTransactionRepositoryTest {
                 System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
         try (Connection connection = connections.open()) {
             PostgresSchema.apply(connection);
+            connection.createStatement().executeUpdate("TRUNCATE receipt_draft_history,receipt_drafts,inventory_receipt_lines,inventory_receipt_products,inventory_history,inventory_current");
+            connection.createStatement().executeUpdate("UPDATE inventory_receipt_settings SET enabled=false WHERE singleton=true");
             connection.createStatement().executeUpdate(
                     "TRUNCATE rr_usage_links, reward_removals, gift_card_promotions, receipt_write_requests, receipt_history, register_reward_redemptions, "
                             + "receipt_evidence, register_rewards, receipt_current");
@@ -143,6 +146,101 @@ class PostgresTransactionRepositoryTest {
         var updated=items.findById(item.plannedPurchaseId()).orElseThrow();assertNull(updated.advertisedDealId());assertTrue(updated.clippedCouponIds().isEmpty());assertEquals(BigDecimal.TEN,updated.saleUnitPrice());
         assertTrue(new PostgresDealRepository(connections).findById(deal.dealId()).isEmpty());assertTrue(new PostgresClippedCouponRepository(connections).findById(coupon.couponId()).isEmpty());
         assertTrue(new PostgresSourceArtifactRepository(connections).findById(source.getArtifactId()).isEmpty());
+    }
+
+    @Test void savedPlanningScenarioRoundTripsWithoutPostingReceiptOrAccountActivity(){
+        var id=UUID.randomUUID();var line=new ShoppingPlan.Line(UUID.randomUUID(),"Synthetic Scott",null,new BigDecimal("5"),null,2);
+        var scenario=new ShoppingPlan.Scenario(List.of(line),List.of(),List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","",new BigDecimal("8.25"),List.of(new ShoppingPlan.ScenarioPayment(UUID.randomUUID(),"ECB",new BigDecimal("2"),"Scott")));
+        var plan=new ShoppingPlan(id,"Synthetic scenario","Store",null,List.of(),1,scenario);var repo=new PostgresShoppingPlanRepository(connections);repo.save(plan,"test");
+        assertEquals(scenario,repo.findById(id).orElseThrow().scenario());assertTrue(repository.findById(id).isEmpty());
+        assertTrue(new PostgresProviderAccountRepository(connections).findAdjustments("Store").isEmpty());
+        var workspace=new PostgresPlatformRepository(connections).workspace();assertNotNull(workspace.get("plans"));
+    }
+
+    @Test void permanentlyDeletesOnlySelectedPlanAndAllItsChildren() throws Exception {
+        var id=UUID.randomUUID();var other=UUID.randomUUID();var purchase=UUID.randomUUID();
+        var plans=new PostgresShoppingPlanRepository(connections);
+        plans.save(new ShoppingPlan(id,"Delete test",null,null,List.of(),1),"test");
+        plans.save(new ShoppingPlan(other,"Keep test",null,null,List.of(),1),"test");
+        try(var c=connections.open()) {
+            try(var p=c.prepareStatement("INSERT INTO planned_purchase_current(purchase_id,plan_id,revision,payload) VALUES (?,?,1,?)")){p.setObject(1,purchase);p.setObject(2,id);p.setBytes(3,new byte[]{1});p.executeUpdate();}
+            try(var p=c.prepareStatement("INSERT INTO planned_purchase_history(purchase_id,revision,changed_by,reason,payload) VALUES (?,1,'test','test',?)")){p.setObject(1,purchase);p.setBytes(2,new byte[]{1});p.executeUpdate();}
+            try(var p=c.prepareStatement("INSERT INTO shopping_plan_checkout_current(plan_id,revision) VALUES (?,1)")){p.setObject(1,id);p.executeUpdate();}
+        }
+        var platform=new PostgresPlatformRepository(connections);
+        assertThrows(java.util.ConcurrentModificationException.class,()->platform.deleteShoppingPlan(id,2,"test"));
+        assertTrue(plans.findById(id).isPresent());
+        platform.deleteShoppingPlan(id,1,"test");
+        assertTrue(plans.findById(id).isEmpty());assertTrue(plans.findByRevision(id,1).isEmpty());assertTrue(plans.findById(other).isPresent());
+        try(var c=connections.open()) {
+            for(String table:List.of("planned_purchase_current","shopping_plan_checkout_current","shopping_plan_checkout_history"))
+                try(var p=c.prepareStatement("SELECT count(*) FROM "+table+" WHERE plan_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){r.next();assertEquals(0,r.getInt(1));}}
+            try(var p=c.prepareStatement("SELECT count(*) FROM planned_purchase_history WHERE purchase_id=?")){p.setObject(1,purchase);try(var r=p.executeQuery()){r.next();assertEquals(0,r.getInt(1));}}
+        }
+    }
+
+    @Test void receiptCreationMarksPlanPurchasedAtomicallyAndRejectsStalePlan() {
+        var plans=new PostgresShoppingPlanRepository(connections);var id=UUID.randomUUID();var receiptId=UUID.randomUUID();
+        plans.save(new ShoppingPlan(id,"Purchase test",null,null,List.of(),1),"test");
+        var request=new ReceiptWriteRequest(UUID.randomUUID(),NOW);
+        var tx=transaction();var snapshot=ReceiptSnapshot.from(tx);
+        var result=repository.saveWithPlan(receiptId,tx,null,List.of(),request,new ReceiptCreateCtx("test"),List.of(),id,1);
+        assertEquals(receiptId,plans.findById(id).orElseThrow().purchasedReceiptId());assertEquals(2,plans.findById(id).orElseThrow().revision());
+        assertNull(plans.findByRevision(id,1).orElseThrow().purchasedReceiptId());
+        assertEquals(result,repository.saveWithPlan(receiptId,snapshot.toTransaction(),null,List.of(),request,new ReceiptCreateCtx("test"),List.of(),id,1));
+        var another=UUID.randomUUID();
+        assertThrows(java.util.ConcurrentModificationException.class,()->repository.saveWithPlan(another,transaction(),null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(),id,1));
+        assertTrue(repository.findById(another).isEmpty());
+        var stale=UUID.randomUUID();plans.save(new ShoppingPlan(stale,"Stale",null,null,List.of(),1),"test");plans.update(new ShoppingPlan(stale,"Edited",null,null,List.of(),2),1,"test","Edit");
+        assertThrows(java.util.ConcurrentModificationException.class,()->repository.saveWithPlan(another,transaction(),null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(),stale,1));
+        assertTrue(repository.findById(another).isEmpty());assertNull(plans.findById(stale).orElseThrow().purchasedReceiptId());
+    }
+
+    @Test void importsReceiptInventoryOnceAndTracksUsageCorrectionsDeletionAndRestore() {
+        UUID first=UUID.randomUUID(),second=UUID.randomUUID(),third=UUID.randomUUID();
+        var a=inventoryTransaction("00123","Olay",2);var b=inventoryTransaction("00123","Olay alternate name",3);
+        repository.save(first,a,null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));
+        repository.save(second,b,null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));
+        var inventory=new PostgresInventoryRepository(connections);assertEquals(5L,inventory.importReceipts("test").get("purchasedPackages"));
+        var row=inventoryRow();assertEquals("00123",row.get("sku"));assertEquals(5L,row.get("totalPurchased"));assertEquals(5L,row.get("quantityOnHand"));assertNull(row.get("location"));assertEquals(true,row.get("needsProductReview"));
+        var revision=(Long)row.get("revision");inventory.importReceipts("test");assertEquals(revision,inventoryRow().get("revision"));
+        UUID stock=(UUID)row.get("inventoryId");inventory.adjust(stock,revision,"USE",1,null,"Used one without counting first","test");assertEquals(4,inventoryRow().get("quantityOnHand"));
+        row=inventoryRow();inventory.adjust(stock,(Long)row.get("revision"),"USE",1,"Pantry","Used one","test");assertEquals(3,inventoryRow().get("quantityOnHand"));
+        var c=inventoryTransaction("00123","Olay",2);repository.save(third,c,null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));
+        assertEquals(7L,inventoryRow().get("totalPurchased"));assertEquals(5,inventoryRow().get("quantityOnHand"));assertEquals("Pantry",inventoryRow().get("location"));
+        var line=c.getPurchaseItems().getFirst();var corrected=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));corrected.addPurchaseItem(new PurchaseItem(line.getLineItemId(),"Olay","00123",BigDecimal.ONE,BigDecimal.ONE,1));
+        repository.update(third,1,corrected,null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),changeContext());assertEquals(4,inventoryRow().get("quantityOnHand"));assertEquals(6L,inventoryRow().get("totalPurchased"));
+        repository.softDelete(third,2,new ReceiptWriteRequest(UUID.randomUUID(),NOW),changeContext());assertEquals(3,inventoryRow().get("quantityOnHand"));assertEquals(5L,inventoryRow().get("totalPurchased"));
+        repository.restore(third,3,new ReceiptWriteRequest(UUID.randomUUID(),NOW),changeContext());assertEquals(4,inventoryRow().get("quantityOnHand"));
+        row=inventoryRow();inventory.adjust(stock,(Long)row.get("revision"),"SET",0,"","Counted","test");assertNull(inventoryRow().get("location"));
+        repository.softDelete(third,4,new ReceiptWriteRequest(UUID.randomUUID(),NOW),changeContext());assertNotNull(inventoryRow().get("quantityOnHand"));
+    }
+    @SuppressWarnings("unchecked") private java.util.Map<String,Object> inventoryRow() {
+        return (java.util.Map<String,Object>)((java.util.List<?>)new PostgresPlatformRepository(connections).workspace().get("inventory")).getFirst();
+    }
+    private static CouponTransaction inventoryTransaction(String sku,String name,int quantity) {
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.valueOf(quantity)));tx.addPurchaseItem(new PurchaseItem(name,sku,BigDecimal.ONE,BigDecimal.ONE,quantity));return tx;
+    }
+
+    @Test void savedDraftIsIsolatedVersionedAndConsumedOnlyWithSuccessfulReceiptSave() {
+        var platform=new PostgresPlatformRepository(connections);var id=UUID.randomUUID();String payload="{\"id\":\""+id+"\",\"lines\":[],\"tax\":\"\"}";
+        platform.saveReceiptDraft(id,0,payload,"Walmart",null,"test");assertEquals(payload,platform.receiptDraft(id,"test").get("payload"));assertTrue(repository.findById(id).isEmpty());assertTrue(((List<?>)platform.workspace().get("inventory")).isEmpty());
+        assertThrows(java.util.ConcurrentModificationException.class,()->platform.saveReceiptDraft(id,0,payload,"Walmart",null,"test"));
+        platform.saveReceiptDraft(id,1,payload,"Walmart",null,"test");
+        assertThrows(java.util.ConcurrentModificationException.class,()->repository.saveWithDraft(id,transaction(),null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(),null,0,id,1));
+        assertTrue(repository.findById(id).isEmpty());assertEquals(2L,platform.receiptDraft(id,"test").get("revision"));
+        var tx=transaction();var snapshot=ReceiptSnapshot.from(tx);var request=new ReceiptWriteRequest(UUID.randomUUID(),NOW);
+        var result=repository.saveWithDraft(id,tx,null,List.of(),request,new ReceiptCreateCtx("test"),List.of(),null,0,id,2);
+        assertTrue(repository.findById(id).isPresent());assertThrows(java.util.NoSuchElementException.class,()->platform.receiptDraft(id,"test"));
+        assertEquals(result,repository.saveWithDraft(id,snapshot.toTransaction(),null,List.of(),request,new ReceiptCreateCtx("test"),List.of(),null,0,id,2));
+    }
+    @Test void packageContentsDoNotMultiplyReceiptPurchasesAndIndividualUsageIsTracked() {
+        var receipt=UUID.randomUUID();repository.save(receipt,inventoryTransaction("070330714170","Bic razors",1),null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));
+        var inventory=new PostgresInventoryRepository(connections);inventory.importReceipts("test");var row=inventoryRow();UUID id=(UUID)row.get("inventoryId");
+        inventory.adjust(id,(Long)row.get("revision"),"SET",1,null,"One unopened pack","test",null,4,"Razors","PACKAGE");row=inventoryRow();assertEquals(1L,row.get("totalPurchased"));assertEquals(1,row.get("quantityOnHand"));assertEquals(new BigDecimal("4"),row.get("individualPurchased"));assertEquals(new BigDecimal("4"),row.get("individualOnHand"));
+        inventory.adjust(id,(Long)row.get("revision"),"SET",4,null,"Count individual razors","test",2,4,"Razors","ITEM");row=inventoryRow();
+        inventory.adjust(id,(Long)row.get("revision"),"USE",1,null,"Used one razor","test",2,4,"Razors","ITEM");assertEquals(3,inventoryRow().get("quantityOnHand"));
+        var another=UUID.randomUUID();repository.save(another,inventoryTransaction("070330714170","Bic razors",1),null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));assertEquals(7,inventoryRow().get("quantityOnHand"));assertEquals(2L,inventoryRow().get("totalPurchased"));
     }
 
     private static CouponTransaction transaction() {

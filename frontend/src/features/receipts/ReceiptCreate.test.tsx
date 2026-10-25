@@ -2,14 +2,15 @@ import { EarningLinksForm } from './EarningLinksForm'
 import { RewardFields } from './RewardFields'
 import { newReward } from './rewardStatus'
 import { ReceiptEdit, ReceiptStatusAction, ReceiptRRMatch } from './ReceiptDetail'
-import { WorkspacePages, RewardsAccounts, StandaloneRewardPanel, MemberRewardEntry } from '../../pages/WorkspacePages'
+import { WorkspacePages, RewardsAccounts, StandaloneRewardPanel, MemberRewardEntry, PlanScenarioEditor, ProductCouponSubtotal, ScenarioBreakdown } from '../../pages/WorkspacePages'
 import { browseReceipts, matchesReceiptSearch, receiptTime, shoppingWeek } from '../../api/format'
 import type { Receipt, AccountReport } from '../../types/platform'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiClient, ApiError } from '../../api/client'
-import { workspace, receiptRow } from '../../api/fixtures.test-support'
+import { ApiClient, ApiError, scenarioRequest } from '../../api/client'
+import { workspace, receiptRow, planningRow } from '../../api/fixtures.test-support'
+import type { ReceiptDraftState } from './ReceiptCreate'
 import { ReceiptCreate, ReceiptFinancialReview, PrintedFooterView } from './ReceiptCreate'
 const result = () => ({ reviewToken: 'server-reviewed', possibleDuplicates: [], evidence: [], totals: { regularMerchandise: '99.13', saleMerchandise: '2', coupons: '0', rrUsed: '0', wcUsed: '0', tax: '0', calculatedDue: '2', reportedDue: '2', difference: '0', savings: { ...workspace().summaries.all, newlyEarned: '0', paidAfterRebates: '2', totalSaved: '97.13' } } })
 function setup(enabled = true) {
@@ -439,7 +440,7 @@ it('marks and focuses the first missing receipt field when requesting a breakdow
 })
 
 it('keeps repeated-value RR coupons separate through preview and save', async () => {
-  const { user, mutate } = setup(); await minimum(user)
+  const { user, mutate } = setup(); await minimum(user);await user.clear(screen.getByLabelText('Store'));await user.type(screen.getByLabelText('Store'),'Walgreens')
   for (const [i, amount] of ['5.00','5.00','4.00'].entries()) {
     await user.click(screen.getByRole('button', { name: 'Add RR used' }))
     await user.type(screen.getByLabelText(`RR used amount ${i+1}`), amount)
@@ -642,4 +643,273 @@ it('saves an existing reward expiration without resubmitting amount or status',a
  await user.click(screen.getByRole('button',{name:'Save reward details'}))
  expect(mutate).toHaveBeenCalledWith('/receipts/receipt-id/earnings/ecb/associations','PUT',{expirationDate:'2026-11-19',lineItemIds:['original-line'],qualifyingQuantities:{'original-line':1}},expect.any(String),'3')
  expect(saved).toHaveBeenCalled()
+})
+
+function planningFixture():import('../../types/platform').PlanReceiptDraft {
+ const scenario:import('../../types/platform').PlanScenario={items:[{id:'neut',name:'Neutrogena',sku:'07050111090',regular:'7.79',sale:'5.99',quantity:'2'},{id:'lysol',name:'Lysol',sku:null,regular:'3.29',sale:null,quantity:'2'}],coupons:[{id:'coupon',description:'Neutrogena $4 off 2',amount:'4',requiredQuantity:'2',lineIds:['neut'],savedCouponId:null}],promotions:[{id:'promo',description:'Buy 2 get 7 RR',rewardType:'REGISTER_REWARD',rewardAmount:'7',requiredQuantity:'2',requiredSpend:'0',spendBasis:'BEFORE_COUPONS',allowsWalgreensCash:true,lineIds:['neut']}],tax:'1.04',walgreensCashUsed:'10',registerRewardsUsed:'2',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:'Palmolive RR earned September'}
+ return {plan:{planId:'plan',name:'Walgreens deal',retailer:'Walgreens',shoppingDate:'2026-10-24',plannedPurchaseIds:[],revision:'3',scenario},estimate:{items:[{id:'neut',name:'Neutrogena',totalPrice:'11.98',saleReduction:'3.60',couponsApplied:'4',itemOopBeforeTaxAndFunding:'7.98',possibleRewards:'7'},{id:'lysol',name:'Lysol',totalPrice:'6.58',saleReduction:'0',couponsApplied:'0',itemOopBeforeTaxAndFunding:'6.58',possibleRewards:'0'}],coupons:[{id:'coupon',description:'Neutrogena $4 off 2',quantityMet:true,applied:true,amount:'4',reason:'Quantity met'}],promotions:[{id:'promo',description:'Buy 2 get 7 RR',quantityMet:true,spendMet:true,walgreensCashAllowed:true,eligible:true,qualifyingSpend:'11.98',potentialReward:'7'}],regularTotal:'22.16',saleTotal:'18.56',couponTotal:'4',merchandiseAfterCoupons:'14.56',tax:'1.04',registerRewardsUsed:'2',walgreensCashUsed:'10',giftCardUsed:'0',receiptTotalBeforeFunding:'13.60',calculatedOop:'3.60',selectedOop:'3.60',manualDifference:'0',overFunding:'0',potentialRewards:'7',afterPotentialRewards:'-3.40'}}
+}
+it('previews and saves an editable planning scenario without redeeming rewards',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),saved=vi.fn(),receipt=vi.fn(),user=userEvent.setup()
+ const mutate=vi.spyOn(api,'mutate').mockImplementation(async(path,_method,body)=>path.endsWith('/preview')?draft.estimate:{...(body as object),revision:'4'})
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onChanged={saved} onReceipt={receipt}/>)
+ await screen.findByRole('heading',{name:'Planning breakdown'})
+ expect(screen.getByLabelText('Payment or reward 1')).toHaveValue('WALGREENS_CASH');expect(screen.getByLabelText('Payment amount 1')).toHaveValue('10')
+ await user.click(screen.getByRole('button',{name:'Save scenario'}))
+ expect(mutate).toHaveBeenCalledWith('/shopping-plans/plan','PUT',expect.objectContaining({scenario:expect.objectContaining({items:expect.arrayContaining([expect.objectContaining({quantity:2})]),registerRewardsUsed:'2'})}),expect.any(String),'3')
+ expect(saved).toHaveBeenCalled();expect(mutate.mock.calls.some(c=>String(c[0]).includes('/accounts/'))).toBe(false)
+ await user.click(screen.getByRole('button',{name:'Start receipt draft'}));expect(receipt).toHaveBeenCalledWith(expect.objectContaining({estimate:draft.estimate}))
+})
+it('copies a plan into an unsaved receipt with sale reductions once and expected rewards',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result()),user=userEvent.setup()
+ render(<ReceiptCreate planning={draft} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ expect(screen.getByLabelText('Store')).toHaveValue('Walgreens');expect(screen.getByLabelText('Payment amount 2')).toHaveValue('3.60')
+ expect(screen.getByLabelText('Product 1 discount 1 amount')).toHaveValue('3.60')
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ const body=mutate.mock.calls[0][2] as {discounts:{amount:string}[];earnings:{status:string}[];rrUses:{amount:string}[];reportedTotal:string}
+ expect(body.reportedTotal).toBe('13.60');expect(body.discounts.map(d=>d.amount)).toEqual(['3.60','4']);expect(body.earnings[0].status).toBe('EXPECTED');expect(body.rrUses[0].amount).toBe('2')
+ expect(mutate.mock.calls).toHaveLength(1)
+})
+
+it('confirms permanent plan deletion and sends the displayed revision',async()=>{
+ const data=workspace(),row=planningRow();data.plans=[row];const api=new ApiClient('test'),changed=vi.fn(),user=userEvent.setup(),mutate=vi.spyOn(api,'mutate').mockResolvedValue({deleted:true}),confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+ render(<WorkspacePages page="shopping" data={data} api={api} writable onChanged={changed} onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'Delete plan'}));expect(mutate).not.toHaveBeenCalled()
+ confirm.mockReturnValue(true);await user.click(screen.getByRole('button',{name:'Delete plan'}))
+ await waitFor(()=>expect(changed).toHaveBeenCalled())
+ expect(mutate).toHaveBeenCalledWith(`/shopping-plans/${row.plan.planId}`,'DELETE',{},expect.any(String),row.plan.revision)
+ expect(confirm).toHaveBeenCalledWith(expect.stringContaining('cannot be undone'))
+})
+
+it('transfers automatic scenario tax and Fetch points without converting points into a dollar earning',async()=>{
+ const draft=planningFixture();draft.plan.scenario!.tax='0';draft.plan.scenario!.taxRate='8.25';draft.estimate.tax='1.65';draft.plan.scenario!.promotions[0].rewardType='FETCH';draft.plan.scenario!.promotions[0].rewardAmount='10000'
+ const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result()),user=userEvent.setup()
+ render(<ReceiptCreate planning={draft} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ expect(screen.getByLabelText('Sales tax')).toHaveValue('1.65')
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ const body=mutate.mock.calls[0][2] as {earnings:{provider:string;benefit:{amount:string;unit:string}}[]}
+ expect(body.earnings[0].provider).toBe('Fetch')
+ expect(JSON.stringify(body.earnings[0])).toContain('10000')
+})
+
+it('provides an automatically attached blank coupon and excludes it from preview and save',async()=>{
+ const api=new ApiClient('test'),draft=planningFixture(),user=userEvent.setup(),mutate=vi.spyOn(api,'mutate').mockImplementation(async(path,_method,body)=>path.endsWith('/preview')?draft.estimate:{...(body as object),revision:'1'})
+ render(<PlanScenarioEditor plan={null} data={workspace()} api={api} writable onClose={vi.fn()} onChanged={vi.fn()} onReceipt={vi.fn()}/>)
+ expect(await screen.findByLabelText('Coupon description 1')).toHaveValue('');expect(screen.getByLabelText('Coupon amount 1')).not.toBeRequired()
+ await user.type(screen.getByLabelText('Plan name'),'Blank coupon');await user.type(screen.getByLabelText('Product 1',{exact:true}),'Olay');await user.type(screen.getByLabelText('Regular price 1'),'13.99')
+ await screen.findByRole('heading',{name:'Planning breakdown'});await user.click(screen.getByRole('button',{name:'Save scenario'}))
+ const saved=mutate.mock.calls.find(c=>c[0]==='/shopping-plans')![2] as {scenario:{coupons:unknown[];payments:unknown[]}}
+ expect(saved.scenario.coupons).toEqual([]);expect(saved.scenario.payments).toEqual([])
+ expect(screen.getByRole('button',{name:'Add another coupon for product 1'})).toBeVisible()
+ expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+})
+it('copies each planned payment and ECB description without replacing split cash and credit',()=>{
+ const draft=planningFixture();draft.plan.scenario!.payments=[{id:'rr',type:'REGISTER_REWARD',amount:'2',notes:'Palmolive'},{id:'ecb',type:'ECB',amount:'5',notes:'Scott ECB'},{id:'cash',type:'CASH',amount:'1',notes:'Cash'},{id:'card',type:'CARD',amount:'2.60',notes:'Credit'}]
+ render(<ReceiptCreate planning={draft} api={new ApiClient('test')} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ expect(screen.getByDisplayValue('Scott ECB')).toBeInTheDocument();expect(screen.getByDisplayValue('Palmolive')).toBeInTheDocument();expect(screen.getByDisplayValue('2.60')).toBeInTheDocument()
+})
+
+it('adds whole-receipt and product store-promotion discounts with distinct scopes',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),user=userEvent.setup(),mutate=vi.spyOn(api,'mutate').mockImplementation(async(path,_method,body)=>path.endsWith('/preview')?draft.estimate:{...(body as object),revision:'4'})
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onChanged={vi.fn()} onReceipt={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'Add store promotion discount for product 1'}))
+ const types=screen.getAllByLabelText(/Coupon type/);expect(types[1]).toHaveValue('SALE_PROMOTION')
+ await user.click(screen.getByRole('button',{name:'Add whole-receipt coupon or promotion'}))
+ const descriptions=screen.getAllByLabelText(/Coupon description/),amounts=screen.getAllByLabelText(/Coupon amount/)
+ await user.type(descriptions[descriptions.length-1],'ONLINE5');await user.type(amounts[amounts.length-1],'5')
+ await screen.findByRole('heading',{name:'Planning breakdown'});await user.click(screen.getByRole('button',{name:'Save scenario'}))
+ const body=mutate.mock.calls.find(c=>c[0]==='/shopping-plans/plan')![2] as {scenario:{coupons:{description:string;wholeReceipt?:boolean;lineIds:string[]}[]}}
+ expect(body.scenario.coupons.find(c=>c.description==='ONLINE5')).toMatchObject({wholeReceipt:true,lineIds:[]})
+})
+it('copies a whole-receipt promotion as one receipt-wide discount',async()=>{
+ const draft=planningFixture();draft.plan.scenario!.coupons[0].wholeReceipt=true;draft.plan.scenario!.coupons[0].kind='SALE_PROMOTION';draft.plan.scenario!.coupons[0].lineIds=[]
+ const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result()),user=userEvent.setup()
+ render(<ReceiptCreate planning={draft} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ const body=mutate.mock.calls[0][2] as {discounts:{wholeReceipt:boolean;kind:string;amount:string}[]}
+ expect(body.discounts).toEqual(expect.arrayContaining([expect.objectContaining({wholeReceipt:true,kind:'SALE_PROMOTION',amount:'4'})]))
+})
+
+it('shows the calculated total minus coupons under each planned product',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test');vi.spyOn(api,'mutate').mockResolvedValue(draft.estimate)
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onReceipt={vi.fn()}/>)
+ await screen.findByRole('heading',{name:'Planning breakdown'})
+ const totals=screen.getAllByText(/Total minus coupons:/)
+ await waitFor(()=>expect(totals[0]).toHaveTextContent('$7.98'));await waitFor(()=>expect(totals[1]).toHaveTextContent('$6.58'))
+})
+
+it('updates a product subtotal independently of unfinished products, tax and rebates',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue({items:[{id:draft.plan.scenario!.items[0].id,itemOopBeforeTaxAndFunding:'6.99'}]})
+ const {rerender}=render(<ProductCouponSubtotal line={draft.plan.scenario!.items[0]} coupons={[draft.plan.scenario!.coupons[0]]} api={api}/>)
+ await screen.findByText('$6.99')
+ const body=mutate.mock.calls[0][2] as {scenario:{items:unknown[];promotions:unknown[];tax:string}}
+ expect(body.scenario.items).toHaveLength(1);expect(body.scenario.promotions).toEqual([]);expect(body.scenario.tax).toBe('0')
+ mutate.mockResolvedValue({items:[{id:draft.plan.scenario!.items[0].id,itemOopBeforeTaxAndFunding:'5.99'}]})
+ rerender(<ProductCouponSubtotal line={draft.plan.scenario!.items[0]} coupons={[{...draft.plan.scenario!.coupons[0],amount:'5'}]} api={api}/>)
+ expect(screen.queryByText('$6.99')).not.toBeInTheDocument();await screen.findByText('$5.99')
+})
+
+it('offers whole-receipt rebate scope and preserves it in a receipt draft',async()=>{
+ const draft=planningFixture();draft.plan.scenario!.promotions[0].wholeReceipt=true;draft.plan.scenario!.promotions[0].lineIds=[]
+ const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result()),user=userEvent.setup()
+ render(<ReceiptCreate planning={draft} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ expect((mutate.mock.calls[0][2] as {earnings:{lineItemIds:string[]}[]}).earnings[0].lineItemIds).toEqual([])
+})
+it('lets a planned rebate switch between whole receipt and selected products',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),user=userEvent.setup();vi.spyOn(api,'mutate').mockResolvedValue(draft.estimate)
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onReceipt={vi.fn()}/>)
+ const scope=screen.getByLabelText('Rebate applies to 1');expect(scope).toHaveValue('PRODUCTS')
+ await user.selectOptions(scope,'WHOLE_RECEIPT');expect(scope).toHaveValue('WHOLE_RECEIPT')
+ await user.selectOptions(scope,'PRODUCTS');expect(scope).toHaveValue('PRODUCTS')
+})
+
+it('labels checkout OOP after tax before subtracting earned rewards',()=>{
+ const draft=planningFixture();render(<ScenarioBreakdown report={draft.estimate}/>)
+ expect(screen.getByText('OOP before rewards, after tax').parentElement).toHaveTextContent('$3.60')
+})
+
+it('keeps copied product coupons under the product instead of suggesting another entry',()=>{
+ const draft=planningFixture()
+ render(<ReceiptCreate planning={draft} api={new ApiClient('test')} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ expect(screen.getByLabelText('Product 1 discount 2 amount')).toHaveValue('4')
+ expect(screen.getByLabelText('Product 1 discount 2 description')).toHaveValue('Neutrogena $4 off 2')
+ expect(screen.queryByLabelText('Discount label 1')).not.toBeInTheDocument()
+ expect(screen.getByText(/Those discounts are already entered below/)).toBeInTheDocument()
+})
+
+it('includes the saved plan revision in receipt review for atomic purchased marking',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result()),user=userEvent.setup()
+ render(<ReceiptCreate planning={draft} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ expect(mutate.mock.calls[0][2]).toMatchObject({shoppingPlanId:draft.plan.planId,shoppingPlanRevision:draft.plan.revision})
+})
+it('shows purchased status and opens its saved receipt without enabling checkout again',async()=>{
+ const data=workspace(),row=planningRow();row.plan.purchasedReceiptId='saved-receipt';data.plans=[row];const open=vi.fn(),user=userEvent.setup()
+ render(<WorkspacePages page="shopping" data={data} api={new ApiClient('test')} writable onPage={vi.fn()} onReceipt={open} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ expect(screen.getByText('Purchased')).toBeVisible();expect(screen.getByRole('button',{name:/^Checkout$/})).toBeDisabled()
+ await user.click(screen.getByRole('button',{name:'View receipt'}));expect(open).toHaveBeenCalledWith('saved-receipt')
+})
+
+it('transfers Walmart Cash as an expected store reward in dollars',async()=>{
+ const draft=planningFixture();draft.plan.scenario!.promotions[0].rewardType='WALMART_CASH';const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result()),user=userEvent.setup()
+ render(<ReceiptCreate planning={draft} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ expect((mutate.mock.calls[0][2] as {earnings:unknown[]}).earnings[0]).toMatchObject({provider:'Walmart Cash',form:'STORE_REWARD',status:'EXPECTED',amount:'7'})
+})
+
+it('shows only the retailer-appropriate reward-payment permission',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),user=userEvent.setup();vi.spyOn(api,'mutate').mockResolvedValue(draft.estimate)
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onReceipt={vi.fn()}/>)
+ expect(screen.getByLabelText('This rebate permits paying with Walgreens Cash')).toBeInTheDocument();expect(screen.queryByLabelText('This rebate permits paying with Walmart Cash')).not.toBeInTheDocument()
+ await user.clear(screen.getByLabelText('Store',{exact:true}));await user.type(screen.getByLabelText('Store',{exact:true}),'Walmart')
+ expect(screen.queryByLabelText('This rebate permits paying with Walgreens Cash')).not.toBeInTheDocument();expect(screen.getByLabelText('This rebate permits paying with Walmart Cash')).toBeInTheDocument()
+ await user.clear(screen.getByLabelText('Store',{exact:true}));await user.type(screen.getByLabelText('Store',{exact:true}),'CVS')
+ expect(screen.queryByLabelText('This rebate permits paying with Walgreens Cash')).not.toBeInTheDocument();expect(screen.queryByLabelText('This rebate permits paying with Walmart Cash')).not.toBeInTheDocument()
+})
+it('transfers Walmart Cash used as funding rather than cash paid',()=>{
+ const draft=planningFixture();draft.plan.scenario!.payments=[{id:'walmart',type:'WALMART_CASH',amount:'3',notes:'Walmart balance'}]
+ render(<ReceiptCreate planning={draft} api={new ApiClient('test')} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ expect(screen.getByDisplayValue('Walmart balance')).toBeInTheDocument();expect(screen.getByLabelText('Other payment role')).toHaveValue('FUNDING')
+})
+
+it('normalizes a no-coupon Walmart deal with optional rebate thresholds and unused rows',()=>{
+ const scenario=planningFixture().plan.scenario!
+ scenario.coupons=[{id:'empty',description:'',amount:'',kind:'MANUFACTURER',requiredQuantity:'',lineIds:['neut'],savedCouponId:null},{id:'zero',description:'',amount:'0.00',kind:'MANUFACTURER',requiredQuantity:'0',lineIds:['neut'],savedCouponId:null}]
+ scenario.promotions=[...scenario.promotions.map(p=>({...p,requiredQuantity:'',requiredSpend:''})),{...scenario.promotions[0],id:'unused',description:'',rewardAmount:''}]
+ const body=scenarioRequest(scenario)
+ expect(body.coupons).toEqual([]);expect(body.promotions).toHaveLength(1);expect(body.promotions[0]).toMatchObject({requiredQuantity:0,requiredSpend:'0'})
+ expect(()=>scenarioRequest({...scenario,promotions:[{...scenario.promotions[0],description:'Ibotta',rewardAmount:''}]})).toThrow('Rebate 1 amount: enter a valid amount.')
+})
+it('allows blank coupon quantity fields and unused rebate slots when saving a no-coupon deal',async()=>{
+ const draft=planningFixture();draft.plan.scenario!.coupons=[];draft.plan.scenario!.promotions=[]
+ const api=new ApiClient('test'),user=userEvent.setup(),mutate=vi.spyOn(api,'mutate').mockImplementation(async(path,_method,body)=>path.endsWith('/preview')?draft.estimate:{...(body as object),revision:'4'})
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onReceipt={vi.fn()}/>)
+ await user.clear(screen.getByLabelText('Required coupon quantity 1'));await user.click(screen.getByRole('button',{name:'Add another rebate'}))
+ await screen.findByRole('heading',{name:'Planning breakdown'});await user.click(screen.getByRole('button',{name:'Save scenario'}))
+ expect(mutate.mock.calls.find(c=>c[0]==='/shopping-plans/plan')?.[2]).toMatchObject({scenario:{coupons:[],promotions:[]}})
+})
+
+it('shows RR used only on Walgreens receipts and accepts a separate sale price',async()=>{
+ const {user,mutate}=setup();await minimum(user)
+ expect(screen.queryByRole('button',{name:'Add RR used'})).not.toBeInTheDocument()
+ await user.type(screen.getByLabelText('Sale price 1 (optional)'),'1.25')
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ expect((mutate.mock.calls[0][2] as {items:{unitPrice:string}[]}).items[0].unitPrice).toBe('1.25')
+})
+
+it('defaults a new receipt to the local date/time and allows clearing its date',async()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date(2026,9,25,14,7));const {user}=setup();vi.useRealTimers()
+ expect(screen.getByLabelText('Purchase date')).toHaveValue('2026-10-25');expect(screen.getByLabelText('Purchase time (optional)')).toHaveValue('14:07')
+ expect(screen.queryByRole('button',{name:'Clear date'})).not.toBeInTheDocument();await user.clear(screen.getByLabelText('Purchase date'));expect(screen.getByLabelText('Purchase date')).toHaveValue('')
+})
+it('ignores unused product discount amounts even with an automatically filled description',async()=>{
+ const {user,mutate}=setup();await minimum(user);await user.click(screen.getByRole('button',{name:'Add discount to product 1'}))
+ expect(screen.getByLabelText('Product 1 discount 1 amount')).not.toBeRequired()
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}));expect((mutate.mock.calls[0][2] as {discounts:unknown[]}).discounts).toEqual([])
+ await user.click(screen.getByRole('button',{name:'Back to edit'}));await user.type(screen.getByLabelText('Product 1 discount 1 amount'),'0')
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}));expect((mutate.mock.calls[1][2] as {discounts:unknown[]}).discounts).toEqual([])
+})
+it('highlights and focuses an invalid discount amount instead of sending it to the API',async()=>{
+ const {user,mutate}=setup();await minimum(user);await user.click(screen.getByRole('button',{name:'Add discount to product 1'}));const field=screen.getByLabelText('Product 1 discount 1 amount')
+ await user.type(field,'-1');await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ expect(field).toHaveAttribute('aria-invalid','true');expect(field).toHaveFocus();expect(screen.getByRole('alert')).toHaveTextContent('Product 1 discount 1 amount');expect(mutate).not.toHaveBeenCalled()
+})
+it('moves focus to the visible error when the server rejects an otherwise valid form',async()=>{
+ const {user,mutate}=setup();await minimum(user);mutate.mockRejectedValue(new ApiError(400,'Applied amount must be greater than zero.'))
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}));const error=await screen.findByRole('alert');expect(error).toHaveTextContent('Applied amount must be greater than zero.');await waitFor(()=>expect(error).toHaveFocus())
+})
+
+it('imports receipt-backed inventory and saves confirmed stock with an optional blank location',async()=>{
+ const data=workspace();data.inventory=[{inventoryId:'stock',productId:'product',revision:'2',productName:'Olay',sku:'00123',totalPurchased:'5',quantityOnHand:null,quantityConfirmed:false,location:null,sources:[{receiptId:'receipt',lineItemId:'line',revision:'1',quantity:'5',active:true,productName:'Olay',store:'Walgreens',receiptNumber:'R1',date:'2026-10-24'}]}]
+ const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue({saved:true}),changed=vi.fn(),user=userEvent.setup()
+ render(<WorkspacePages page="inventory" data={data} api={api} writable onChanged={changed} onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ expect(screen.getByText('00123')).toBeInTheDocument();expect(screen.getByText('Needs confirmation')).toBeInTheDocument()
+ await user.click(screen.getByRole('button',{name:'View / update'}));expect(screen.getByLabelText('Location (optional)')).not.toBeRequired();await user.selectOptions(screen.getByLabelText('Inventory action'),'SET');await user.type(screen.getByLabelText('Quantity on hand'),'3');await user.click(screen.getByRole('button',{name:'Save inventory'}))
+ expect(mutate).toHaveBeenCalledWith('/inventory/stock','PUT',expect.objectContaining({action:'SET',quantity:3,location:null}),expect.any(String),'2');expect(changed).toHaveBeenCalled()
+})
+
+it('collapses inventory sections without losing filters or stock form inputs',async()=>{
+ const data=workspace();data.inventory=[{inventoryId:'stock',productId:'product',revision:'2',productName:'Olay',sku:'00123',totalPurchased:'5',quantityOnHand:null}];const user=userEvent.setup()
+ render(<WorkspacePages page="inventory" data={data} api={new ApiClient('test')} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ const search=screen.getByLabelText('Search products');await user.type(search,'Olay')
+ await user.click(screen.getAllByRole('button',{name:'Collapse'})[0]);expect(search).not.toBeVisible();await user.click(screen.getByRole('button',{name:'Expand'}));expect(search).toHaveValue('Olay')
+ await user.click(screen.getByRole('button',{name:'View / update'}));await user.selectOptions(screen.getByLabelText('Inventory action'),'SET');const quantity=screen.getByLabelText('Quantity on hand');await user.type(quantity,'3')
+ await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).not.toBeVisible();await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).toHaveValue('3')
+ expect(screen.getByText('Product summary')).toBeInTheDocument();expect(screen.getByText('Purchase evidence')).toBeInTheDocument();expect(screen.getByText('Stock history')).toBeInTheDocument()
+})
+
+it('saves and restores an incomplete receipt draft without reviewing or posting a purchase',async()=>{
+ const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue({revision:'1'}),user=userEvent.setup(),changed=vi.fn()
+ const first=render(<ReceiptCreate api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()} onDraftSaved={changed}/>)
+ await user.type(screen.getByLabelText('Store'),'Walmart');await user.type(screen.getByLabelText('Product description 1'),'Unfinished product');await user.click(screen.getByRole('button',{name:'Save Draft'}))
+ const call=mutate.mock.calls[0],state=(call[2] as {state:ReceiptDraftState}).state
+ expect(call[0]).toMatch(/^\/receipt-drafts\//);expect(call[4]).toBe('0');expect(mutate).toHaveBeenCalledTimes(1);expect(changed).toHaveBeenCalled();expect(state.lines[0].regular).toBe('')
+ first.unmount();render(<ReceiptCreate savedDraft={{state,revision:'1'}} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ expect(screen.getByLabelText('Store')).toHaveValue('Walmart');expect(screen.getByLabelText('Product description 1')).toHaveValue('Unfinished Product')
+})
+it('shows saved receipt drafts separately and resumes through the draft action',async()=>{
+ const data=workspace();data.receiptDrafts=[{draftId:'draft',revision:'1',store:'Walmart',receiptNumber:null,updatedAt:'2026-10-25T15:00:00Z'}];const resume=vi.fn(),user=userEvent.setup()
+ render(<WorkspacePages data={data} page="receipts" api={new ApiClient('test')} writable onResumeReceiptDraft={resume} onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'Resume draft'}));expect(resume).toHaveBeenCalledWith('draft')
+})
+
+it('requires a new count when switching inventory from packs to individual items',async()=>{
+ const data=workspace();data.inventory=[{inventoryId:'stock',productId:'product',revision:'3',productName:'Bic Razors',sku:'070330714170',quantityOnHand:'1',totalPurchased:'1',unitsPerPackage:'4',unitName:'Razors',countUnit:'PACKAGE',individualPurchased:'4',individualOnHand:'4'}];const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue({saved:true}),user=userEvent.setup()
+ render(<WorkspacePages data={data} page="inventory" api={api} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:'View / update'}));await user.selectOptions(screen.getByLabelText('Track stock as'),'ITEM');expect(screen.getByLabelText('Quantity on hand')).toHaveValue('')
+ await user.type(screen.getByLabelText('Quantity on hand'),'4');await user.click(screen.getByRole('button',{name:'Save inventory'}));expect(mutate.mock.calls[0][2]).toMatchObject({quantity:4,unitsPerPackage:4,unitName:'Razors',countUnit:'ITEM'})
+})
+
+
+it('sorts inventory headings in both directions using numeric quantities',async()=>{
+ const data=workspace();data.inventory=[{inventoryId:'a',productId:'a',revision:'1',productName:'Alpha',sku:'002',totalPurchased:'10',quantityOnHand:'2',location:'Pantry'},{inventoryId:'b',productId:'b',revision:'1',productName:'Beta',sku:'001',totalPurchased:'2',quantityOnHand:'10',location:'Bathroom'}];const user=userEvent.setup()
+ render(<WorkspacePages page="inventory" data={data} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ const first=()=>screen.getAllByRole('row')[1].textContent
+ await user.click(screen.getByRole('button',{name:'Quantity purchased'}));expect(first()).toContain('Beta')
+ await user.click(screen.getByRole('button',{name:'Quantity purchased'}));expect(first()).toContain('Alpha')
+ expect(screen.getByRole('columnheader',{name:/Quantity purchased/})).toHaveAttribute('aria-sort','descending')
+ await user.click(screen.getByRole('button',{name:'SKU / UPC'}));expect(first()).toContain('Beta')
+ await user.click(screen.getByRole('button',{name:'Quantity on hand'}));expect(first()).toContain('Alpha')
+ await user.click(screen.getByRole('button',{name:'Location'}));expect(first()).toContain('Beta')
 })

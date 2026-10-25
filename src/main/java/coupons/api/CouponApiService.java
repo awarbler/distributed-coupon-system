@@ -158,6 +158,18 @@ public final class CouponApiService implements HttpHandler {
         if(parts.length==3 && (parts[1].equals("deals") || parts[1].equals("clipped-coupons")) && method.equals("DELETE")) {
             requirePlatform();return write(e,principal,request->{known(Json.parseObject(request));platform.deleteCatalogRecord(parts[1].equals("deals"),UUID.fromString(parts[2]),revision(e),principal);return json(200,fields("deleted",true));});
         }
+        if(parts.length==3&&parts[1].equals("receipt-drafts")) {
+            authorize(e,true);requirePlatform();UUID id=UUID.fromString(parts[2]);
+            if(method.equals("GET"))return json(200,platform.receiptDraft(id,principal));
+            if(method.equals("DELETE"))return write(e,principal,request->{known(Json.parseObject(request));platform.deleteReceiptDraft(id,revision(e),principal);return json(200,fields("deleted",true));});
+            requireMethod(method,"PUT");return write(e,principal,16*1024*1024,request->{var f=Json.parseObject(request);known(f,"state");if(!(f.get("state") instanceof Map<?,?>))throw new ApiError(400,"Receipt draft state is required.");@SuppressWarnings("unchecked") var state=(Map<String,Object>)f.get("state");if(!id.toString().equals(required(state,"id")))throw new ApiError(400,"Draft receipt identifier does not match.");return json(200,platform.saveReceiptDraft(id,checkoutRevision(e),Json.object(state),optional(state,"store"),optional(state,"number"),principal));});
+        }
+        if(path.equals("/inventory/import-receipts")) {
+            requireMethod(method,"POST");requirePlatform();return write(e,principal,request->{known(Json.parseObject(request));return json(200,platform.importReceiptInventory(principal));});
+        }
+        if(parts.length==3&&parts[1].equals("inventory")) {
+            requireMethod(method,"PUT");requirePlatform();return write(e,principal,request->{var f=Json.parseObject(request);known(f,"action","quantity","location","note","lowStockLevel","unitsPerPackage","unitName","countUnit");platform.adjustReceiptInventory(UUID.fromString(parts[2]),revision(e),required(f,"action"),Math.toIntExact(number(f.get("quantity"))),optional(f,"location"),optional(f,"note"),principal,f.get("lowStockLevel")==null?null:Math.toIntExact(number(f.get("lowStockLevel"))),f.get("unitsPerPackage")==null?null:Math.toIntExact(number(f.get("unitsPerPackage"))),optional(f,"unitName"),optional(f,"countUnit"));return json(200,fields("saved",true));});
+        }
         if (path.equals("/deals")) {
             requireMethod(method, "POST");
             requirePlatform();
@@ -194,9 +206,11 @@ public final class CouponApiService implements HttpHandler {
                 var selected=ReceiptInput.ids(Json.parseObject(request),"clippedCouponIds");
                 if(selected.size()>100 || new java.util.HashSet<>(selected).size()!=selected.size())throw new ApiError(400,"Select each clipped coupon once.");
                 var writeRequest=new ReceiptWriteRequest(UUID.randomUUID(),java.time.Instant.now());
-                var result = selected.isEmpty()?receipts.save(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal)):
-                    receipts instanceof coupons.repository.PostgresTransactionRepository postgres?postgres.saveWithCoupons(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal),selected):null;
-                if(result==null)throw new ApiError(400,"Clipped coupon receipt entry requires PostgreSQL.");
+                var source=Json.parseObject(request);var planId=optional(source,"shoppingPlanId");var draftId=optional(source,"receiptDraftId");if(draftId!=null&&!input.id().toString().equals(draftId))throw new ApiError(400,"Saved draft must match this receipt.");
+                var result = draftId!=null || planId!=null || !selected.isEmpty() ?
+                    receipts instanceof coupons.repository.PostgresTransactionRepository postgres?postgres.saveWithDraft(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal),selected,planId==null?null:UUID.fromString(planId),planId==null?0:Long.parseLong(required(source,"shoppingPlanRevision")),draftId==null?null:UUID.fromString(draftId),draftId==null?0:Long.parseLong(required(source,"receiptDraftRevision"))):null:
+                    receipts.save(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal));
+                if(result==null)throw new ApiError(400,"Linked shopping plans and coupons require PostgreSQL.");
                 e.getResponseHeaders().set("Location", "/receipts/" + input.id());
                 return json(201, result);
             });
@@ -273,6 +287,7 @@ public final class CouponApiService implements HttpHandler {
             requirePlatform();
             var data = new LinkedHashMap<>(platform.workspace(query(e.getRequestURI(),"asOf")==null?null:LocalDate.parse(query(e.getRequestURI(),"asOf"))));
             data.put("canWrite", principal.equals("api-owner"));
+            data.put("receiptDrafts",principal.equals("api-owner")?platform.receiptDrafts(principal):List.of());
             return json(200, data);
         }
         if (parts.length == 4 && parts[1].equals("receipts") && Set.of("totals", "history").contains(parts[3])) {
@@ -488,6 +503,9 @@ public final class CouponApiService implements HttpHandler {
                 ));
             });
         }
+        if(path.equals("/shopping-plans/scenario/preview")) {
+            requireMethod(method,"POST");var fields=Json.parseObject(body(e,1024*1024));known(fields,"scenario");return json(200,parseScenario(fields.get("scenario")).estimate());
+        }
         if (path.equals("/shopping-plans")) {
             requireMethod(method, "POST");
             return write(e, principal, request -> {
@@ -502,6 +520,14 @@ public final class CouponApiService implements HttpHandler {
                 ShoppingPlan plan = plans.findById(id).orElseThrow();
                 e.getResponseHeaders().set("ETag", "\"" + plan.revision() + "\"");
                 return json(200, plan);
+            }
+            if (method.equals("DELETE")) {
+                requirePlatform();
+                return write(e, principal, request -> {
+                    known(Json.parseObject(request));
+                    platform.deleteShoppingPlan(id, revision(e), principal);
+                    return json(200, fields("deleted", true));
+                });
             }
             requireMethod(method, "PUT");
             return write(e, principal, request -> {
@@ -596,7 +622,7 @@ public final class CouponApiService implements HttpHandler {
     }
 
     private ShoppingPlan parsePlan(UUID pathId, Map<String, Object> f, long next, ShoppingPlan previous) {
-        known(f, "planId", "name", "retailer", "shoppingDate", "revision", "plannedPurchaseIds");
+        known(f, "planId", "name", "retailer", "shoppingDate", "revision", "plannedPurchaseIds", "scenario");
         UUID id = pathId == null ? UUID.fromString(required(f, "planId")) : pathId;
         if (f.containsKey("planId") && !id.toString().equals(required(f, "planId"))) {
             throw new ApiError(400, "Plan ID must match the URL.");
@@ -617,7 +643,20 @@ public final class CouponApiService implements HttpHandler {
         }
         String date = f.containsKey("shoppingDate") ? optional(f, "shoppingDate") : previous == null || previous.shoppingDate() == null ? null : previous.shoppingDate().toString();
         return new ShoppingPlan(id, required(f, "name"), f.containsKey("retailer") ? optional(f, "retailer") : previous == null ? null : previous.retailer(),
-                date == null ? null : LocalDate.parse(date), purchases, next);
+                date == null ? null : LocalDate.parse(date), purchases, next,f.containsKey("scenario")?(f.get("scenario")==null?null:parseScenario(f.get("scenario"))):previous==null?null:previous.scenario(),previous==null?null:previous.purchasedReceiptId());
+    }
+
+    static ShoppingPlan.Scenario parseScenario(Object raw) {
+        try{return parseScenarioFields(raw);}catch(IllegalArgumentException error){throw new ApiError(400,"Shopping deal: "+error.getMessage());}
+    }
+    private static ShoppingPlan.Scenario parseScenarioFields(Object raw) {
+        if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Complete the planning scenario.");
+        @SuppressWarnings("unchecked") var f=(Map<String,Object>)raw;
+        known(f,"items","coupons","promotions","tax","walgreensCashUsed","registerRewardsUsed","giftCardUsed","manualOop","paymentMethod","fundingNotes","taxRate","payments");
+        var items=ReceiptInput.rows(f,"items",100).stream().map(r->{known(r,"id","name","sku","regular","sale","quantity");return new ShoppingPlan.Line(ReceiptInput.uuid(r,"id"),required(r,"name"),optional(r,"sku"),ReceiptInput.decimal(r,"regular",false),ReceiptInput.decimal(r,"sale",true),Math.toIntExact(number(r.get("quantity"))));}).toList();
+        var coupons=ReceiptInput.rows(f,"coupons",100).stream().map(r->{known(r,"id","description","amount","requiredQuantity","lineIds","savedCouponId","kind","wholeReceipt");return new ShoppingPlan.ScenarioCoupon(ReceiptInput.uuid(r,"id"),required(r,"description"),ReceiptInput.decimal(r,"amount",false),Math.toIntExact(number(r.get("requiredQuantity"))),ReceiptInput.ids(r,"lineIds"),optional(r,"savedCouponId")==null?null:ReceiptInput.uuid(r,"savedCouponId"),optional(r,"kind"),r.containsKey("wholeReceipt")&&ReceiptInput.flag(r,"wholeReceipt"));}).toList();
+        var promotions=ReceiptInput.rows(f,"promotions",100).stream().map(r->{known(r,"id","description","rewardType","rewardAmount","requiredQuantity","requiredSpend","spendBasis","allowsWalgreensCash","allowsWalmartCash","lineIds","wholeReceipt");return new ShoppingPlan.ScenarioPromotion(ReceiptInput.uuid(r,"id"),required(r,"description"),required(r,"rewardType"),ReceiptInput.decimal(r,"rewardAmount",false),Math.toIntExact(number(r.get("requiredQuantity"))),ReceiptInput.decimal(r,"requiredSpend",false),required(r,"spendBasis"),ReceiptInput.flag(r,"allowsWalgreensCash"),ReceiptInput.ids(r,"lineIds"),r.containsKey("wholeReceipt")&&ReceiptInput.flag(r,"wholeReceipt"),!r.containsKey("allowsWalmartCash")||ReceiptInput.flag(r,"allowsWalmartCash"));}).toList();
+        return new ShoppingPlan.Scenario(items,coupons,promotions,ReceiptInput.decimal(f,"tax",false),ReceiptInput.decimal(f,"walgreensCashUsed",false),ReceiptInput.decimal(f,"registerRewardsUsed",false),ReceiptInput.decimal(f,"giftCardUsed",false),ReceiptInput.decimal(f,"manualOop",true),required(f,"paymentMethod"),optional(f,"fundingNotes"),ReceiptInput.decimal(f,"taxRate",true),!f.containsKey("payments")||f.get("payments")==null?null:ReceiptInput.rows(f,"payments",100).stream().map(r->{known(r,"id","type","amount","notes");return new ShoppingPlan.ScenarioPayment(ReceiptInput.uuid(r,"id"),required(r,"type"),ReceiptInput.decimal(r,"amount",false),optional(r,"notes"));}).toList());
     }
 
     private String authorize(HttpExchange e, boolean write) {

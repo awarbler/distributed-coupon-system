@@ -34,6 +34,23 @@ public final class PostgresSchema {
         applyMigration(connection, "/db/migration/V7__offer_pricing.sql", 7, "structured advertised offer pricing");
         applyMigration(connection, "/db/migration/V8__shopping_plan_checkout.sql", 8,  "revisioned shopping plan checkout estimates");
         applyMigration(connection, "/db/migration/V9__actual_checkout_tax.sql", 9, "actual receipt sales tax for shopping plan checkout");
+        // Kept inline in this existing file under the owner's no-new-files constraint.
+        try(var statement=connection.createStatement()) {
+            statement.execute("CREATE TABLE IF NOT EXISTS inventory_receipt_settings (singleton BOOLEAN PRIMARY KEY CHECK(singleton), enabled BOOLEAN NOT NULL)");
+            statement.execute("INSERT INTO inventory_receipt_settings VALUES(true,false) ON CONFLICT DO NOTHING");
+            statement.execute("CREATE TABLE IF NOT EXISTS inventory_receipt_products (product_id UUID PRIMARY KEY REFERENCES inventory_current(product_id), product_key TEXT NOT NULL UNIQUE, product_name TEXT NOT NULL, sku TEXT, location TEXT, quantity_confirmed BOOLEAN NOT NULL DEFAULT false)");
+            statement.execute("CREATE TABLE IF NOT EXISTS inventory_receipt_lines (transaction_id UUID NOT NULL, line_item_id UUID NOT NULL, product_id UUID NOT NULL REFERENCES inventory_receipt_products(product_id), receipt_revision BIGINT NOT NULL, quantity INTEGER NOT NULL CHECK(quantity>0), active BOOLEAN NOT NULL, product_name TEXT NOT NULL, retailer TEXT, receipt_number TEXT, purchase_date DATE, PRIMARY KEY(transaction_id,line_item_id))");
+            statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS low_stock_level INTEGER CHECK(low_stock_level>=0)");
+            statement.execute("CREATE INDEX IF NOT EXISTS inventory_receipt_product ON inventory_receipt_lines(product_id)");
+            statement.execute("INSERT INTO schema_version(version,description) VALUES(10,'receipt-backed inventory and optional locations') ON CONFLICT DO NOTHING");
+            statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS units_per_package INTEGER CHECK(units_per_package>0)");
+            statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS unit_name TEXT");
+            statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS count_unit TEXT NOT NULL DEFAULT 'PACKAGE' CHECK(count_unit IN ('PACKAGE','ITEM'))");
+            statement.execute("CREATE TABLE IF NOT EXISTS receipt_drafts(draft_id UUID PRIMARY KEY,revision BIGINT NOT NULL CHECK(revision>0),owner_id TEXT NOT NULL,store TEXT,receipt_number TEXT,updated_at TIMESTAMPTZ NOT NULL,payload TEXT NOT NULL)");
+            statement.execute("CREATE TABLE IF NOT EXISTS receipt_draft_history(draft_id UUID NOT NULL REFERENCES receipt_drafts(draft_id),revision BIGINT NOT NULL,updated_at TIMESTAMPTZ NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(draft_id,revision))");
+            statement.execute("INSERT INTO schema_version(version,description) VALUES(11,'saved receipt drafts and inventory package contents') ON CONFLICT DO NOTHING");
+        }
+
     }
 
     private static void applyMigration(Connection connection, String resource, int version,

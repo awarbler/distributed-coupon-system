@@ -15,7 +15,7 @@ test('responsive navigation, installation assets, and private-response caching',
   await page.screenshot({ path: info.outputPath('dashboard.png'), fullPage: true })
   const menu = page.getByRole('button', { name: 'Open navigation' }); if (await menu.isVisible()) await menu.click()
   await page.getByRole('link', { name: 'Inventory', exact: true }).click()
-  await expect(page.getByText(/authenticated approval workflow/)).toBeVisible()
+  await expect(page.getByRole('button', { name: /Import \/ sync receipts/i })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   await page.getByRole('button', { name: 'Refresh workspace' }).click()
   await expect.poll(() => calls).toBeGreaterThanOrEqual(2)

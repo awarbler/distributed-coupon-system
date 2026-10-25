@@ -1,3 +1,4 @@
+import type { ReceiptDraftState } from './features/receipts/ReceiptCreate'
 import { useCallback, useEffect, useState } from 'react'
 import { ClipboardList, Coins, Download, LayoutDashboard, Leaf, LogOut, Menu, Package, ReceiptText, RefreshCw, ShieldCheck, ShoppingBag, Ticket, Wallet, X } from 'lucide-react'
 import type { FormEvent } from 'react'
@@ -11,7 +12,7 @@ import { WorkspacePages } from './pages/WorkspacePages'
 import type { Page } from './pages/WorkspacePages'
 import type { Workspace } from './types/platform'
 import './App.css'
-import type { Plan } from './types/platform'
+import type { Plan, PlanReceiptDraft } from './types/platform'
 import { CheckoutForm } from './features/shopping/CheckoutForm'
 
 const navigation = [
@@ -37,6 +38,8 @@ export default function App() {
   const [checkoutPlan, setCheckoutPlan] = useState<Plan | null>(null)
   const [parentPlan, setParentPlan] = useState<Plan | null>(null)
   const [creating, setCreating] = useState(false)
+  const [savedReceiptDraft,setSavedReceiptDraft]=useState<{state:ReceiptDraftState;revision:string}|null>(null)
+  const [planReceipt,setPlanReceipt]=useState<PlanReceiptDraft|null>(null)
   const [receipt, setReceipt] = useState<string | null>(null)
   const [settings, setSettings] = useState(false)
   const [online, setOnline] = useState(navigator.onLine)
@@ -78,11 +81,11 @@ export default function App() {
     setParentPlan(null)
     closeEdit()
   }
-  const closeCreate = useCallback(() => setCreating(false), [])
+  const closeCreate = useCallback(() => {setCreating(false);setSavedReceiptDraft(null);setPlanReceipt(null)}, [])
   const reviewSaved = useCallback(() => { void refresh() }, [refresh])
   const closeReceipt = useCallback(() => setReceipt(null), [])
   const closeSettings = useCallback(() => setSettings(false), [])
-  function logout() { setApi(null); setData(null); setToken(''); setError(''); setEdit(null); setReceipt(null); setCreating(false); setSettings(false); setMessage('') ; setCheckoutPlan(null)}
+  function logout() { setSavedReceiptDraft(null);setPlanReceipt(null);setApi(null); setData(null); setToken(''); setError(''); setEdit(null); setReceipt(null); setCreating(false); setSettings(false); setMessage('') ; setCheckoutPlan(null)}
   async function installApp() { if (install) { await install.prompt(); await install.userChoice; setInstall(null) } }
   if (!api || !data) return <main className="connect-page"><section className="connect-story"><Brand /><div><span className="eyebrow">Shop thoughtfully. Keep more.</span><h1>A clearer picture<br />of every grocery trip.</h1><p>Your shopping plans, receipts, coupons, and rewards — together in one personal workspace.</p><div className="story-icons"><span><ClipboardList />Plan your trip</span><span><ReceiptText />Know your spending</span><span><Wallet />Track your rewards</span></div></div><small>One workspace. Every little saving.</small></section><section className="connect-form"><span className="icon-tile mint"><ShieldCheck size={26} /></span><h2>Welcome to your workspace</h2><p>Connect to your Grocery Intelligence API to get started.</p>{!online && <Notice>You’re offline. Reconnect to load your records. Financial data is not stored for offline use.</Notice>}{error && <div className="error" role="alert">{error}</div>}<form onSubmit={connect}><label>API access token<input type="password" autoComplete="off" required value={token} onChange={e => setToken(e.target.value)} disabled={connecting} placeholder="Enter your access token" /></label><button className="primary full-width" disabled={connecting || !online}>{connecting ? 'Connecting…' : 'Open my workspace'}</button></form><p className="security-note"><ShieldCheck size={15} />Your token stays in memory. It is not saved on this device.</p><details><summary>Connection & installation help</summary><p>Start the Java API and use its configured access token. In development, Vite forwards API requests to the local backend.</p><p>To install on iPhone, use Share → Add to Home Screen. Installation requires HTTPS, or localhost for desktop development.</p></details></section></main>
   const writable = data.canWrite && online && !refreshing
@@ -105,7 +108,9 @@ export default function App() {
           onPage={navigate}
           onReceipt={setReceipt}
           onEdit={setEdit}
-          onAddReceipt={() => setCreating(true)}
+          onAddReceipt={() => {setSavedReceiptDraft(null);setPlanReceipt(null);setCreating(true)}}
+          onResumeReceiptDraft={async id=>{if(!api)return;try{const draft=await api.receiptDraft(id);setSavedReceiptDraft({state:JSON.parse(draft.payload) as ReceiptDraftState,revision:draft.revision});setPlanReceipt(null);setCreating(true)}catch(e){setMessage((e as Error).message)}}}
+          onPlanReceipt={draft=>{setSavedReceiptDraft(null);setPlanReceipt(draft);setCreating(true)}}
           onCheckout={setCheckoutPlan}
         />}
         <footer className="page-footer"><Leaf size={14} /><span>Grocery Intelligence Platform</span><span>Financial values calculated by your Java backend.</span></footer>
@@ -129,7 +134,7 @@ export default function App() {
         }}
       />
     )}
-    {creating && <ReceiptCreate coupons={data?.coupons} products={data?.productLookup} offers={data?.rewardOffers} api={api} enabled={writable} onClose={closeCreate} onReview={reviewSaved} onSaved={id => { setCreating(false); setReceipt(id); setMessage('Receipt saved.'); void refresh() }} />}
+    {creating && <ReceiptCreate savedDraft={savedReceiptDraft??undefined} onDraftSaved={()=>void refresh()} planning={planReceipt??undefined} coupons={data?.coupons} products={data?.productLookup} offers={data?.rewardOffers} api={api} enabled={writable} onClose={closeCreate} onReview={reviewSaved} onSaved={id => { setCreating(false);setSavedReceiptDraft(null);setPlanReceipt(null); setReceipt(id); setMessage('Receipt saved.'); void refresh() }} />}
     {receipt && <ReceiptDetail offers={data?.rewardOffers} id={receipt} api={api} onClose={closeReceipt} writable={writable} onChanged={() => void refresh()} />}
     {settings && <Modal title="Your workspace" onClose={closeSettings}><p>This connection serves one owner’s database. The web app does not read or migrate local receipt files.</p><div className="key-values"><div><span>Access</span><strong>{data.canWrite ? 'Owner / write' : 'Read only'}</strong></div><div><span>Data storage</span><strong>Backend database</strong></div><div><span>Offline financial storage</span><strong>Disabled</strong></div></div>{install ? <button className="primary" onClick={() => void installApp()}><Download size={18} />Install application</button> : <p className="muted">Install using your browser’s app menu. On iPhone: Share → Add to Home Screen. HTTPS is required outside localhost.</p>}<div className="form-actions"><button className="secondary" onClick={logout}><LogOut size={17} />Disconnect and clear screen</button></div></Modal>}
   </div>

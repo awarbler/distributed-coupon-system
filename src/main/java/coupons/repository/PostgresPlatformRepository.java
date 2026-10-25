@@ -92,6 +92,31 @@ public final class PostgresPlatformRepository {
         });
     }
 
+    public List<Object> receiptDrafts(String actor) {
+        return transaction(db,c->{var rows=new ArrayList<Object>();try(var p=c.prepareStatement("SELECT draft_id,revision,store,receipt_number,updated_at FROM receipt_drafts WHERE owner_id=? ORDER BY updated_at DESC")){p.setString(1,actor);try(var r=p.executeQuery()){while(r.next())rows.add(fields("draftId",r.getObject(1),"revision",r.getLong(2),"store",r.getString(3),"receiptNumber",r.getString(4),"updatedAt",r.getTimestamp(5).toInstant()));}}return rows;});
+    }
+    public Map<String,Object> receiptDraft(UUID id,String actor) {
+        return transaction(db,c->{try(var p=c.prepareStatement("SELECT revision,payload,updated_at FROM receipt_drafts WHERE draft_id=? AND owner_id=?")){p.setObject(1,id);p.setString(2,actor);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();return fields("draftId",id,"revision",r.getLong(1),"payload",r.getString(2),"updatedAt",r.getTimestamp(3).toInstant());}}});
+    }
+    public Map<String,Object> saveReceiptDraft(UUID id,long expected,String payload,String store,String number,String actor) {
+        return transaction(db,c->{
+            try(var p=c.prepareStatement("SELECT 1 FROM receipt_current WHERE transaction_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){if(r.next())throw new IllegalArgumentException("This receipt is already saved.");}}
+            long revision=Math.addExact(expected,1);var now=Instant.now();
+            if(expected==0){try(var p=c.prepareStatement("INSERT INTO receipt_drafts VALUES(?,1,?,?,?,?,?) ON CONFLICT DO NOTHING")){p.setObject(1,id);p.setString(2,actor);p.setString(3,store);p.setString(4,number);p.setTimestamp(5,java.sql.Timestamp.from(now));p.setString(6,payload);if(p.executeUpdate()!=1)throw new ConcurrentModificationException("Draft exists; reopen the latest saved draft.");}}
+            else try(var p=c.prepareStatement("UPDATE receipt_drafts SET revision=?,store=?,receipt_number=?,updated_at=?,payload=? WHERE draft_id=? AND owner_id=? AND revision=?")){p.setLong(1,revision);p.setString(2,store);p.setString(3,number);p.setTimestamp(4,java.sql.Timestamp.from(now));p.setString(5,payload);p.setObject(6,id);p.setString(7,actor);p.setLong(8,expected);if(p.executeUpdate()!=1)throw new ConcurrentModificationException("Draft changed; reopen the latest saved version.");}
+            try(var p=c.prepareStatement("INSERT INTO receipt_draft_history VALUES(?,?,?,?)")){p.setObject(1,id);p.setLong(2,revision);p.setTimestamp(3,java.sql.Timestamp.from(now));p.setString(4,payload);p.executeUpdate();}
+            return fields("draftId",id,"revision",revision,"updatedAt",now);
+        });
+    }
+    public void deleteReceiptDraft(UUID id,long expected,String actor){transaction(db,c->{consumeReceiptDraft(c,id,expected,actor);return null;});}
+    static void consumeReceiptDraft(Connection c,UUID id,long expected,String actor)throws SQLException {
+        try(var p=c.prepareStatement("SELECT revision FROM receipt_drafts WHERE draft_id=? AND owner_id=? FOR UPDATE")){p.setObject(1,id);p.setString(2,actor);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException("Saved draft not found.");if(r.getLong(1)!=expected)throw new ConcurrentModificationException("Draft changed since review; reopen the latest saved version.");}}
+        for(String table:List.of("receipt_draft_history","receipt_drafts"))try(var p=c.prepareStatement("DELETE FROM "+table+" WHERE draft_id=?")){p.setObject(1,id);p.executeUpdate();}
+    }
+
+    public Map<String,Object> importReceiptInventory(String actor){return new PostgresInventoryRepository(db).importReceipts(actor);}
+    public void adjustReceiptInventory(UUID id,long expected,String action,int quantity,String location,String note,String actor,Integer lowStockLevel,Integer unitsPerPackage,String unitName,String countUnit){new PostgresInventoryRepository(db).adjust(id,expected,action,quantity,location,note,actor,lowStockLevel,unitsPerPackage,unitName,countUnit);}
+
     public Map<String, Object> workspace() { return workspace(null); }
 
     public Map<String, Object> workspace(LocalDate asOf) {
@@ -136,9 +161,9 @@ public final class PostgresPlatformRepository {
 
                     }
                 }
-                var pricing = ShoppingEstimate.calculate(items, planDeals, planCoupons, plan.shoppingDate(), plan.retailer());
+                var pricing = plan.scenario()==null?ShoppingEstimate.calculate(items, planDeals, planCoupons, plan.shoppingDate(), plan.retailer()):scenarioPricing(plan.scenario());
                 var checkout = new PostgresPlanCheckoutRepository(db).view(id, pricing);
-                planRows.add(fields("pricing", pricing, "checkout", checkout, "plan", plan, "items", items, "estimatedMerchandise", items.isEmpty() ? null : pricing.saleTotal(), "estimateComplete", !items.isEmpty() && pricing.saleTotal() != null));
+                planRows.add(fields("scenarioEstimate",plan.scenario()==null?null:plan.scenario().estimate(),"pricing", pricing, "checkout", checkout, "plan", plan, "items", items, "estimatedMerchandise", plan.scenario()==null&&items.isEmpty() ? null : pricing.saleTotal(), "estimateComplete", (plan.scenario()!=null||!items.isEmpty()) && pricing.saleTotal() != null));
             }
             var couponRepo = new PostgresClippedCouponRepository(db);
             List<Object> coupons = new ArrayList<>();
@@ -155,11 +180,7 @@ public final class PostgresPlatformRepository {
             for (UUID id : ids(c, "SELECT claim_id FROM rebate_current ORDER BY provider,claim_id")) {
                 rebates.add(rebateRepo.findById(id).orElseThrow());
             }
-            var inventoryRepo = new PostgresInventoryRepository(db);
-            List<Object> inventory = new ArrayList<>();
-            for (UUID id : ids(c, "SELECT inventory_id FROM inventory_current ORDER BY product_id")) {
-                inventory.add(inventoryRepo.findById(id).orElseThrow());
-            }
+            List<Object> inventory = PostgresInventoryRepository.receiptInventory(c);
             List<Object> reported = new ArrayList<>();
             for (var r : records) {
                 if (r.transaction().getObservations().walgreensCash() != null) {
@@ -405,6 +426,29 @@ public final class PostgresPlatformRepository {
         return repo.update(next, expected, actor, "Web plan item update");
     }
 
+    /** Permanently remove a plan and all its planning-only revisions and checkout drafts. */
+    public void deleteShoppingPlan(UUID id, long expected, String actor) {
+        PostgresRepositorySupport.requireActor(actor, "Deleted by");
+        PostgresRepositorySupport.transaction(db, c -> {
+            try (var p = c.prepareStatement("SELECT revision FROM shopping_plan_current WHERE plan_id=? FOR UPDATE")) {
+                p.setObject(1, id);
+                try (var r = p.executeQuery()) {
+                    if (!r.next()) throw new NoSuchElementException();
+                    if (r.getLong(1) != expected) throw new java.util.ConcurrentModificationException("Plan changed; refresh before deleting.");
+                }
+            }
+            try (var p = c.prepareStatement("DELETE FROM planned_purchase_history WHERE purchase_id IN (SELECT purchase_id FROM planned_purchase_current WHERE plan_id=?)")) {
+                p.setObject(1, id); p.executeUpdate();
+            }
+            for (String table : List.of("shopping_plan_checkout_history", "shopping_plan_checkout_current", "planned_purchase_current", "shopping_plan_history", "shopping_plan_current")) {
+                try (var p = c.prepareStatement("DELETE FROM " + table + " WHERE plan_id=?")) {
+                    p.setObject(1, id); p.executeUpdate();
+                }
+            }
+            return null;
+        });
+    }
+
     /** Explicit permanent cleanup; refuse redeemed coupons and detach current plan references. */
     public void deleteCatalogRecord(boolean deal, UUID id, long expected, String actor) {
         PostgresRepositorySupport.transaction(db,c->{
@@ -479,6 +523,11 @@ public final class PostgresPlatformRepository {
         return out;
     }
 
+
+    private static ShoppingEstimate scenarioPricing(ShoppingPlan.Scenario scenario){
+        var result=scenario.estimate();var regular=(BigDecimal)result.get("regularTotal");var sale=(BigDecimal)result.get("saleTotal");var coupons=(BigDecimal)result.get("couponTotal");var rewards=(BigDecimal)result.get("potentialRewards");var register=(BigDecimal)result.get("merchandiseAfterCoupons");
+        return new ShoppingEstimate(regular,sale,regular.subtract(sale),coupons,rewards,register,register.subtract(rewards),List.of("Scenario qualifications use owner-entered terms; possible rewards are not earned."));
+    }
 
     public Map<String, Object> checkout(UUID planId) {
         var plan = new PostgresShoppingPlanRepository(db)

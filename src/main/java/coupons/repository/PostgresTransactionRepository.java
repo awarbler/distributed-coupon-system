@@ -69,6 +69,15 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     /** Receipt and clipped-coupon redemptions commit or roll back together. */
     public ReceiptWriteResult saveWithCoupons(UUID id,CouponTransaction transaction,ReceiptMeta metadata,
             List<ReceiptEvidence> newEvidence,ReceiptWriteRequest request,ReceiptCreateCtx context,List<UUID> couponIds) {
+        return saveWithPlan(id,transaction,metadata,newEvidence,request,context,couponIds,null,0);
+    }
+    public ReceiptWriteResult saveWithPlan(UUID id,CouponTransaction transaction,ReceiptMeta metadata,
+            List<ReceiptEvidence> newEvidence,ReceiptWriteRequest request,ReceiptCreateCtx context,List<UUID> couponIds,UUID planId,long planRevision) {
+        return saveWithDraft(id,transaction,metadata,newEvidence,request,context,couponIds,planId,planRevision,null,0);
+    }
+    public ReceiptWriteResult saveWithDraft(UUID id,CouponTransaction transaction,ReceiptMeta metadata,
+            List<ReceiptEvidence> newEvidence,ReceiptWriteRequest request,ReceiptCreateCtx context,List<UUID> couponIds,UUID planId,long planRevision,UUID draftId,long draftRevision) {
+        if(draftId!=null&&!id.equals(draftId))throw new IllegalArgumentException("Draft must match receipt.");
         Objects.requireNonNull(id);
         Objects.requireNonNull(transaction);
         Objects.requireNonNull(newEvidence);
@@ -79,7 +88,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
         ReceiptRecord candidate = new ReceiptRecord(id, ReceiptStatus.ACTIVE, 1,
                 snapshot.toTransaction(), metadata, evidence.stream().map(ReceiptEvidence::getEvidenceId).toList());
         ReceiptValidator.validate(candidate);
-        CreatePayload payload = new CreatePayload(id, snapshot, metadata, evidence, request, context);
+        CreatePayload payload = new CreatePayload(id, snapshot, metadata, evidence, request, context,planId,planRevision,draftId,draftRevision);
         return inTransaction(connection -> {
             ReceiptWriteResult retry = matchingRequest(connection, request.requestId(), payload);
             if (retry != null) return retry;
@@ -108,6 +117,8 @@ public final class PostgresTransactionRepository implements TransactionRepositor
                 if(metadata==null || snapshot.observations().purchaseDate()==null)throw new IllegalArgumentException("Purchase date required to use clipped coupons.");
                 PostgresClippedCouponRepository.redeem(connection,couponId,id,snapshot.observations().purchaseDate(),coupon.revision(),context.requestedBy());
             }
+            if(draftId!=null)PostgresPlatformRepository.consumeReceiptDraft(connection,draftId,draftRevision,context.requestedBy());
+            if(planId!=null)PostgresShoppingPlanRepository.markPurchased(connection,planId,planRevision,id,context.requestedBy());
             insertHistory(connection, history);
             insertRequest(connection, request.requestId(), id, serialize(payload), result);
             return result;
@@ -463,6 +474,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             statement.setLong(3, history.after().revision()); statement.setObject(4, history.request().requestId());
             statement.setBytes(5, serialize(history)); statement.executeUpdate();
         }
+        PostgresInventoryRepository.syncReceipts(connection,history.createCtx()!=null?history.createCtx().requestedBy():history.changeCtx().requestedBy());
     }
 
     private void insertRequest(Connection connection, UUID requestId, UUID transactionId, byte[] payload,
@@ -693,8 +705,10 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     private enum SetMode { NEW, UPDATE }
 
     private record CreatePayload(UUID id, ReceiptSnapshot snapshot, ReceiptMeta metadata,
-            List<ReceiptEvidence> evidence, ReceiptWriteRequest request, ReceiptCreateCtx context)
-            implements java.io.Serializable { }
+            List<ReceiptEvidence> evidence, ReceiptWriteRequest request, ReceiptCreateCtx context,UUID planId,long planRevision,UUID draftId,long draftRevision)
+            implements java.io.Serializable {
+        CreatePayload(UUID id,ReceiptSnapshot snapshot,ReceiptMeta metadata,List<ReceiptEvidence> evidence,ReceiptWriteRequest request,ReceiptCreateCtx context){this(id,snapshot,metadata,evidence,request,context,null,0,null,0);}
+    }
     private record UpdatePayload(UUID id, long expectedRevision, ReceiptSnapshot snapshot,
             ReceiptMeta metadata, List<ReceiptEvidence> evidence, ReceiptWriteRequest request,
             ReceiptChangeContext context) implements java.io.Serializable { }

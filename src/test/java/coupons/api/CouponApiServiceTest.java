@@ -49,6 +49,43 @@ class CouponApiServiceTest {
         assertNull(receipts.findById(id).orElseThrow().transaction().getObservations().earnings().getFirst().expirationDate());
     }
 
+    @Test void scenarioPreviewAndPlanSaveAreSeparateFromReceiptsAndBalances()throws Exception{
+        var line=Map.of("id",UUID.randomUUID().toString(),"name","Scott","regular","5.00","quantity",2);
+        var scenario=Map.of("items",List.of(line),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+        var preview=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",scenario)),null,null);assertEquals(200,preview.statusCode(),preview.body());assertEquals(new BigDecimal("10.00"),Json.parseObject(preview.body()).get("calculatedOop"));
+        var paid=new java.util.LinkedHashMap<String,Object>(scenario);paid.put("payments",List.of(Map.of("id",UUID.randomUUID().toString(),"type","ECB","amount","2","notes","Scott")));
+        var paidPreview=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",paid)),null,null);assertEquals(200,paidPreview.statusCode(),paidPreview.body());assertEquals(new BigDecimal("8.00"),Json.parseObject(paidPreview.body()).get("calculatedOop"));
+        var whole=new java.util.LinkedHashMap<String,Object>(scenario);whole.put("coupons",List.of(Map.of("id",UUID.randomUUID().toString(),"description","ONLINE2","amount","2","requiredQuantity",1,"lineIds",List.of(),"kind","SALE_PROMOTION","wholeReceipt",true)));
+        var wholePreview=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",whole)),null,null);assertEquals(200,wholePreview.statusCode(),wholePreview.body());assertEquals(new BigDecimal("8.00"),Json.parseObject(wholePreview.body()).get("calculatedOop"));
+        var id=UUID.randomUUID();var body=Map.of("planId",id.toString(),"name","Synthetic scenario","retailer","Walgreens","scenario",scenario);
+        var created=call("POST","/shopping-plans","owner",Json.object(body),"scenario-create",null);assertEquals(201,created.statusCode(),created.body());assertEquals(2,plans.findById(id).orElseThrow().scenario().items().getFirst().quantity());
+        var edited=call("PUT","/shopping-plans/"+id,"owner",Json.object(Map.of("name","Renamed")),"scenario-metadata","1");assertEquals(200,edited.statusCode(),edited.body());assertNotNull(plans.findById(id).orElseThrow().scenario());
+        assertTrue(receipts.findById(id).isEmpty());
+    }
+
+    @Test void clearedPurchaseDateRemainsUnknownWhilePrintedTimeIsPreserved() {
+        var fields=new java.util.LinkedHashMap<String,Object>();fields.put("transactionId",UUID.randomUUID().toString());fields.put("retailer","Store");fields.put("purchaseDate",null);fields.put("printedTime","14:07");fields.put("purchaseChannel","IN_STORE");fields.put("tax","0");fields.put("reportedTotal","1");fields.put("items",List.of(Map.of("lineItemId",UUID.randomUUID().toString(),"description","Product","regularUnitPrice","1","unitPrice","1","quantity",1)));
+        var input=ReceiptInput.read(Json.parseObject(Json.object(fields)));assertNull(input.metadata().purchasedAt());assertNull(input.transaction().getObservations().purchaseDate());assertEquals("14:07",input.transaction().getObservations().printedTime());
+    }
+
+    @Test void draftHttpEndpointsAreOwnerOnlyAndIdempotent() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(System.getenv("COUPON_POSTGRES_TEST_URL")!=null);
+        var connections=new PostgresConnectionFactory(System.getenv("COUPON_POSTGRES_TEST_URL"),System.getenv("COUPON_POSTGRES_TEST_USER"),System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
+        try(var c=connections.open()){PostgresSchema.apply(c);}
+        var repository=new PostgresTransactionRepository(connections);
+        var platform=new PostgresPlatformRepository(connections);
+        var service=new coupons.api.CouponApiService(repository,new PostgresShoppingPlanRepository(connections),new PostgresClippedCouponRepository(connections),"reader","owner",new PostgresApiRequestStore(connections),platform);
+        var server=service.start(0);try{
+            var id=UUID.randomUUID();var uri=java.net.URI.create("http://127.0.0.1:"+server.getAddress().getPort()+"/receipt-drafts/"+id);
+            var client=java.net.http.HttpClient.newHttpClient();String body="{\"state\":{\"id\":\""+id+"\",\"store\":\"Walmart\",\"lines\":[]}}";
+            var put=java.net.http.HttpRequest.newBuilder(uri).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key","draft-http").header("If-Match-Revision","0").PUT(java.net.http.HttpRequest.BodyPublishers.ofString(body)).build();
+            var first=client.send(put,java.net.http.HttpResponse.BodyHandlers.ofString());assertEquals(200,first.statusCode(),first.body());assertEquals(first.body(),client.send(put,java.net.http.HttpResponse.BodyHandlers.ofString()).body());
+            var reader=java.net.http.HttpRequest.newBuilder(uri).header("Authorization","Bearer reader").GET().build();assertEquals(403,client.send(reader,java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
+            var get=java.net.http.HttpRequest.newBuilder(uri).header("Authorization","Bearer owner").GET().build();assertEquals(200,client.send(get,java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());assertTrue(repository.findById(id).isEmpty());
+            var del=java.net.http.HttpRequest.newBuilder(uri).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key","draft-delete").header("If-Match-Revision","1").method("DELETE",java.net.http.HttpRequest.BodyPublishers.ofString("{}")).build();assertEquals(200,client.send(del,java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());assertEquals(404,client.send(get,java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
+        }finally{server.stop(0);}
+    }
+
     String planBody(UUID id,String name) { return Json.object(Map.of("planId",id,"name",name)); }
     UUID receipt() {
         UUID id=UUID.randomUUID();

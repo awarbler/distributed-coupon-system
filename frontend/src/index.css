@@ -70,3 +70,10 @@ input[type="checkbox"], input[type="radio"] { flex-shrink: 0; }
 /* Receipt validation: text and focus accompany the error color. */
 input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"] { border: 2px solid #b42318; background-color: #fff4f2; }
 .field-error { color: #b42318; font-weight: 600; }
+
+/* Title-style presentation across the workspace; stored values remain unchanged. */
+:root { --text-case-ui: capitalize; }
+body, button, input, select, option, textarea { text-transform: var(--text-case-ui); }
+input::placeholder, textarea::placeholder { text-transform: var(--text-case-ui); }
+/* Technical strings and credentials must retain their exact visual spelling. */
+code, pre, kbd, samp, input[type="password"], input[type="email"], input[type="url"], .raw-value, [data-raw-text] { text-transform: none; }

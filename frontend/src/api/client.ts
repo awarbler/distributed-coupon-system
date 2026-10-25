@@ -1,5 +1,6 @@
 import { parse } from 'lossless-json'
-import type {Workspace,Receipt,History,Totals,PlanCheckout,} from '../types/platform'
+import { integer } from './format'
+import type {PlanScenario,Workspace,Receipt,History,Totals,PlanCheckout,} from '../types/platform'
 
 export class ApiError extends Error {
   readonly status: number
@@ -69,6 +70,7 @@ saveCheckout(
   receipt(id: string, signal?: AbortSignal) { return this.get<Receipt>(`/receipts/${encodeURIComponent(id)}`, signal) }
   history(id: string, signal?: AbortSignal) { return this.get<History[]>(`/receipts/${encodeURIComponent(id)}/history`, signal) }
   totals(id: string, signal?: AbortSignal) { return this.get<Totals>(`/receipts/${encodeURIComponent(id)}/totals`, signal) }
+  async receiptDraft(id:string):Promise<{draftId:string;revision:string;payload:string}>{return decode(await (await this.request(`/receipt-drafts/${encodeURIComponent(id)}`)).text()) as {draftId:string;revision:string;payload:string}}
   async evidence(receipt: string, id: string) { return (await this.request(`/receipts/${encodeURIComponent(receipt)}/evidence/${encodeURIComponent(id)}`)).blob() }
   async mutate(path: string, method: 'POST' | 'PUT' | 'DELETE', body: unknown, key: string, revision?: string): Promise<unknown> {
     const response = await this.request(path, { method, body: JSON.stringify(body), headers: {
@@ -76,4 +78,13 @@ saveCheckout(
     } })
     return decode(await response.text())
   }
+}
+
+// Normalize optional deal inputs without performing financial arithmetic.
+export const zeroScenarioAmount=(amount:string)=>/^(?:0+(?:[.]0*)?|[.]0+)$/.test(amount.trim())
+export const activeScenarioCoupons=(coupons:PlanScenario['coupons'])=>coupons.filter(c=>(c.description.trim()||c.amount.trim())&&!zeroScenarioAmount(c.amount))
+export function scenarioRequest(value:PlanScenario) {
+ const decimal=/^(?:[0-9]+(?:[.][0-9]+)?|[.][0-9]+)$/
+ const moneyField=(amount:string,label:string)=>{if(!decimal.test(amount.trim()))throw new Error(`${label}: enter a valid amount.`);return amount.trim()}
+ return {...value,paymentMethod:value.payments?.find(p=>['CASH','CARD'].includes(p.type))?.type??value.paymentMethod,items:value.items.map((x,i)=>{if(!x.name.trim())throw new Error(`Product ${i+1}: enter its description.`);return {...x,sku:x.sku||null,sale:x.sale?moneyField(x.sale,`Product ${i+1} sale price`):null,regular:moneyField(x.regular,`Product ${i+1} regular price`),quantity:integer(String(x.quantity))}}),coupons:activeScenarioCoupons(value.coupons).map((c,i)=>{if(!c.description.trim())throw new Error(`Coupon ${i+1}: enter its description or clear the amount to leave it unused.`);return {...c,amount:moneyField(c.amount,`Coupon ${i+1} amount`),requiredQuantity:integer(String(c.requiredQuantity))}}),promotions:value.promotions.filter(p=>(p.description.trim()||p.rewardAmount.trim())&&!zeroScenarioAmount(p.rewardAmount)).map((p,i)=>{if(!p.description.trim())throw new Error(`Rebate ${i+1}: enter its description or clear the amount to leave it unused.`);return {...p,rewardAmount:moneyField(p.rewardAmount,`Rebate ${i+1} amount`),requiredQuantity:integer(String(p.requiredQuantity).trim()||'0',0),requiredSpend:moneyField(p.requiredSpend.trim()||'0',`Rebate ${i+1} required spend`)}}),payments:value.payments?.filter(p=>p.amount.trim()).map((p,i)=>({...p,amount:moneyField(p.amount,`Payment ${i+1} amount`)})),tax:value.taxRate==null?moneyField(value.tax,'Tax amount'):value.tax,taxRate:value.taxRate==null?null:moneyField(value.taxRate,'Tax rate'),manualOop:value.manualOop||null}
 }

@@ -18,10 +18,12 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
                     String reviewToken,String suppliedReviewToken,boolean acknowledgeDifference) {
     ReceiptRecord record(){return new ReceiptRecord(id,ReceiptStatus.ACTIVE,1,transaction,metadata,evidence.stream().map(ReceiptEvidence::getEvidenceId).toList());}
     static ReceiptInput read(Map<String,Object> fields) {
-        known(fields,"clippedCouponIds","printedFooter","transactionId","retailer","receiptNumber","purchaseDate","printedTime","purchaseChannel","printedTotalBasis","paymentEntryStatus","tax","reportedTotal","items","discounts","payments","rrUsed","rrUsageId","rrUses","earnings","evidence","reviewToken","acknowledgeDifference");
-        UUID id=uuid(fields,"transactionId");LocalDate day=LocalDate.parse(required(fields,"purchaseDate"));
+        known(fields,"receiptDraftId","receiptDraftRevision","shoppingPlanId","shoppingPlanRevision","clippedCouponIds","printedFooter","transactionId","retailer","receiptNumber","purchaseDate","printedTime","purchaseChannel","printedTotalBasis","paymentEntryStatus","tax","reportedTotal","items","discounts","payments","rrUsed","rrUsageId","rrUses","earnings","evidence","reviewToken","acknowledgeDifference");
+        if(optional(fields,"shoppingPlanId")!=null){UUID.fromString(required(fields,"shoppingPlanId"));if(optional(fields,"shoppingPlanRevision")==null||Long.parseLong(required(fields,"shoppingPlanRevision"))<1)throw new IllegalArgumentException("A saved shopping-plan revision is required.");}
+        else if(optional(fields,"shoppingPlanRevision")!=null)throw new IllegalArgumentException("Shopping-plan revision requires a plan ID.");
+        UUID id=uuid(fields,"transactionId");LocalDate day=optional(fields,"purchaseDate")==null?null:LocalDate.parse(required(fields,"purchaseDate"));
         String time=optional(fields,"printedTime");LocalTime parsed=time==null?null:ReceiptTimeInput.parse(time).orElseThrow(()->new IllegalArgumentException("Use a valid receipt time."));
-        var metadata=new ReceiptMeta(required(fields,"retailer"),optional(fields,"receiptNumber"),parsed==null?null:day.atTime(parsed),null,ReceiptMeta.PurchaseChannel.valueOf(required(fields,"purchaseChannel")),
+        var metadata=new ReceiptMeta(required(fields,"retailer"),optional(fields,"receiptNumber"),parsed==null||day==null?null:day.atTime(parsed),null,ReceiptMeta.PurchaseChannel.valueOf(required(fields,"purchaseChannel")),
                 optional(fields,"printedTotalBasis") == null ? ReceiptMeta.PrintedTotalBasis.UNKNOWN : ReceiptMeta.PrintedTotalBasis.valueOf(required(fields,"printedTotalBasis")),
                 optional(fields,"paymentEntryStatus") == null ? ReceiptMeta.PaymentEntryStatus.UNKNOWN : ReceiptMeta.PaymentEntryStatus.valueOf(required(fields,"paymentEntryStatus")));
         var tx=new CouponTransaction(new ReceiptTotals(decimal(fields,"tax",false),decimal(fields,"reportedTotal",false)));

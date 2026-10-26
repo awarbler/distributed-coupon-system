@@ -7,7 +7,10 @@ import java.util.*;
 
 /** Explicit non-receipt movement, never a new receipt earning; signed values may be independently unknown. */
 public record AccountAdjustment(UUID eventId, LocalDate date, String provider, BigDecimal unitChange,
-        BigDecimal usdChange, String reason, String recordedBy, Instant recordedAt, LocalDate expirationDate) implements Serializable {
+        BigDecimal usdChange, String reason, String recordedBy, Instant recordedAt, LocalDate expirationDate, LocalTime time) implements Serializable {
+    public AccountAdjustment(UUID eventId, LocalDate date, String provider, BigDecimal unitChange, BigDecimal usdChange, String reason, String recordedBy, Instant recordedAt, LocalDate expirationDate) {
+        this(eventId,date,provider,unitChange,usdChange,reason,recordedBy,recordedAt,expirationDate,null);
+    }
     public AccountAdjustment(UUID eventId, LocalDate date, String provider, BigDecimal unitChange, BigDecimal usdChange, String reason, String recordedBy, Instant recordedAt) {
         this(eventId,date,provider,unitChange,usdChange,reason,recordedBy,recordedAt,null);
     }

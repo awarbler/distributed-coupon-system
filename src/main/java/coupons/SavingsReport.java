@@ -52,15 +52,15 @@ public final class SavingsReport {
     static boolean earned(Earning e) {
         return e.confirmed()!=null && (e.status()==RebateStatus.CREDITED || e.status()==RebateStatus.PAID);
     }
-    /** Read-only fallback for known worksheet point programs; explicit historical values win. */
+    /** Read-only point valuations; P&G uses the owner-corrected 150-point rate, preserving stored history. */
     public static RecordedValuation effectiveValuation(Earning e) {
-        if(e.valuation()!=null) return e.valuation();
         var benefit=e.confirmed()!=null?e.confirmed():e.expected();
-        if(benefit==null || benefit.kind()!=BenefitKind.POINTS) return null;
+        if(benefit==null || benefit.kind()!=BenefitKind.POINTS) return e.valuation();
         String name=ProviderBalanceSummary.accountName(e.provider());
+        if(e.valuation()!=null && !name.equals("P&G Brand"))return e.valuation();
         if(name.equals("Fetch")) return new RecordedValuation(benefit.amount().movePointLeft(3),USD,"Automatic worksheet Fetch rate: 1000 points = 1 USD");
-        if(name.equals("P&G Brand")) return new RecordedValuation(benefit.amount().divide(new BigDecimal("250")),USD,"Automatic worksheet P&G rate: 250 points = 1 USD");
-        return null;
+        if(name.equals("P&G Brand")) return new RecordedValuation(benefit.amount().divide(new BigDecimal("150"), MathContext.DECIMAL128),USD,"Automatic worksheet P&G rate: 150 points = 1 USD");
+        return e.valuation();
     }
     static BigDecimal earnedDollars(Earning e) {
         var benefit=e.confirmed();

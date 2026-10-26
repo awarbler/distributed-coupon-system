@@ -52,6 +52,24 @@ class PostgresTransactionRepositoryTest {
                 Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
+    @Test void receiptNumbersNotTimesIdentifyConcurrentPurchases() throws Exception {
+        var time=java.time.LocalDateTime.of(2026,10,25,16,35);
+        repository.save(UUID.randomUUID(),transaction(),new ReceiptMeta("Walgreens","100-001",time,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));
+        repository.save(UUID.randomUUID(),transaction(),new ReceiptMeta("Walgreens","100-002",time,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));
+        assertTrue(repository.findPossibleDuplicates(new ReceiptMeta("Walgreens","100-003",time,null)).isEmpty());
+        var start=new java.util.concurrent.CountDownLatch(1);
+        try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)){
+            var attempts=new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for(String number:List.of("200-001","200001"))attempts.add(executor.submit(()->{
+                start.await();
+                try{new PostgresTransactionRepository(connections,Clock.fixed(NOW,ZoneOffset.UTC)).save(UUID.randomUUID(),transaction(),new ReceiptMeta("Walgreens",number,time,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));return true;}
+                catch(IllegalArgumentException duplicate){assertTrue(duplicate.getMessage().contains("receipt number already exist"));return false;}
+            }));
+            start.countDown();int saved=0;for(var attempt:attempts)if(attempt.get(15,java.util.concurrent.TimeUnit.SECONDS))saved++;
+            assertEquals(1,saved);
+        }
+    }
+
     @Test
     void persistsReceiptEvidenceHistoryAndIdempotentRetry() {
         UUID receiptId = UUID.randomUUID();
@@ -241,6 +259,17 @@ class PostgresTransactionRepositoryTest {
         inventory.adjust(id,(Long)row.get("revision"),"SET",4,null,"Count individual razors","test",2,4,"Razors","ITEM");row=inventoryRow();
         inventory.adjust(id,(Long)row.get("revision"),"USE",1,null,"Used one razor","test",2,4,"Razors","ITEM");assertEquals(3,inventoryRow().get("quantityOnHand"));
         var another=UUID.randomUUID();repository.save(another,inventoryTransaction("070330714170","Bic razors",1),null,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));assertEquals(7,inventoryRow().get("quantityOnHand"));assertEquals(2L,inventoryRow().get("totalPurchased"));
+    }
+
+    @Test void standaloneRewardCorrectionsReplaceDenominationAndMemberCorrectionsPostOnlyDifference() {
+        var platform=new PostgresPlatformRepository(connections);var id=UUID.randomUUID();var reward=new coupons.RegisterReward(id,"Manual coupon",new BigDecimal("5"),null,null,null);platform.addStandaloneReward(reward);
+        platform.correctStandaloneAmount(id,new BigDecimal("5"),new BigDecimal("7"));
+        assertThrows(java.util.ConcurrentModificationException.class,()->platform.correctStandaloneAmount(id,new BigDecimal("5"),new BigDecimal("8")));
+        var member=UUID.randomUUID();platform.saveMemberReward(new AccountAdjustment(member,java.time.LocalDate.of(2026,10,1),"ECB",null,new BigDecimal("2"),"Member reward: Monthly", "test",NOW));
+        platform.correctMemberAmount(member,UUID.randomUUID(),new BigDecimal("2"),new BigDecimal("3"),"test");assertEquals(0,new BigDecimal("3").compareTo(platform.memberAmount(member)));
+        assertThrows(java.util.ConcurrentModificationException.class,()->platform.correctMemberAmount(member,UUID.randomUUID(),new BigDecimal("2"),new BigDecimal("4"),"test"));
+        platform.correctMemberAmount(member,UUID.randomUUID(),new BigDecimal("3"),new BigDecimal("4"),"test");assertEquals(0,new BigDecimal("4").compareTo(platform.memberAmount(member)));
+        platform.correctMemberAmount(member,UUID.randomUUID(),new BigDecimal("4"),BigDecimal.ZERO,"test");assertEquals(0,platform.memberAmount(member).signum());var account=platform.account("ECB",java.time.LocalDate.of(2026,10,1),java.time.LocalDate.of(2026,10,31));assertTrue(!account.get("activity").toString().contains(member.toString()));platform.deleteStandaloneReward(id,"test");assertTrue(platform.standaloneRewards().isEmpty());
     }
 
     private static CouponTransaction transaction() {

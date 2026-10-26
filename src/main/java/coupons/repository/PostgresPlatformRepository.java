@@ -48,6 +48,32 @@ public final class PostgresPlatformRepository {
         this.db = Objects.requireNonNull(db);
     }
 
+    public void correctStandaloneAmount(UUID id,BigDecimal expected,BigDecimal amount){new PostgresReceiptSupplementRepository(db).correctStandaloneAmount(id,expected,amount);}
+    public Map<String,Object> memberReward(UUID id) {return PostgresRepositorySupport.transaction(db,c->memberReward(c,id));}
+    private static Map<String,Object> memberReward(Connection c,UUID id)throws SQLException {
+        AccountAdjustment old;try(var p=c.prepareStatement("SELECT payload FROM provider_account_adjustments WHERE event_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();old=PostgresRepositorySupport.deserialize(r.getBytes(1),AccountAdjustment.class);}}
+        if(!old.reason().startsWith("Member reward:"))throw new IllegalArgumentException("Not a member reward.");
+        BigDecimal usd=old.usdChange(),points=old.unitChange();
+        try(var p=c.prepareStatement("SELECT usd_change,unit_change FROM provider_account_adjustments WHERE reason=?")){p.setString(1,"Member reward correction: "+id);try(var r=p.executeQuery()){while(r.next()){if(r.getBigDecimal(1)!=null)usd=usd==null?r.getBigDecimal(1):usd.add(r.getBigDecimal(1));if(r.getBigDecimal(2)!=null)points=points==null?r.getBigDecimal(2):points.add(r.getBigDecimal(2));}}}
+        return fields("amount",usd,"points",points,"provider",old.provider(),"date",old.date(),"time",old.time());
+    }
+    public BigDecimal memberAmount(UUID id) {return (BigDecimal)memberReward(id).get("amount");}
+    public void correctMemberAmount(UUID id,UUID correction,BigDecimal expected,BigDecimal amount,String actor) {correctMemberAmount(id,correction,expected,amount,null,null,actor);}
+    public void correctMemberAmount(UUID id,UUID correction,BigDecimal expected,BigDecimal amount,BigDecimal expectedPoints,BigDecimal points,String actor) {
+        if(amount==null||amount.signum()<0||points!=null&&points.signum()<0)throw new IllegalArgumentException("Enter nonnegative reward amounts.");
+        PostgresRepositorySupport.transaction(db,c->{
+            try(var p=c.prepareStatement("SELECT payload FROM provider_account_adjustments WHERE event_id=? FOR UPDATE")){p.setObject(1,id);try(var r=p.executeQuery()){
+                if(!r.next())throw new NoSuchElementException();var old=PostgresRepositorySupport.deserialize(r.getBytes(1),AccountAdjustment.class);var current=memberReward(c,id);
+                BigDecimal actual=(BigDecimal)current.get("amount"),actualPoints=(BigDecimal)current.get("points");
+                if(actual.compareTo(expected)!=0||actualPoints!=null&&(expectedPoints==null||actualPoints.compareTo(expectedPoints)!=0))throw new ConcurrentModificationException("Reward changed; reopen its editor.");
+                if(actualPoints!=null&&points==null||actualPoints==null&&points!=null)throw new IllegalArgumentException("Preserve the reward's original points unit.");
+                BigDecimal units=points==null?null:points.subtract(actualPoints);
+                var value=new AccountAdjustment(correction,old.date(),old.provider(),units,amount.subtract(actual),"Member reward correction: "+id,actor,java.time.Instant.now(),old.expirationDate());
+                try(var q=c.prepareStatement("INSERT INTO provider_account_adjustments(event_id,provider,event_date,unit_change,usd_change,reason,recorded_by,recorded_at,payload) VALUES(?,?,?,?,?,?,?,?,?)")){q.setObject(1,correction);q.setString(2,old.provider());q.setObject(3,old.date());q.setBigDecimal(4,units);q.setBigDecimal(5,value.usdChange());q.setString(6,value.reason());q.setString(7,actor);q.setTimestamp(8,java.sql.Timestamp.from(value.recordedAt()));q.setBytes(9,PostgresRepositorySupport.serialize(value));q.executeUpdate();}
+            }}return null;});
+    }
+    public void deleteStandaloneReward(UUID id,String actor){new PostgresReceiptSupplementRepository(db).voidRecordedReward(id,"Owner deleted reward",actor);}
+    public boolean earningMatched(UUID earning) {return PostgresRepositorySupport.transaction(db,c->PostgresReceiptState.read(c).rrUsageLinks().values().stream().anyMatch(link->link.sourceId().equals(earning)));}
     public void addStandaloneReward(coupons.RegisterReward reward) {new PostgresReceiptSupplementRepository(db).addStandaloneReward(reward);}
     public List<Map<String,Object>> standaloneRewards() {
         return transaction(db,c->{c.setReadOnly(true);var state=PostgresReceiptState.read(c);
@@ -59,6 +85,13 @@ public final class PostgresPlatformRepository {
     public List<ReceiptRRMatching.Use> rrOptions(UUID id) { return transaction(db,c->{c.setReadOnly(true);return ReceiptRRMatching.options(PostgresReceiptState.read(c),id);}); }
     public RRUsageLink matchRR(UUID id,long revision,UUID use,UUID source,boolean receiptEarning,String reason,String actor,boolean confirmUnknownHistory) {
         return new PostgresReceiptSupplementRepository(db).matchRR(id,revision,use,source,receiptEarning,reason,actor,confirmUnknownHistory);
+    }
+    public void savePayout(ProviderRedemption payout){new PostgresProviderAccountRepository(db).saveRedemption(payout);}
+    public Map<String,Object> payout(UUID id){return transaction(db,c->{try(var p=c.prepareStatement("SELECT revision,payload FROM provider_redemptions_current WHERE redemption_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();return fields("revision",r.getLong(1),"payout",PostgresRepositorySupport.deserialize(r.getBytes(2),ProviderRedemption.class));}}});}
+    public void finishPayout(UUID id,long revision,ProviderRedemption.Status status,LocalDate date){
+        var repo=new PostgresProviderAccountRepository(db);var old=repo.findRedemption(id).orElseThrow();
+        if(old.status()!=ProviderRedemption.Status.REQUESTED||status==ProviderRedemption.Status.REQUESTED)throw new IllegalArgumentException("Only a requested payout can be completed or cancelled.");
+        repo.updateRedemption(id,revision,old.complete(status,date,null));
     }
     public void saveMemberReward(AccountAdjustment reward) { new PostgresProviderAccountRepository(db).saveAdjustment(reward); }
     public void saveOpening(AccountOpening opening) { new PostgresProviderAccountRepository(db).saveOpening(opening); }
@@ -161,9 +194,9 @@ public final class PostgresPlatformRepository {
 
                     }
                 }
-                var pricing = plan.scenario()==null?ShoppingEstimate.calculate(items, planDeals, planCoupons, plan.shoppingDate(), plan.retailer()):scenarioPricing(plan.scenario());
+                var pricing = plan.scenario()==null?ShoppingEstimate.calculate(items, planDeals, planCoupons, plan.shoppingDate(), plan.retailer()):scenarioPricing(plan.scenario(),plan.retailer());
                 var checkout = new PostgresPlanCheckoutRepository(db).view(id, pricing);
-                planRows.add(fields("scenarioEstimate",plan.scenario()==null?null:plan.scenario().estimate(),"pricing", pricing, "checkout", checkout, "plan", plan, "items", items, "estimatedMerchandise", plan.scenario()==null&&items.isEmpty() ? null : pricing.saleTotal(), "estimateComplete", (plan.scenario()!=null||!items.isEmpty()) && pricing.saleTotal() != null));
+                planRows.add(fields("scenarioEstimate",plan.scenario()==null?null:plan.scenario().estimate(plan.retailer()),"pricing", pricing, "checkout", checkout, "plan", plan, "items", items, "estimatedMerchandise", plan.scenario()==null&&items.isEmpty() ? null : pricing.saleTotal(), "estimateComplete", (plan.scenario()!=null||!items.isEmpty()) && pricing.saleTotal() != null));
             }
             var couponRepo = new PostgresClippedCouponRepository(db);
             List<Object> coupons = new ArrayList<>();
@@ -524,8 +557,8 @@ public final class PostgresPlatformRepository {
     }
 
 
-    private static ShoppingEstimate scenarioPricing(ShoppingPlan.Scenario scenario){
-        var result=scenario.estimate();var regular=(BigDecimal)result.get("regularTotal");var sale=(BigDecimal)result.get("saleTotal");var coupons=(BigDecimal)result.get("couponTotal");var rewards=(BigDecimal)result.get("potentialRewards");var register=(BigDecimal)result.get("merchandiseAfterCoupons");
+    private static ShoppingEstimate scenarioPricing(ShoppingPlan.Scenario scenario,String retailer){
+        var result=scenario.estimate(retailer);var regular=(BigDecimal)result.get("regularTotal");var sale=(BigDecimal)result.get("saleTotal");var coupons=(BigDecimal)result.get("couponTotal");var rewards=(BigDecimal)result.get("potentialRewards");var register=(BigDecimal)result.get("merchandiseAfterCoupons");
         return new ShoppingEstimate(regular,sale,regular.subtract(sale),coupons,rewards,register,register.subtract(rewards),List.of("Scenario qualifications use owner-entered terms; possible rewards are not earned."));
     }
 

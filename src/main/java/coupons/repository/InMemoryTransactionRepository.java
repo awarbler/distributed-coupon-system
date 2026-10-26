@@ -525,6 +525,12 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
                 .map(this::workingReceipt).toList();
     }
 
+    @Override public List<ReceiptRecord> findRewardCredits(UUID receiptId,UUID earningId){return snapshot().receipts().values().stream().map(this::workingReceipt).filter(r->r.transaction().getObservations().earnings().stream().anyMatch(e->e.details()!=null&&receiptId.equals(e.details().originalReceiptId())&&earningId.equals(e.details().originalEarningId()))).toList();}
+    @Override public List<ReceiptRecord> findImportDuplicates(ReceiptMeta metadata){
+        Objects.requireNonNull(metadata);
+        return snapshot().receipts().values().stream().filter(r->{var m=r.metadata();return m!=null&&metadata.retailer().trim().equalsIgnoreCase(m.retailer().trim())&&metadata.receiptNumber()!=null&&m.receiptNumber()!=null&&metadata.receiptNumber().replaceAll("[^A-Za-z0-9]","").equalsIgnoreCase(m.receiptNumber().replaceAll("[^A-Za-z0-9]",""));}).sorted((a,b)->a.transactionId().compareTo(b.transactionId())).map(this::workingReceipt).toList();
+    }
+
     /** Compares only recorded metadata without inventing missing values. */
     private boolean matchesMetadata(ReceiptMeta a, ReceiptMeta b) {
         if (b == null || !a.retailer().equals(b.retailer())) {
@@ -534,8 +540,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
                 && !a.storeReference().equals(b.storeReference())) {
             return false;
         }
-        return (a.receiptNumber() != null && a.receiptNumber().equals(b.receiptNumber()))
-                || (a.purchasedAt() != null && a.purchasedAt().equals(b.purchasedAt()));
+        return a.receiptNumber() != null && a.receiptNumber().equals(b.receiptNumber());
     }
 
     public List<RRUsageLink> rrUsageLinks() {

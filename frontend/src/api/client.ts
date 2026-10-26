@@ -30,6 +30,8 @@ export class ApiClient {
     return response
   }
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> { return decode(await (await this.request(path, { signal })).text()) as T }
+  payout(id:string){return this.get<{revision:string;payout:{status:string}}>(`/accounts/payouts/${encodeURIComponent(id)}`)}
+  memberReward(id:string){return this.get<{amount:string;points:string|null;provider:string}>(`/accounts/member-rewards/${encodeURIComponent(id)}`)}
   async workspace(signal?: AbortSignal) {
     const value = await this.get<Workspace>('/workspace', signal)
     if (!value || typeof value.canWrite !== 'boolean' || !value.summaries ||

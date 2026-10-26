@@ -9,7 +9,7 @@ import { ReceiptFinancialReview, PrintedFooterView, PrintedFooterFields, ItemDis
 import { rewardStatusLabel, footerDraft, footerBody } from './rewardStatus'
 import { EarningLinksForm } from './EarningLinksForm'
 import { ReceiptRewardForm } from './ReceiptRewardForm'
-import { EarningStatusForm } from './EarningStatusForm'
+import { EarningStatusForm, RewardCreditSourceForm } from './EarningStatusForm'
 import type { History, Receipt, Totals, RewardOffer, RRMatchUse } from '../../types/platform'
 
 export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, offers=[] }: { offers?:RewardOffer[]; id: string; api: ApiClient; onClose: () => void; writable?: boolean; onChanged?: () => void }) {
@@ -47,7 +47,7 @@ export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, o
     {!data && !error && <Loading />}
     {data && r && <>
       {r.status === 'DELETED' && <Notice>Historical transaction values are shown. Deleted receipts are excluded from period savings and calculated balances.</Notice>}
-      <div className="detail-meta"><span>{r.metadata?.retailer || 'Store not recorded'} · {date(r.metadata?.purchasedAt)}</span><Badge>{label(r.status)} · revision {r.revision}</Badge></div>
+      <div className="detail-meta"><span>{r.metadata?.retailer || 'Store not recorded'} · {date(r.metadata?.purchasedAt)}</span><Badge>{label(r.status)} · revision {r.revision}</Badge></div>{r.metadata?.storeReference&&<p>{r.metadata.storeReference}</p>}
       <div className="form-actions">
         {r.status === 'ACTIVE' && <button className="secondary" disabled={!writable || !!receiptAction} onClick={() => setReceiptAction('edit')}>Edit receipt</button>}
         <button className="secondary" disabled={!writable || !!receiptAction} onClick={() => setReceiptAction('status')}>{r.status === 'DELETED' ? 'Restore receipt' : 'Delete receipt'}</button>
@@ -55,9 +55,10 @@ export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, o
       {receiptAction === 'edit' && <ReceiptEdit receipt={r} api={api} enabled={writable} onSaved={updated} onCancel={() => setReceiptAction(null)} />}
       {receiptAction === 'status' && <ReceiptStatusAction receipt={r} api={api} enabled={writable} onSaved={updated} onCancel={() => setReceiptAction(null)} />}
 
-      <div className="tabs" aria-label="Receipt sections">{['Items', 'Discounts', 'Rewards', 'Totals', 'Evidence', 'History'].map(t => <button key={t} className={t === tab ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>)}</div>
+      <div className="tabs" aria-label="Receipt sections">{['Items', 'Discounts', 'Payments', 'Rewards', 'Totals', 'Evidence', 'History'].map(t => <button key={t} className={t === tab ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>)}</div>
       {tab === 'Items' && <><p className="muted">Matching SKU / UPC values group units across lines; original lines and individual prices remain unchanged.</p>{data.totals.productGroups?.map(g=><p key={g.identity}>{g.description}: {g.quantity} unit(s), {g.lineItemIds.length} receipt line(s)</p>)}<div className="table-wrap"><table><thead><tr><th>Line / item</th><th>Qty</th><th>Regular unit</th><th>Sale unit</th></tr></thead><tbody>{r.contents.purchaseItems.map((p, i) => <tr key={p.lineItemId}><td><strong>{i + 1}. {p.productName}</strong><small>{p.productCode || 'SKU not recorded'}</small></td><td>{p.quantity}</td><td>{money(p.regularUnitPrice)}</td><td>{money(p.saleUnitPrice)}</td></tr>)}</tbody></table></div></>}
-      {tab === 'Discounts' && <><h3>Applied coupons and discounts</h3>{r.contents.appliedCoupons.length ? r.contents.appliedCoupons.map(c => <div className="detail-row" key={c.applicationId}><div><strong>{c.printedLabel}</strong>{c.requiredQuantity && <small>Requires buying {c.requiredQuantity} products</small>}<small>{c.wholeReceipt ? 'Whole receipt' : c.lineItemIds.length ? `Lines ${c.lineItemIds.map(id => r.contents.purchaseItems.findIndex(p => p.lineItemId === id) + 1).join(', ')}` : 'Products not recorded'}</small></div><strong>{money(c.appliedAmount)}</strong></div>) : <p className="muted">No applied coupons recorded.</p>}<h3>Recorded payments</h3>{r.contents.payments.map(p => <div className="detail-row" key={p.paymentId}><div>{label(p.paymentType)}{p.notes && <small>{p.notes}</small>}</div><strong>{money(p.amount)}</strong></div>)}</>}
+      {tab === 'Discounts' && <><h3>Applied coupons and discounts</h3>{r.contents.appliedCoupons.length ? r.contents.appliedCoupons.map(c => <div className="detail-row" key={c.applicationId}><div><strong>{c.printedLabel}</strong>{c.requiredQuantity && <small>Requires buying {c.requiredQuantity} products</small>}<small>{c.wholeReceipt ? 'Whole receipt' : c.lineItemIds.length ? `Lines ${c.lineItemIds.map(id => r.contents.purchaseItems.findIndex(p => p.lineItemId === id) + 1).join(', ')}` : 'Products not recorded'}</small></div><strong>{money(c.appliedAmount)}</strong></div>) : <p className="muted">No applied coupons recorded.</p>}</>}
+      {tab === 'Payments' && <><h3>Recorded payments</h3>{r.contents.payments.map(p => <div className="detail-row" key={p.paymentId}><div>{label(p.paymentType)}{p.notes && <small>{p.notes}</small>}</div><strong>{money(p.amount)}</strong></div>)}</>}
       {tab === 'Rewards' && <>{r.status === 'ACTIVE' && <button className="secondary" disabled={!writable || addingReward} onClick={()=>setAddingReward(true)}>Add rebate or reward</button>}{addingReward && <ReceiptRewardForm lineTotals={data.totals.lineTotals} offers={offers} receipt={r} api={api} enabled={writable} onSaved={updated} onCancel={()=>setAddingReward(false)} />}{r.contents.observations.earnings.length ? r.contents.observations.earnings.map(e => <section className="receipt-reward-card" key={e.earningId}>
         <div className="receipt-reward-layout"><div className="receipt-reward-info"><strong className="receipt-reward-program">{e.kind === 'REGISTER_REWARD' ? 'Register Rewards' : e.kind === 'WALGREENS_CASH' ? 'Walgreens Cash' : e.provider}</strong><h3 className="receipt-reward-title">{e.offerReference || label(e.kind)}</h3><p className="receipt-reward-meta"><span className="badge">{rewardStatusLabel(e)}</span><span> · {e.scope === 'RECEIPT' ? 'Whole receipt' : e.lineItemIds.length ? `Lines ${e.lineItemIds.map(id => r.contents.purchaseItems.findIndex(p => p.lineItemId === id) + 1).join(', ')}` : 'Products unknown'}</span></p>
         {e.expirationDate && <p className="muted">Expires {date(e.expirationDate)}</p>}
@@ -69,7 +70,10 @@ export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, o
         {data.totals.benefitObservations?.filter(b => b.earningId === e.earningId && b.valuation).map(b => <small key={b.earningId}>Dollar value: {money(b.valuation?.amount)}</small>)}
         {e.status === 'REJECTED' && <small>Excluded from earned value</small>}
         {r.status==='ACTIVE'&&<button className="secondary" disabled={!writable} onClick={()=>setLinking(e.earningId)}>Edit products / expiration</button>}
-        {r.status === 'ACTIVE' && !(e.kind !== 'REGISTER_REWARD' && e.status === 'PAID') && <button className="secondary" disabled={!writable} onClick={() => setEditing(e.earningId)}>Update status</button>}</div></div>
+        {r.status === 'ACTIVE' && <button className="secondary" disabled={!writable} onClick={() => setEditing(e.earningId)}>Edit Amount / Status</button>}</div></div>
+        {e.details?.originalReceiptId&&<p><button type="button" className="text-button" onClick={()=>setSourceReceipt(e.details!.originalReceiptId!)}>View Original Purchase / Offer</button></p>}
+        {r.creditSettlements?.filter(v=>v.earningId===e.earningId).map(v=><section className="receipt-input-row" key={v.earningId}><strong>Manager Credits Received: {money(v.received)} Of {money(v.expected)}</strong><p>The Original Rejection Remains Recorded. These Separate Credits Are Counted Once On Their Own Receipts.</p>{v.credits.map(c=><p key={c.earningId}>{money(c.amount)} · <button type="button" className="text-button" onClick={()=>setSourceReceipt(c.receiptId)}>Receipt {c.receiptNumber||c.receiptId}</button></p>)}</section>)}
+        {e.kind==='WALGREENS_CASH'&&e.status==='CREDITED'&&<RewardCreditSourceForm api={api} receiptId={r.transactionId} earning={e} revision={r.revision} writable={writable} onSaved={updated}/>}
         {linking===e.earningId&&<EarningLinksForm lineTotals={data.totals.lineTotals} earning={e} receipt={r} api={api} enabled={writable} onSaved={updated} onCancel={()=>setLinking(null)} />}
         {editing === e.earningId && <EarningStatusForm earning={e} receiptId={id} revision={r.revision} api={api} enabled={writable} onSaved={updated} onClose={updated} />}
       </section>) : <p className="muted">No separate earnings recorded.</p>}</>}
@@ -94,8 +98,10 @@ const nullable = (value: string) => value.trim() || null
 export function ReceiptEdit({ receipt, api, enabled, onSaved, onCancel }: Props) {
   const m = receipt.metadata, contents = receipt.contents
   const pricingReady = receipt.editDiscounts !== undefined
+  const [receiptKind,setReceiptKind]=useState(m?.receiptKind??'PURCHASE')
   const [retailer, setRetailer] = useState(m?.retailer ?? '')
   const [number, setNumber] = useState(m?.receiptNumber ?? '')
+  const [storeReference,setStoreReference]=useState(m?.storeReference??'')
   const [day, setDay] = useState(contents.observations.purchaseDate ?? m?.purchasedAt?.slice(0, 10) ?? '')
   const [time, setTime] = useState(contents.observations.printedTime ?? m?.purchasedAt?.slice(11, 16) ?? '')
   const [channel, setChannel] = useState(m?.purchaseChannel ?? 'UNKNOWN')
@@ -131,7 +137,7 @@ export function ReceiptEdit({ receipt, api, enabled, onSaved, onCancel }: Props)
     setBusy(true); setError('')
     try {
       payments.forEach((p,i)=>{if(!/^(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)$/.test(p.amount.trim()) || /^(?:0+(?:\.0+)?|\.0+)$/.test(p.amount.trim()))throw new Error(`Payment ${i+1} amount must be greater than zero. Remove unused payment rows instead of leaving a zero amount.`)})
-      const body = { rrUses: rrUses.map(r=>({...r,notes:nullable(r.notes)})), rrReclassifications: reclassifications, printedFooter: footerBody(footer), retailer, receiptNumber: nullable(number), purchaseDate: nullable(day), printedTime: nullable(time), purchaseChannel: channel, printedTotalBasis: basis, paymentEntryStatus: complete, tax, reportedTotal: total, reason,
+      const body = { receiptKind, rrUses: rrUses.map(r=>({...r,notes:nullable(r.notes)})), rrReclassifications: reclassifications, printedFooter: footerBody(footer), storeReference:nullable(storeReference), retailer, receiptNumber: nullable(number), purchaseDate: nullable(day), printedTime: nullable(time), purchaseChannel: channel, printedTotalBasis: basis, paymentEntryStatus: complete, tax, reportedTotal: total, reason,
         items: items.map(item => ({ lineItemId: item.lineItemId, productName: item.productName, productCode: nullable(item.productCode), regularUnitPrice: nullable(item.regularUnitPrice), quantity: integer(item.quantity), ...(item.enteredSalePrice.trim()?{saleUnitPrice:item.enteredSalePrice}:!receipt.editDiscounts ? { saleUnitPrice: item.saleUnitPrice } : receipt.preservePriceLineIds?.includes(item.lineItemId) ? { saleUnitPrice: item.saleUnitPrice } : {}) })),
         payments: payments.map(payment => ({ paymentId: payment.paymentId, paymentType: payment.paymentType, amount: payment.amount, notes: nullable(payment.notes), ...(payment.paymentType==='OTHER'?{role:payment.role,accountName:nullable(payment.accountName)}:{}) })), discounts: discounts.filter(d => d.appliedAmount.trim()&&!/^(?:0+(?:[.]0*)?|[.]0+)$/.test(d.appliedAmount.trim())).map(d => ({ ...d, requiredQuantity: d.requiredQuantity ? integer(d.requiredQuantity) : null, qualifyingQuantities: Object.fromEntries(Object.entries(d.qualifyingQuantities).map(([id,q]) => [id, integer(String(q))])) })) }
       const result = await api.mutate(`/receipts/${receipt.transactionId}/edit-preview`, 'POST', body, crypto.randomUUID(), receipt.revision) as { reviewToken: string; totals: Totals }
@@ -154,10 +160,11 @@ export function ReceiptEdit({ receipt, api, enabled, onSaved, onCancel }: Props)
     {!pricingReady && <Notice>Restart the updated Java API, then close and reopen this receipt to prepare regular-price and item-discount editing.</Notice>}
     {error && <Notice>{error} If the revision changed, close and refresh before editing again.</Notice>}
     {!review ? <form onSubmit={e => { e.preventDefault(); void preview() }}><fieldset disabled={!enabled || busy || !pricingReady}>
-      <div className="receipt-fields-row">{field('Store', retailer, setRetailer, true)}{field('Receipt number', number, setNumber)}</div><div className="receipt-fields-row receipt-fields-three">{field('Purchase date', day, setDay, false, 'date')}{field('Printed time', time, setTime)}
+      <label>Receipt Type<select value={receiptKind} onChange={e=>{const kind=e.target.value as typeof receiptKind;if(kind==='REWARD_ADJUSTMENT'){if(items.some(i=>Number(i.regularUnitPrice||i.saleUnitPrice)!==0)||payments.length||discounts.length||rrUses.length||Number(tax)!==0||Number(total)!==0){setError('Only a zero-purchase receipt can be converted to a reward-only adjustment.');return}if(!window.confirm('Remove the zero-value placeholder products? Reward records, Fetch and history will remain.'))return;setItems([]);setComplete('COMPLETE');setBasis('BEFORE_PAYMENT_FUNDING')}setReceiptKind(kind)}}><option value="PURCHASE">Purchase</option><option value="REWARD_ADJUSTMENT">Reward Credit / Adjustment — No Purchase</option></select></label>
+      <div className="receipt-fields-row">{field('Store', retailer, setRetailer, true)}{field('Receipt number', number, setNumber)}</div>{field('Store / Address Reference (Optional)',storeReference,setStoreReference)}<div className="receipt-fields-row receipt-fields-three">{field('Purchase date', day, setDay, false, 'date')}{field('Printed time', time, setTime)}
         <label>Purchase channel<select value={channel} onChange={e => setChannel(e.target.value)}>{['IN_STORE','ONLINE','UNKNOWN'].map(v => <option key={v}>{v}</option>)}</select></label></div><div className="receipt-fields-row">
         <label>Printed-total basis<select value={basis} onChange={e => setBasis(e.target.value as typeof basis)}>{[['UNKNOWN','Unknown'],['BEFORE_PAYMENT_FUNDING','Before funding'],['AFTER_REWARD_REDEMPTIONS','After reward use']].map(([v,text]) => <option key={v} value={v}>{text}</option>)}</select></label>
-        <label>Have you entered all payments shown on this receipt?<select value={complete} onChange={e => setComplete(e.target.value as typeof complete)}>{[['UNKNOWN','Not sure'],['PARTIAL','Not finished'],['COMPLETE','Yes']].map(([v,text]) => <option key={v} value={v}>{text}</option>)}</select></label>
+
       </div><div className="receipt-fields-row">{field('Sales tax', tax, setTax, true)}{field('Receipt total', total, setTotal, true)}
       </div>
       <h4>Products</h4>{items.map((item, i) => <div className="receipt-input-row" key={item.lineItemId}><div className="receipt-fields-row receipt-product-identity">

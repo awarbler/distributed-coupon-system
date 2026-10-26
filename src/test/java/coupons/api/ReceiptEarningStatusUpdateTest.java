@@ -37,4 +37,23 @@ class ReceiptEarningStatusUpdateTest {
         var cash=expected(EarningKind.THIRD_PARTY_REBATE,BenefitKind.CASH);
         assertThrows(IllegalArgumentException.class,()->ReceiptEarningStatusUpdate.apply(cash,RebateStatus.PAID,"25","USD",true,null));
     }
+    @Test void correctsAmountsWithoutChangingStatusIdentityOrOriginalExpectedValue() {
+        var original=expected(EarningKind.THIRD_PARTY_REBATE,BenefitKind.POINTS);
+        var received=ReceiptEarningStatusUpdate.apply(original,RebateStatus.CREDITED,"25","points",true,null);
+        var corrected=ReceiptEarningStatusUpdate.correctAmount(received,"50","points");
+        assertEquals(received.earningId(),corrected.earningId());assertEquals(received.status(),corrected.status());assertSame(original.expected(),corrected.expected());assertEquals(new BigDecimal("50"),corrected.confirmed().amount());
+        assertEquals(0,new BigDecimal("0.05").compareTo(corrected.valuation().amount()));
+        assertThrows(IllegalArgumentException.class,()->ReceiptEarningStatusUpdate.correctAmount(received,"0","points"));
+        assertThrows(IllegalArgumentException.class,()->ReceiptEarningStatusUpdate.correctAmount(received,"50","USD"));
+        assertEquals(new BigDecimal("50"),ReceiptEarningStatusUpdate.correctAmount(original,"50","points").expected().amount());
+    }
+    @Test void followUpDoesNotChangeFinancialStatusOrAmounts() {
+        var original=expected(EarningKind.THIRD_PARTY_REBATE,BenefitKind.POINTS);
+        var updated=ReceiptEarningStatusUpdate.followUp(original,"FOLLOW_UP","2026-10-26","claim-1","2026-11-01","Check provider");
+        assertEquals(original.earningId(),updated.earningId());assertSame(original.expected(),updated.expected());assertSame(original.confirmed(),updated.confirmed());assertEquals(original.status(),updated.status());assertSame(original.valuation(),updated.valuation());
+        assertEquals(java.time.LocalDate.of(2026,11,1),updated.details().followUpOn());
+        var received=ReceiptEarningStatusUpdate.apply(updated,RebateStatus.CREDITED,"25","points",true,null);
+        assertEquals(updated.details(),received.details());
+        assertThrows(IllegalArgumentException.class,()->ReceiptEarningStatusUpdate.followUp(original,"CREDITED",null,null,null,null));
+    }
 }

@@ -34,4 +34,15 @@ class ShoppingPlanAndCouponTest {
                 "Walgreens", null, coupon, CouponStatus.APPLIED,
                 LocalDate.of(2026, 10, 19), 1));
     }
+    @Test void estimatesMemberRewardsOnlyForWalgreensWithoutChangingCheckout() {
+        var a=new ShoppingPlan.Line(UUID.randomUUID(),"National Brand","1",new BigDecimal("10"),null,1);
+        var b=new ShoppingPlan.Line(UUID.randomUUID(),"WALG Vitamins","2",new BigDecimal("10"),null,1);
+        var excluded=new ShoppingPlan.Line(UUID.randomUUID(),"Excluded","3",new BigDecimal("10"),null,1,0);
+        var scenario=new ShoppingPlan.Scenario(List.of(a,b,excluded),List.of(),List.of(),new BigDecimal("2"),new BigDecimal("3"),BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");
+        var w=scenario.estimate("Walgreens");var other=scenario.estimate("CVS");
+        assertEquals(new BigDecimal("0.54"),w.get("memberRewardEstimate"));assertEquals(BigDecimal.ZERO,other.get("memberRewardEstimate"));
+        assertEquals(w.get("calculatedOop"),other.get("calculatedOop"));assertEquals(new BigDecimal("29"),w.get("calculatedOop"));
+        assertEquals(new BigDecimal("28.46"),w.get("afterPotentialRewards"));
+        assertThrows(IllegalArgumentException.class,()->new ShoppingPlan.Line(UUID.randomUUID(),"Bad",null,BigDecimal.ONE,null,1,2));
+    }
 }

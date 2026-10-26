@@ -60,7 +60,7 @@ describe('workspace UI', () => {
   it('requires a connection and presents no demo values', () => { render(<App />); expect(screen.getByRole('heading', { name: 'Welcome to your workspace' })).toBeInTheDocument(); expect(screen.queryByText('Total saved')).not.toBeInTheDocument() })
   it('renders every grocery screen and approval limitations', async () => {
     const { user } = await connect()
-    for (const [link, heading] of [['Receipts', 'Your receipts'], ['Shopping plans', 'Shopping plans'], ['Coupons', 'Coupons'], ['Deals & promotions', 'Deals & promotions'], ['Rewards & Accounts', 'Rewards & Accounts'], ['Inventory', 'Household inventory'], ['Rebates', 'Rebates']]) { await user.click(screen.getByRole('link', { name: link })); expect(
+    for (const [link, heading] of [['Receipts', 'Your receipts'], ['Shopping plans', 'Shopping plans'], ['Coupons', 'Coupons'], ['Deals & promotions', 'Deals & promotions'], ['Rewards & Accounts', 'Rewards & Accounts'], ['Inventory', 'Household inventory'], ['Rebates', 'Rebate Submission & Follow-Up']]) { await user.click(screen.getByRole('link', { name: link })); expect(
   screen.getByRole('heading', { name: heading, level: 1 })
 ).toBeInTheDocument() }
     await user.click(screen.getByRole('link', { name: 'Inventory' })); expect(screen.getByRole('button', { name: 'Import / sync receipts' })).toBeInTheDocument()
@@ -127,8 +127,10 @@ describe('potential promotion progress', () => {
 it('independently collapses and expands dashboard sections',async()=>{
  const user=userEvent.setup()
  render(<WorkspacePages data={workspace()} page="dashboard" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
- const buttons=screen.getAllByRole('button',{name:'Collapse'})
- expect(buttons).toHaveLength(3)
+ const buttons=screen.getAllByRole('button',{name:/^Collapse /})
+ expect(screen.queryByRole('button',{name:'Collapse'})).not.toBeInTheDocument()
+ for(const button of buttons)expect(button.closest('h2')).not.toBeNull()
+ expect(buttons).toHaveLength(new Date().toLocaleDateString('en-US',{timeZone:'America/Chicago',weekday:'long'})==='Sunday'?4:3)
  for(const button of buttons){
   const body=document.getElementById(button.getAttribute('aria-controls')!)!
   await user.click(button);expect(body).not.toBeVisible();expect(button).toHaveAttribute('aria-expanded','false')
@@ -143,4 +145,12 @@ it('deletes unused catalog entries using their current revisions',async()=>{
  await user.click(screen.getByRole('button',{name:'Delete coupon'}))
  expect(mutate).toHaveBeenCalledWith('/clipped-coupons/coupon-test','DELETE',{},expect.any(String),'3')
  expect(changed).toHaveBeenCalled();confirm.mockRestore()
+})
+
+it('shows the available total across all accounts without changing the four-account preview',()=>{
+ const data=workspace();data.rewardsOverview={asOf:data.asOf,available:'459.03',expected:'4',total:'463.03',knownAvailable:'459.03',knownExpected:'4',expectedCount:'1',missingBalances:[],missingValuations:[]}
+ render(<WorkspacePages data={data} page="dashboard" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ const total=screen.getByText('Total Available — All Accounts').parentElement!
+ expect(within(total).getByText('$459.03')).toBeInTheDocument();expect(within(total).queryByText('$463.03')).not.toBeInTheDocument()
+ expect(document.querySelectorAll('#dashboard-accounts .account-preview')).toHaveLength(Math.min(4,data.balances.length))
 })

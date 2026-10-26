@@ -52,12 +52,12 @@ class ReceiptInputTest {
         for(var invalid:List.of(".","-.98","1..2")) assertThrows(IllegalArgumentException.class,()->ReceiptInput.decimal(Map.of("amount",invalid),"amount",false));
     }
     @Test void pgPointsAutomaticallyUseWorksheetRateForProviderAliases() {
-        for(var provider:List.of("P&G Brand","P&G Good Everyday","PG")) {
+        for(var provider:List.of("P&G Brand","P&G Good Everyday","PG","P&G brandSAVER")) {
             var input=new LinkedHashMap<String,Object>(); input.put("earningId",UUID.randomUUID().toString());
             input.put("kind","THIRD_PARTY_REBATE"); input.put("provider",provider); input.put("form","POINTS");
             input.put("amount","100"); input.put("status","CREDITED"); input.put("confirmedAmount","100"); input.put("unit","points"); input.put("confirmAmountAndUnit",true);
             var earning=EarningInput.read(input);
-            assertEquals(0,earning.valuation().amount().compareTo(new BigDecimal("0.40")));
+            assertEquals(0,earning.valuation().amount().compareTo(new BigDecimal("100").divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128)));
             assertEquals(0,earning.confirmed().amount().compareTo(new BigDecimal("100")));
         }
     }
@@ -201,9 +201,9 @@ class ReceiptInputTest {
 class PrintedFooterTest {
     @Test void preservesUnknownAndZeroWithoutCreatingMoney() {
         var old=ReceiptObservations.empty();
-        var f=new LinkedHashMap<String,Object>();f.put("status","PRINTED");f.put("wcUsed","0");f.put("wcEarned",null);f.put("totalSavings","12.34");f.put("manufacturerCouponSavings","4.00");f.put("storeCouponSavings","2.00");
+        var f=new LinkedHashMap<String,Object>();f.put("status","PRINTED");f.put("wcAvailable","287.05");f.put("wcUsed","0");f.put("wcEarned",null);f.put("totalSavings","12.34");f.put("manufacturerCouponSavings","4.00");f.put("storeCouponSavings","2.00");
         var result=PrintedFooter.read(Map.of("printedFooter",f),old);
-        assertEquals(BigDecimal.ZERO,result.walgreensCash().used());assertNull(result.walgreensCash().earned());
+        assertEquals(new BigDecimal("287.05"),result.walgreensCash().availableBalance());assertNull(result.walgreensCash().endingBalance());assertEquals(BigDecimal.ZERO,result.walgreensCash().used());assertNull(result.walgreensCash().earned());
         assertEquals(3,result.savings().size()); assertTrue(result.earnings().isEmpty());assertTrue(result.unidentifiedRR().isEmpty());
         assertEquals(ReceiptObservations.FooterStatus.PRINTED,result.footerStatus());
         var edited=PrintedFooter.read(Map.of("printedFooter",Map.of("totalSavings","13")),result);
@@ -295,4 +295,40 @@ class ReceiptCorrectionTest {
         assertTrue(error.getMessage().contains("greater than zero"));
         assertTrue(ReceiptCorrection.read(old,Map.of("reason","Remove payment","payments",List.of())).transaction().getObservations().worksheet().uses().isEmpty());
     }
+
+    @Test void importedPaperDeductionIsCountedOnceAndRrLabelsStayUnclassified() {
+        var text="Walgreens\n10/08/2026 9:34 AM\nBUY 1 GET 1 50% OFF\nAQUAPHOR BALM\n07214003127 A 6.74\nREGULAR PRICE 13.49\nMYWALGREENS SAVINGS 6.75\nRETURN VALUE 8.24\nNIVEA LOTION\n07214002421 A 14.49\nRETURN VALUE 0.00\nMFG CPN -10.00\nMFG CPN -4.00\nMFG ECPN -2.00\nMFG ECPN -2.00\nSUBTOTAL 3.23\nSALES TAX A=8.25% 0.27\nTOTAL 3.50\nVISA ACCT 0254 3.50\nMYWALGREENS SAVINGS 6.75\nMFG COUPON SAVINGS 18.00\nRFN# 0476-1231-0521-2610-0803\nTOTAL SAVINGS 24.75\nSAVINGS VALUE 88%\nOPENING BALANCE 274.95\nEARNED THIS VISIT 12.10\nCLOSING BALANCE 287.05";
+        var result=ReceiptImport.parse("paper",text,false);
+        assertEquals("3.50",result.get("reported"));assertEquals("2026-10-08",result.get("day"));
+        assertEquals("0476-1231-0521-2610-0803",ReceiptImport.parse("ocr",text.replace("RFN#","REN#").replace("2610-0803","26 10-0803"),true).get("number"));
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");assertEquals(2,items.size());assertEquals("13.49",items.getFirst().get("regular"));assertEquals("",items.getFirst().get("sale"));assertEquals("",items.get(1).get("regular"));
+        @SuppressWarnings("unchecked") var ds=(List<Map<String,String>>)result.get("deductions");assertEquals(5,ds.size());assertEquals(2,ds.stream().filter(d->d.get("kind").equals("UNCLASSIFIED")).count());assertEquals(1,ds.stream().filter(d->d.get("kind").equals("SALE_PROMOTION")).count());
+    }
+    @Test void walgreensRxIdentifiersAndExplicitPricesImportWithoutProductUpcGuessing() {
+        var result=ReceiptImport.parse("rx","Walgreens\n10/25/2026 4:23 PM\nFSA-RX 1509950 15.00\nFSA RX 1502600 45,00\nTOTAL 60.00\nVISA ACCT 0254 60.00\nRFN# 1151-3418-6519-2610-2503",false);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");assertEquals(2,items.size());assertEquals("[FSA/HSA] RX",items.getFirst().get("description"));assertEquals("1509950",items.getFirst().get("sku"));assertEquals("15.00",items.getFirst().get("regular"));assertEquals("45.00",items.get(1).get("regular"));
+    }
+    @Test void suppliedWebsitePdfExtractsAnEditableDraftWithoutWrites()throws Exception {
+        var path=java.nio.file.Path.of("/Users/anitawoodford/Downloads/nivea and aquaphor.pdf");org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.exists(path));
+        var result=ReceiptImport.extract("website","application/pdf",java.nio.file.Files.readAllBytes(path));
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        assertEquals(2,items.size(),result.toString());assertEquals("3.50",result.get("reported"));assertEquals("0476-1231-0521-2610-0803",result.get("number"));
+        assertTrue(items.stream().allMatch(i->i.get("regular").isBlank()));
+        assertTrue(items.stream().allMatch(i->!i.get("sale").isBlank()),items.toString());
+        assertEquals("14.49",items.getFirst().get("sale"));assertEquals("6.74",items.get(1).get("sale"));
+    }
+    @Test void correctsRewardAdjustmentTimeWithoutInventingProductsOrChangingRewards() {
+        var fields=ReceiptInputTest.draft(UUID.randomUUID());
+        fields.remove("rrUsed");fields.remove("rrUsageId");
+        fields.put("receiptKind","REWARD_ADJUSTMENT");fields.put("items",List.of());fields.put("discounts",List.of());fields.put("payments",List.of());fields.put("tax","0");fields.put("reportedTotal","0");
+        fields.put("earnings",List.of(Map.of("earningId",UUID.randomUUID(),"kind","WALGREENS_CASH","provider","Walgreens","form","STORE_REWARD","amount","5","status","CREDITED","confirmedAmount","5","unit","USD","confirmAmountAndUnit",true)));
+        var input=ReceiptInput.read(Json.parseObject(Json.object(fields)));var original=input.record();
+        var correction=ReceiptCorrection.read(original,Map.of("reason","Correct printed time","printedTime","16:35","items",List.of()));
+        assertEquals(java.time.LocalTime.of(16,35),correction.metadata().purchasedAt().toLocalTime());
+        assertEquals(ReceiptMeta.ReceiptKind.REWARD_ADJUSTMENT,correction.metadata().receiptKind());
+        assertTrue(correction.transaction().getPurchaseItems().isEmpty());
+        assertEquals(original.transaction().getObservations().earnings(),correction.transaction().getObservations().earnings());
+        assertThrows(ReceiptCorrection.InvalidFields.class,()->ReceiptCorrection.read(original,Map.of("reason","Invalid purchase conversion","receiptKind","PURCHASE","items",List.of())));
+    }
+
 }

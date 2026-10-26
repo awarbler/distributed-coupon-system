@@ -35,6 +35,15 @@ public final class PostgresReceiptSupplementRepository {
             PostgresReceiptState.execute(c,"INSERT INTO register_rewards(reward_id,earned_receipt_id,payload) VALUES (?,?,?)",reward.getRewardId(),null,serialize(reward));return null;
         });
     }
+    public void correctStandaloneAmount(UUID id,java.math.BigDecimal expected,java.math.BigDecimal amount) {
+        if(amount.signum()<=0)throw new IllegalArgumentException("Enter a positive reward amount.");
+        transaction(connections,c->{PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);var old=state.rewards().get(id);
+            if(old==null)throw new NoSuchElementException();
+            if(old.getEarnedReceiptId()!=null||state.rrUsageLinks().containsKey(id)||state.redemptions().values().stream().anyMatch(r->r.getRewardId().equals(id)))throw new IllegalArgumentException("Unmatch or review the used reward before correcting its denomination.");
+            if(old.getFaceValue().compareTo(expected)!=0)throw new ConcurrentModificationException("Reward amount changed; refresh first.");
+            var updated=new coupons.RegisterReward(id,old.getSourceDescription(),amount,old.getEarnedDate(),old.getExpirationDate(),null);
+            PostgresReceiptState.execute(c,"UPDATE register_rewards SET payload=? WHERE reward_id=?",serialize(updated),id);return null;});
+    }
     public RRUsageLink addStandaloneMatch(UUID receipt,long revision,UUID use,UUID reward,String description,java.time.LocalDate earned,java.time.LocalDate expires,String reason,String actor) {
         return transaction(connections,c->{
             PostgresReceiptState.lock(c);

@@ -112,11 +112,11 @@ class SavingsReportTest {
         var fetch=earning(EarningKind.THIRD_PARTY_REBATE,"Fetch","25",BenefitKind.POINTS,RebateStatus.CREDITED,null);
         var r=receipt("Auto","10","0","2","2","0","0","0","0",List.of(pg,fetch),DAY);
         var totals=SavingsReport.calculate(List.of(r));
-        assertTrue(totals.earningsKnown()); assertEquals(0,totals.newlyEarned().compareTo(n("0.425")));
-        assertEquals(0,totals.paidAfterRebates().compareTo(n("1.575")));
+        assertTrue(totals.earningsKnown()); assertEquals(0,totals.newlyEarned().compareTo(new BigDecimal("100").divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128).add(n("0.025"))));
+        assertEquals(0,totals.paidAfterRebates().compareTo(n("2").subtract(totals.newlyEarned())));
         assertNull(pg.valuation()); assertNull(fetch.valuation());
         var explicit=earning(EarningKind.THIRD_PARTY_REBATE,"P&G Brand","100",BenefitKind.POINTS,RebateStatus.CREDITED,n("0.60"));
-        assertEquals(n("0.60"),SavingsReport.effectiveValuation(explicit).amount());
+        assertEquals(new BigDecimal("100").divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128),SavingsReport.effectiveValuation(explicit).amount());
     }
     @Test void dateRangesIncludeEndpointsAndExcludeDeletedLatestRevisions() {
         var first = first(); var second = second();

@@ -239,7 +239,8 @@ class InMemoryTransactionRepositoryTest {
         var candidates = repo.findPossibleDuplicates(new ReceiptMeta("Store", "001", null, "A"));
         assertEquals(List.of(first), candidates.stream().map(ReceiptRecord::transactionId).toList());
         assertTrue(repo.findPossibleDuplicates(new ReceiptMeta("store", "001", null, null)).isEmpty());
-        assertEquals(2, repo.findPossibleDuplicates(new ReceiptMeta("Store", null, time, null)).size());
+        assertTrue(repo.findPossibleDuplicates(new ReceiptMeta("Store", null, time, null)).isEmpty());
+        assertTrue(repo.findPossibleDuplicates(new ReceiptMeta("Store", "002", time, "A")).isEmpty());
         assertThrows(UnsupportedOperationException.class, candidates::clear);
         assertThrows(IllegalArgumentException.class, () -> repo.findPossibleDuplicates(new ReceiptMeta("Store", null, null, null)));
         assertThrows(NullPointerException.class, () -> repo.findById(null));

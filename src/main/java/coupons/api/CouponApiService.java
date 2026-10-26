@@ -45,9 +45,11 @@ import static coupons.api.Json.optional;
 import static coupons.api.Json.required;
 import coupons.repository.ClippedCouponRepository;
 import coupons.repository.PostgresPlatformRepository;
+import coupons.repository.ProviderRedemption;
 import coupons.repository.ReceiptChangeContext;
 import coupons.repository.ReceiptCreateCtx;
 import coupons.repository.ReceiptRecord;
+import coupons.repository.ReceiptStatus;
 import coupons.repository.ReceiptSnapshot;
 import coupons.repository.ReceiptWriteRequest;
 import coupons.repository.ShoppingPlanRepository;
@@ -179,6 +181,18 @@ public final class CouponApiService implements HttpHandler {
                 return json(201, input.deal());
             });
         }
+        if(path.equals("/receipts/import-preview")) {
+            requireMethod(method,"POST");var input=Json.parseObject(body(e,15*1024*1024));known(input,"files");
+            var files=ReceiptInput.rows(input,"files",4);if(files.isEmpty())throw new ApiError(400,"Choose receipt files to import.");
+            var sources=new ArrayList<Map<String,Object>>();int total=0;
+            for(var file:files){known(file,"name","mediaType","contentBase64");var encoded=required(file,"contentBase64");if(encoded.length()>7*1024*1024)throw new ApiError(400,"Each import file must be at most 5 MiB.");var bytes=java.util.Base64.getDecoder().decode(encoded);total+=bytes.length;if(total>10*1024*1024)throw new ApiError(400,"Import at most 10 MiB total.");try{sources.add(ReceiptImport.extract(required(file,"name"),required(file,"mediaType"),bytes));}catch(ApiError error){throw error;}catch(Exception error){throw new ApiError(400,"Receipt extraction failed. Try a clearer PDF or image.");}}
+            var numbers=sources.stream().map(v->v.get("number").toString().replaceAll("[^0-9]","")).filter(v->!v.isBlank()).distinct().toList();
+            if(numbers.size()>1)throw new ApiError(400,"These files contain different RFNs. Import one purchase at a time.");
+            if(sources.size()>1&&sources.stream().filter(v->!((List<?>)v.get("items")).isEmpty()).count()==1){String combined=sources.stream().map(v->v.get("rawText").toString()).collect(java.util.stream.Collectors.joining("\n"));sources.addFirst(ReceiptImport.parse("Combined Receipt Pages",combined,sources.stream().anyMatch(v->Boolean.TRUE.equals(v.get("scanned")))));}
+            var duplicates=new ArrayList<Map<String,Object>>();
+            for(var source:sources){String number=source.get("number").toString();if(!number.isBlank())for(var receipt:receipts.findImportDuplicates(new coupons.repository.ReceiptMeta(source.get("store").toString(),number,null,null)))if(duplicates.stream().noneMatch(v->v.get("transactionId").equals(receipt.transactionId())))duplicates.add(fields("transactionId",receipt.transactionId(),"receiptNumber",receipt.metadata().receiptNumber(),"status",receipt.status()));}
+            return json(200,fields("sources",sources,"duplicates",duplicates));
+        }
         if (path.equals("/receipts/preview")) {
             requireMethod(method, "POST");
             var input = receiptInput(body(e, 16 * 1024 * 1024));
@@ -221,16 +235,48 @@ public final class CouponApiService implements HttpHandler {
             if(provider==null || provider.isBlank() || from==null || to==null) throw new ApiError(400,"Select an account and date range.");
             return json(200,platform.account(provider,LocalDate.parse(from),LocalDate.parse(to)));
         }
+        if(path.equals("/accounts/payouts")) {
+            requireMethod(method,"POST");requirePlatform();return write(e,principal,request->{var f=Json.parseObject(request);known(f,"payoutId","provider","date","description","points","amount","destination","brand","number","status");
+                String provider=ProviderBalanceSummary.accountName(required(f,"provider"));if(!ProviderBalanceSummary.supportsAccount(provider))throw new ApiError(400,"Choose a supported reward account.");
+                var points=ReceiptInput.decimal(f,"points",true);var amount=ReceiptInput.decimal(f,"amount",true);
+                if(amount==null&&points!=null){if(provider.equals("Fetch"))amount=points.movePointLeft(3);else if(provider.equals("P&G Brand"))amount=points.divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128);}
+                if(amount==null||amount.signum()<=0||points!=null&&points.signum()<=0)throw new ApiError(400,"Enter a positive payout amount, or points with a known dollar conversion.");
+                if(points!=null&&!Set.of("Fetch","P&G Brand","Swagbucks","MyPoints","Merryfield").contains(provider))throw new ApiError(400,"This account does not use points.");
+                String destination=optional(f,"destination");if(destination==null)destination="CASH";if(!Set.of("CASH","GIFT_CARD","CREDIT_CARD").contains(destination))throw new ApiError(400,"Choose Cash, Gift Card or Credit Card.");
+                String brand=optional(f,"brand"),number=optional(f,"number"),description=optional(f,"description");
+                if(brand!=null&&brand.length()>120||number!=null&&number.length()>100||description!=null&&description.length()>1000)throw new ApiError(400,"Payout details are too long.");
+                if(destination.equals("CREDIT_CARD")&&number!=null&&!number.matches("[0-9]{1,4}"))throw new ApiError(400,"Record only the last four credit-card digits.");
+                var day=optional(f,"date")==null?LocalDate.now(java.time.ZoneId.of("America/Chicago")):LocalDate.parse(optional(f,"date"));var status=optional(f,"status")==null?ProviderRedemption.Status.REQUESTED:ProviderRedemption.Status.valueOf(optional(f,"status"));if(status==ProviderRedemption.Status.CANCELLED)throw new ApiError(400,"Record a request before cancelling it.");
+                UUID id=ReceiptInput.uuid(f,"payoutId");String details=java.util.Objects.toString(description,"")+(brand==null?"":" | Brand: "+brand)+(number==null?"":" | Number: "+number);
+                var value=new ProviderRedemption(id,provider,day,null,points,amount,destination.equals("CASH")?ProviderRedemption.Destination.CASH:destination.equals("GIFT_CARD")?ProviderRedemption.Destination.GIFT_CARD:ProviderRedemption.Destination.OTHER,destination.equals("CASH")?"Cash":destination.equals("GIFT_CARD")?"Gift Cards":"Credit Card",amount,status,status==ProviderRedemption.Status.RECEIVED?day:null,null,List.of(),id.toString(),details);
+                platform.savePayout(value);return json(201,fields("saved",true,"payoutId",id));});
+        }
+        if(parts.length==4&&parts[1].equals("accounts")&&parts[2].equals("payouts")) {
+            requirePlatform();UUID id=UUID.fromString(parts[3]);if(method.equals("GET"))return json(200,platform.payout(id));requireMethod(method,"PUT");return write(e,principal,request->{var f=Json.parseObject(request);known(f,"status","date");platform.finishPayout(id,revision(e),ProviderRedemption.Status.valueOf(required(f,"status")),LocalDate.parse(required(f,"date")));return json(200,fields("saved",true));});
+        }
+        if(parts.length==4&&parts[1].equals("accounts")&&parts[2].equals("member-rewards")) {
+            requirePlatform();UUID id=UUID.fromString(parts[3]);if(method.equals("GET"))return json(200,platform.memberReward(id));
+            if(!method.equals("PUT")&&!method.equals("DELETE"))throw new ApiError(405,"Use PUT or DELETE.");
+            return write(e,principal,request->{var f=Json.parseObject(request);known(f,"amount","expectedAmount","points","expectedPoints","correctionId");var state=platform.memberReward(id);var pts=ReceiptInput.decimal(f,"points",true);var amount=ReceiptInput.decimal(f,"amount",method.equals("DELETE"));
+                if(method.equals("DELETE")){amount=BigDecimal.ZERO;pts=state.get("points")==null?null:BigDecimal.ZERO;}
+                else if(pts!=null){String name=(String)state.get("provider");if(name.equals("Fetch"))amount=pts.movePointLeft(3);else if(name.equals("P&G Brand"))amount=pts.divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128);}
+                platform.correctMemberAmount(id,ReceiptInput.uuid(f,"correctionId"),ReceiptInput.decimal(f,"expectedAmount",false),amount,ReceiptInput.decimal(f,"expectedPoints",true),pts,principal);return json(200,fields("saved",true));});
+        }
+        if(parts.length==4&&parts[1].equals("rewards")&&parts[2].equals("register-rewards")) {
+            requirePlatform();if(method.equals("DELETE"))return write(e,principal,request->{known(Json.parseObject(request));platform.deleteStandaloneReward(UUID.fromString(parts[3]),principal);return json(200,fields("deleted",true));});
+            requireMethod(method,"PUT");return write(e,principal,request->{var f=Json.parseObject(request);known(f,"amount","expectedAmount");platform.correctStandaloneAmount(UUID.fromString(parts[3]),ReceiptInput.decimal(f,"expectedAmount",false),ReceiptInput.decimal(f,"amount",false));return json(200,fields("saved",true));});
+        }
         if(path.equals("/accounts/member-rewards")) {
-            requireMethod(method,"POST");requirePlatform();
-            return write(e,principal,request->{
-                var f=Json.parseObject(request);known(f,"eventId","provider","date","amount","description","expirationDate");
-                String provider=ProviderBalanceSummary.accountName(required(f,"provider"));
-                if(!Set.of("Walgreens Cash","Register Rewards","ECB","Walmart Cash").contains(provider))throw new ApiError(400,"Select a supported member reward account.");
-                var amount=ReceiptInput.decimal(f,"amount",false);if(amount.signum()<=0)throw new ApiError(400,"Enter an amount greater than zero.");
-                var value=new coupons.repository.AccountAdjustment(ReceiptInput.uuid(f,"eventId"),LocalDate.parse(required(f,"date")),provider,null,amount,"Member reward: "+required(f,"description"),principal,java.time.Instant.now(),optional(f,"expirationDate")==null?null:LocalDate.parse(optional(f,"expirationDate")));
-                platform.saveMemberReward(value);return json(201,value);
-            });
+            requireMethod(method,"POST");requirePlatform();return write(e,principal,request->{
+                var f=Json.parseObject(request);known(f,"eventId","provider","date","time","amount","points","description","expirationDate");String provider=ProviderBalanceSummary.accountName(required(f,"provider"));
+                if(!ProviderBalanceSummary.supportsAccount(provider))throw new ApiError(400,"Select a supported reward account.");
+                var amount=ReceiptInput.decimal(f,"amount",true);var pts=ReceiptInput.decimal(f,"points",true);
+                boolean pointProgram=Set.of("Fetch","P&G Brand","Swagbucks","MyPoints","Merryfield").contains(provider);
+                if(pts!=null&&!pointProgram)throw new ApiError(400,"This account does not use points.");
+                if(pts!=null){if(pts.signum()<=0)throw new ApiError(400,"Enter positive points.");if(provider.equals("Fetch"))amount=pts.movePointLeft(3);else if(provider.equals("P&G Brand"))amount=pts.divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128);}
+                if(amount==null||amount.signum()<=0)throw new ApiError(400,"Enter a positive reward amount or a dollar valuation for these points.");
+                var value=new coupons.repository.AccountAdjustment(ReceiptInput.uuid(f,"eventId"),LocalDate.parse(required(f,"date")),provider,pts,amount,"Member reward: "+required(f,"description"),principal,java.time.Instant.now(),optional(f,"expirationDate")==null?null:LocalDate.parse(optional(f,"expirationDate")),optional(f,"time")==null?null:java.time.LocalTime.parse(optional(f,"time")));
+                platform.saveMemberReward(value);return json(201,value);});
         }
         if(path.equals("/accounts/openings")) {
             requireMethod(method,"POST"); requirePlatform();
@@ -354,6 +400,7 @@ public final class CouponApiService implements HttpHandler {
 
                 }
                 var addition = ReceiptEarningAddition.read(old, Json.parseObject(request));
+                validateCreditSources(receiptId,addition.transaction());
                 return json(201, addition.save(receipts, old, principal));
             });
         }
@@ -386,20 +433,20 @@ public final class CouponApiService implements HttpHandler {
                 var expiry=f.containsKey("expirationDate")?(optional(f,"expirationDate")==null?null:LocalDate.parse(optional(f,"expirationDate"))):previous.expirationDate();
                 if(expiry!=null && obs.purchaseDate()!=null && expiry.isBefore(obs.purchaseDate()))throw new ApiError(400,"Expiration must be on or after the purchase date.");
                 var detail = previous.details();
-                var nextDetails = new EarningDetails(f.containsKey("qualifyingQuantities")?ReceiptInput.quantities(f):detail==null?Map.of():detail.qualifyingQuantities(), detail == null ? null : detail.payoutDestination(), detail == null ? null : detail.submittedOn(), detail == null ? null : detail.submissionReference(), detail == null ? null : detail.confirmationReference());
+                var nextDetails = new EarningDetails(f.containsKey("qualifyingQuantities")?ReceiptInput.quantities(f):detail==null?Map.of():detail.qualifyingQuantities(), detail == null ? null : detail.payoutDestination(), detail == null ? null : detail.submittedOn(), detail == null ? null : detail.submissionReference(), detail == null ? null : detail.confirmationReference(),detail==null?null:detail.submissionStatus(),detail==null?null:detail.followUpOn(),detail==null?null:detail.followUpNote(),detail==null?null:detail.originalReceiptId(),detail==null?null:detail.originalEarningId());
                 earnings.set(index, new ReceiptObservations.Earning(previous.earningId(), previous.kind(), previous.provider(), previous.offerReference(), lines.isEmpty() ? ReceiptObservations.Scope.RECEIPT : lines.size() == 1 ? ReceiptObservations.Scope.ITEM : ReceiptObservations.Scope.MULTI_ITEM, lines, previous.expected(), previous.confirmed(), previous.status(), expiry, previous.instrumentId(), previous.claimId(), previous.evidenceIds(), previous.recordedLifecycle(), previous.requirement(), previous.valuation(), nextDetails));
                 tx.setObservations(new ReceiptObservations(obs.purchaseDate(), obs.printedTime(), earnings, obs.unidentifiedRR(), obs.walgreensCash(), obs.savings(), obs.discountKinds(), obs.receiptSavingValuePercent(), obs.promotionLinks(), obs.worksheet(), obs.footerStatus()));
                 var now = java.time.Instant.now();
                 return json(200, receipts.update(receiptId, old.revision(), tx, old.metadata(), List.of(), new ReceiptWriteRequest(UUID.randomUUID(), now), new ReceiptChangeContext(principal, "Updated earning product associations / expiration: " + earningId, principal, now)));
             });
         }
-        if (parts.length == 6 && parts[1].equals("receipts") && parts[3].equals("earnings") && parts[5].equals("status")) {
+        if (parts.length == 6 && parts[1].equals("receipts") && parts[3].equals("earnings") && (parts[5].equals("status")||parts[5].equals("amount")||parts[5].equals("delete")||parts[5].equals("follow-up")||parts[5].equals("source"))) {
             requireMethod(method, "PUT");
             UUID receiptId = UUID.fromString(parts[2]), earningId = UUID.fromString(parts[4]);
             return write(e, principal, request -> {
                 long expected = revision(e);
                 var f = Json.parseObject(request);
-                known(f, "status", "amount", "unit", "confirmAmountAndUnit", "rejectionReason");
+                if(parts[5].equals("source"))known(f,"originalReceiptId","originalEarningId");else if(parts[5].equals("follow-up"))known(f,"submissionStatus","submittedOn","submissionReference","followUpOn","followUpNote");else if(parts[5].equals("delete"))known(f);else if(parts[5].equals("amount"))known(f,"amount","unit");else known(f, "status", "amount", "unit", "confirmAmountAndUnit", "rejectionReason");
                 var receipt = receipts.findById(receiptId).orElseThrow();
                 if (receipt.revision() != expected) {
                     throw new ConcurrentModificationException("Receipt revision changed; refresh before editing.");
@@ -419,13 +466,18 @@ public final class CouponApiService implements HttpHandler {
                 if (f.containsKey("confirmAmountAndUnit") && !(f.get("confirmAmountAndUnit") instanceof Boolean)) {
                     throw new ApiError(400, "Amount confirmation must be a boolean.");
                 }
-                var status = RebateStatus.valueOf(required(f, "status"));
-                var updated = ReceiptEarningStatusUpdate.apply(earnings.get(index), status, optional(f, "amount"), optional(f, "unit"), Boolean.TRUE.equals(f.get("confirmAmountAndUnit")), optional(f, "rejectionReason"));
+                boolean deleting=parts[5].equals("delete"),correcting=parts[5].equals("amount");
+                boolean linking=parts[5].equals("source");
+                boolean tracking=parts[5].equals("follow-up");
+                var status = linking||tracking||correcting||deleting?earnings.get(index).status():RebateStatus.valueOf(required(f, "status"));
+                if((correcting||deleting)&&earnings.get(index).kind()==ReceiptObservations.EarningKind.REGISTER_REWARD&&platform!=null&&platform.earningMatched(earningId))throw new ApiError(409,"Unmatch this Register Reward before changing its amount; the used coupon must keep the same denomination.");
+                var updated = linking?ReceiptEarningStatusUpdate.source(earnings.get(index),optional(f,"originalReceiptId")==null?null:UUID.fromString(required(f,"originalReceiptId")),optional(f,"originalEarningId")==null?null:UUID.fromString(required(f,"originalEarningId"))):tracking?ReceiptEarningStatusUpdate.followUp(earnings.get(index),required(f,"submissionStatus"),optional(f,"submittedOn"),optional(f,"submissionReference"),optional(f,"followUpOn"),optional(f,"followUpNote")):deleting?ReceiptEarningStatusUpdate.remove(earnings.get(index)):correcting?ReceiptEarningStatusUpdate.correctAmount(earnings.get(index),required(f,"amount"),required(f,"unit")):ReceiptEarningStatusUpdate.apply(earnings.get(index), status, optional(f, "amount"), optional(f, "unit"), Boolean.TRUE.equals(f.get("confirmAmountAndUnit")), optional(f, "rejectionReason"));
                 earnings.set(index, updated);
                 tx.setObservations(new ReceiptObservations(obs.purchaseDate(), obs.printedTime(), earnings, obs.unidentifiedRR(), obs.walgreensCash(), obs.savings(), obs.discountKinds(), obs.receiptSavingValuePercent(), obs.promotionLinks(), obs.worksheet(), obs.footerStatus()));
+                validateCreditSources(receiptId,tx);
                 var now = java.time.Instant.now();
                 var result = receipts.update(receiptId, expected, tx, receipt.metadata(), List.of(), new ReceiptWriteRequest(UUID.randomUUID(), now),
-                        new ReceiptChangeContext(principal, "Owner-confirmed reward status: " + earningId + " -> " + status, principal, now));
+                        new ReceiptChangeContext(principal, (linking?"Linked manager reward credit source: ":tracking?"Updated rebate follow-up: ":deleting?"Owner-deleted reward: ":correcting?"Owner-corrected reward amount: ":"Owner-confirmed reward status: ") + earningId + " -> " + status, principal, now));
                 return json(200, result);
             });
         }
@@ -435,6 +487,7 @@ public final class CouponApiService implements HttpHandler {
             var old = receipts.findById(UUID.fromString(parts[2])).orElseThrow();
             if (old.revision() != revision(e)) throw new ApiError(409, "Receipt changed; refresh before editing.");
             var correction = ReceiptCorrection.read(old, Json.parseObject(body(e, MAX_BODY)));
+            validateCreditSources(old.transactionId(),correction.transaction());
             var candidate = new ReceiptRecord(old.transactionId(), old.status(), old.revision(), correction.transaction(), correction.metadata(), old.evidenceIds());
             return json(200, fields("reviewToken", correction.token(), "totals", PostgresPlatformRepository.totals(candidate)));
         }
@@ -455,6 +508,7 @@ public final class CouponApiService implements HttpHandler {
                 if (old.revision() != revision(e)) throw new ApiError(409,"Receipt changed; refresh before editing.");
                 var f = Json.parseObject(request);
                 var correction = ReceiptCorrection.read(old,f);
+                validateCreditSources(old.transactionId(),correction.transaction());
                 if (!correction.token().equals(optional(f,"reviewToken"))) throw new ApiError(409,"Review the updated totals before saving.");
                 if (new TransactionCalculator().reconcilePayments(correction.transaction(),correction.metadata()).acknowledgementRequired() && !Boolean.TRUE.equals(f.get("acknowledgeDifference")))
                     throw new ApiError(400,"Acknowledge the recorded difference before saving.");
@@ -474,7 +528,7 @@ public final class CouponApiService implements HttpHandler {
             e.getResponseHeaders().set("ETag", "\"" + r.revision() + "\"");
             return json(200, fields("transactionId", r.transactionId(), "revision", r.revision(),
                     "status", r.status(), "metadata", r.metadata(), "evidenceIds", r.evidenceIds(),
-                    "paymentRoles", r.transaction().getPayments().stream().collect(java.util.stream.Collectors.toMap(p->p.getPaymentId().toString(),p->new TransactionCalculator().paymentRole(r.transaction(),p))), "rrUses", platform == null ? List.of() : platform.rewardUses(r.transactionId()), "contents", ReceiptSnapshot.from(r.transaction()), "editDiscounts", ReceiptCorrection.editDiscounts(r), "preservePriceLineIds", r.transaction().getPurchaseItems().stream().filter(item -> item.getRegularUnitPrice() != null && item.getRegularUnitPrice().compareTo(item.getSaleUnitPrice()) < 0).map(PurchaseItem::getLineItemId).toList()));
+                    "creditSettlements", creditSettlements(r), "paymentRoles", r.transaction().getPayments().stream().collect(java.util.stream.Collectors.toMap(p->p.getPaymentId().toString(),p->new TransactionCalculator().paymentRole(r.transaction(),p))), "rrUses", platform == null ? List.of() : platform.rewardUses(r.transactionId()), "contents", ReceiptSnapshot.from(r.transaction()), "editDiscounts", ReceiptCorrection.editDiscounts(r), "preservePriceLineIds", r.transaction().getPurchaseItems().stream().filter(item -> item.getRegularUnitPrice() != null && item.getRegularUnitPrice().compareTo(item.getSaleUnitPrice()) < 0).map(PurchaseItem::getLineItemId).toList()));
         }
         if (parts.length == 4
                 && parts[1].equals("shopping-plans")
@@ -504,7 +558,7 @@ public final class CouponApiService implements HttpHandler {
             });
         }
         if(path.equals("/shopping-plans/scenario/preview")) {
-            requireMethod(method,"POST");var fields=Json.parseObject(body(e,1024*1024));known(fields,"scenario");return json(200,parseScenario(fields.get("scenario")).estimate());
+            requireMethod(method,"POST");var fields=Json.parseObject(body(e,1024*1024));known(fields,"scenario","retailer");return json(200,parseScenario(fields.get("scenario")).estimate(optional(fields,"retailer")));
         }
         if (path.equals("/shopping-plans")) {
             requireMethod(method, "POST");
@@ -653,7 +707,7 @@ public final class CouponApiService implements HttpHandler {
         if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Complete the planning scenario.");
         @SuppressWarnings("unchecked") var f=(Map<String,Object>)raw;
         known(f,"items","coupons","promotions","tax","walgreensCashUsed","registerRewardsUsed","giftCardUsed","manualOop","paymentMethod","fundingNotes","taxRate","payments");
-        var items=ReceiptInput.rows(f,"items",100).stream().map(r->{known(r,"id","name","sku","regular","sale","quantity");return new ShoppingPlan.Line(ReceiptInput.uuid(r,"id"),required(r,"name"),optional(r,"sku"),ReceiptInput.decimal(r,"regular",false),ReceiptInput.decimal(r,"sale",true),Math.toIntExact(number(r.get("quantity"))));}).toList();
+        var items=ReceiptInput.rows(f,"items",100).stream().map(r->{known(r,"id","name","sku","regular","sale","quantity","memberRewardRate");return new ShoppingPlan.Line(ReceiptInput.uuid(r,"id"),required(r,"name"),optional(r,"sku"),ReceiptInput.decimal(r,"regular",false),ReceiptInput.decimal(r,"sale",true),Math.toIntExact(number(r.get("quantity"))),r.get("memberRewardRate")==null?null:Math.toIntExact(number(r.get("memberRewardRate"))));}).toList();
         var coupons=ReceiptInput.rows(f,"coupons",100).stream().map(r->{known(r,"id","description","amount","requiredQuantity","lineIds","savedCouponId","kind","wholeReceipt");return new ShoppingPlan.ScenarioCoupon(ReceiptInput.uuid(r,"id"),required(r,"description"),ReceiptInput.decimal(r,"amount",false),Math.toIntExact(number(r.get("requiredQuantity"))),ReceiptInput.ids(r,"lineIds"),optional(r,"savedCouponId")==null?null:ReceiptInput.uuid(r,"savedCouponId"),optional(r,"kind"),r.containsKey("wholeReceipt")&&ReceiptInput.flag(r,"wholeReceipt"));}).toList();
         var promotions=ReceiptInput.rows(f,"promotions",100).stream().map(r->{known(r,"id","description","rewardType","rewardAmount","requiredQuantity","requiredSpend","spendBasis","allowsWalgreensCash","allowsWalmartCash","lineIds","wholeReceipt");return new ShoppingPlan.ScenarioPromotion(ReceiptInput.uuid(r,"id"),required(r,"description"),required(r,"rewardType"),ReceiptInput.decimal(r,"rewardAmount",false),Math.toIntExact(number(r.get("requiredQuantity"))),ReceiptInput.decimal(r,"requiredSpend",false),required(r,"spendBasis"),ReceiptInput.flag(r,"allowsWalgreensCash"),ReceiptInput.ids(r,"lineIds"),r.containsKey("wholeReceipt")&&ReceiptInput.flag(r,"wholeReceipt"),!r.containsKey("allowsWalmartCash")||ReceiptInput.flag(r,"allowsWalmartCash"));}).toList();
         return new ShoppingPlan.Scenario(items,coupons,promotions,ReceiptInput.decimal(f,"tax",false),ReceiptInput.decimal(f,"walgreensCashUsed",false),ReceiptInput.decimal(f,"registerRewardsUsed",false),ReceiptInput.decimal(f,"giftCardUsed",false),ReceiptInput.decimal(f,"manualOop",true),required(f,"paymentMethod"),optional(f,"fundingNotes"),ReceiptInput.decimal(f,"taxRate",true),!f.containsKey("payments")||f.get("payments")==null?null:ReceiptInput.rows(f,"payments",100).stream().map(r->{known(r,"id","type","amount","notes");return new ShoppingPlan.ScenarioPayment(ReceiptInput.uuid(r,"id"),required(r,"type"),ReceiptInput.decimal(r,"amount",false),optional(r,"notes"));}).toList());
@@ -677,17 +731,33 @@ public final class CouponApiService implements HttpHandler {
         return admin ? "api-owner" : adminToken == null ? "api-owner" : "api-reader";
     }
 
-    private static ReceiptInput receiptInput(String json) {
+    private ReceiptInput receiptInput(String json) {
         try {
-            return ReceiptInput.read(Json.parseObject(json));
+            var input=ReceiptInput.read(Json.parseObject(json));validateCreditSources(input.id(),input.transaction());return input;
         } catch (IllegalArgumentException ex) {
             throw new ApiError(400, ex.getMessage() == null ? "Invalid receipt fields." : ex.getMessage());
         }
     }
 
+    private List<Object> creditSettlements(ReceiptRecord original){var result=new ArrayList<Object>();for(var earning:original.transaction().getObservations().earnings()){var credits=new ArrayList<Object>();var total=BigDecimal.ZERO;for(var receipt:receipts.findRewardCredits(original.transactionId(),earning.earningId()))if(receipt.status()==ReceiptStatus.ACTIVE)for(var credit:receipt.transaction().getObservations().earnings()){var d=credit.details();if(d!=null&&original.transactionId().equals(d.originalReceiptId())&&earning.earningId().equals(d.originalEarningId())&&credit.status()==RebateStatus.CREDITED&&credit.confirmed()!=null){total=total.add(credit.confirmed().amount());credits.add(fields("receiptId",receipt.transactionId(),"receiptNumber",receipt.metadata()==null?null:receipt.metadata().receiptNumber(),"earningId",credit.earningId(),"amount",credit.confirmed().amount()));}}if(!credits.isEmpty())result.add(fields("earningId",earning.earningId(),"received",total,"expected",earning.expected()==null?null:earning.expected().amount(),"credits",credits));}return result;}
+
+    private void validateCreditSources(UUID receiptId,coupons.CouponTransaction tx){
+        for(var earning:tx.getObservations().earnings())if(earning.status()==RebateStatus.CREDITED&&receipts.findRewardCredits(receiptId,earning.earningId()).stream().anyMatch(r->r.status()==ReceiptStatus.ACTIVE&&r.transaction().getObservations().earnings().stream().anyMatch(e->e.status()==RebateStatus.CREDITED&&e.confirmed()!=null&&e.details()!=null&&receiptId.equals(e.details().originalReceiptId())&&earning.earningId().equals(e.details().originalEarningId()))))throw new ApiError(400,"This original reward already has received manager credits. Keep its original rejection/unpaid status to avoid counting the reward twice.");
+        var totals=new LinkedHashMap<String,BigDecimal>();
+        for(var credit:tx.getObservations().earnings()){var d=credit.details();if(d==null||d.originalReceiptId()==null||credit.status()==RebateStatus.REJECTED)continue;
+            if(receiptId.equals(d.originalReceiptId()))throw new ApiError(400,"A credit cannot point to its own receipt.");
+            var source=receipts.findById(d.originalReceiptId()).orElseThrow();if(source.status()!=ReceiptStatus.ACTIVE)throw new ApiError(400,"Choose an active original receipt.");var earning=source.transaction().getObservations().earnings().stream().filter(v->v.earningId().equals(d.originalEarningId())).findFirst().orElseThrow();
+            if(credit.kind()!=ReceiptObservations.EarningKind.WALGREENS_CASH||earning.kind()!=ReceiptObservations.EarningKind.WALGREENS_CASH||earning.status()==RebateStatus.CREDITED||earning.status()==RebateStatus.PAID||earning.expected()==null)throw new ApiError(400,"Choose an original unpaid or rejected Walgreens Cash reward. An already-credited reward must not be credited again.");
+            if(credit.status()!=RebateStatus.CREDITED||credit.confirmed()==null)throw new ApiError(400,"Link only a received manager credit; enter the amount actually received.");
+            String key=d.originalReceiptId()+":"+d.originalEarningId();var amount=totals.merge(key,credit.confirmed().amount(),BigDecimal::add);
+            var prior=receipts.findRewardCredits(d.originalReceiptId(),d.originalEarningId()).stream().filter(r->!r.transactionId().equals(receiptId)&&r.status()==ReceiptStatus.ACTIVE).flatMap(r->r.transaction().getObservations().earnings().stream()).filter(v->v.details()!=null&&d.originalReceiptId().equals(v.details().originalReceiptId())&&d.originalEarningId().equals(v.details().originalEarningId())&&v.status()==RebateStatus.CREDITED&&v.confirmed()!=null).map(v->v.confirmed().amount()).reduce(BigDecimal.ZERO,BigDecimal::add);
+            if(prior.add(amount).compareTo(earning.expected().amount())>0)throw new ApiError(400,"Linked credits exceed the original expected reward. Review existing credits instead of entering it twice.");
+        }
+    }
     private List<ReceiptRecord> possibleDuplicates(ReceiptInput input) {
         var m = input.metadata();
-        return m.receiptNumber() == null && m.purchasedAt() == null ? List.of() : receipts.findPossibleDuplicates(m);
+        if(m.receiptNumber()==null&&m.purchasedAt()==null)return List.of();
+        var matches=new ArrayList<>(receipts.findPossibleDuplicates(m));for(var receipt:receipts.findImportDuplicates(m))if(matches.stream().noneMatch(v->v.transactionId().equals(receipt.transactionId())))matches.add(receipt);return List.copyOf(matches);
     }
 
     private void requirePlatform() {
@@ -822,7 +892,7 @@ public final class CouponApiService implements HttpHandler {
         Response run(String request) throws IOException;
     }
 
-    private static final class ApiError extends RuntimeException {
+    static final class ApiError extends RuntimeException {
 
         final int status;
 

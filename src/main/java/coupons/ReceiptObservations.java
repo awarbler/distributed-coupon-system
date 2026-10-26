@@ -220,11 +220,13 @@ public record ReceiptObservations(LocalDate purchaseDate, String printedTime,
 
     /** Four independently printed observations; null means unknown, not zero. */
     public record WalgreensCashAccount(BigDecimal startingBalance, BigDecimal used,
-            BigDecimal earned, BigDecimal endingBalance) implements java.io.Serializable {
+            BigDecimal earned, BigDecimal endingBalance, BigDecimal availableBalance) implements java.io.Serializable {
+        public WalgreensCashAccount(BigDecimal start,BigDecimal used,BigDecimal earned,BigDecimal end){this(start,used,earned,end,null);}
         /** Retains printed balances and validates nonnegative activity. */
         public WalgreensCashAccount {
             nonnegative(used);
             nonnegative(earned);
+            nonnegative(availableBalance);
         }
 
         /** Calculates only when all contributing printed values are known. */

@@ -402,6 +402,10 @@ class ShoppingEstimateTest {
         var offer=new ShoppingPlan.ScenarioPromotion(java.util.UUID.randomUUID(),"Spend 30 get 5","REGISTER_REWARD",new java.math.BigDecimal("5"),2,new java.math.BigDecimal("30"),"BEFORE_COUPONS",true,java.util.List.of(),true);
         var scenario=new ShoppingPlan.Scenario(java.util.List.of(a,b),java.util.List.of(),java.util.List.of(offer),java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO,null,"CASH","");
         org.junit.jupiter.api.Assertions.assertEquals(0,new java.math.BigDecimal("5").compareTo((java.math.BigDecimal)scenario.estimate().get("potentialRewards")));
+        var result=scenario.estimate();money(result,"receiptLevelRewards","5");
+        @SuppressWarnings("unchecked") var lines=(List<Map<String,Object>>)result.get("items");
+        assertTrue(lines.stream().allMatch(row->((BigDecimal)row.get("possibleRewards")).signum()==0));
+
     }
 
     @org.junit.jupiter.api.Test void walmartCashCountsAsOtherRewardsNotCashRebates() {

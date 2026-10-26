@@ -50,7 +50,7 @@ class SpreadsheetBalancePersistenceTest {
             var balances=new ProviderBalanceSummary(repo);
             var fetch=balances.balance(DAY,"Fetch",records(repo));
             assertEquals(n("33.640"),fetch.endUsd()); assertEquals(n("33710"),fetch.endPoints());
-            assertEquals(n("8.34"),balances.balance(DAY,"P&G Brand",records(repo)).endUsd());
+            assertEquals(n("8.34"),balances.balance(DAY,"P&G Brand",records(repo)).endUsd().setScale(2,java.math.RoundingMode.HALF_UP));
             assertEquals(n("1250"),balances.balance(DAY,"P&G Brand",records(repo)).endPoints());
             assertEquals(n("33.640"),balances.balance(LocalDate.of(2026,11,1),"Fetch",records(repo)).monthUsd());
         }

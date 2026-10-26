@@ -34,6 +34,39 @@ class CouponApiServiceTest {
         b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));
         return client.send(b.build(),HttpResponse.BodyHandlers.ofString());
     }
+    @Test void splitManagerCreditsLinkToRejectedRewardWithoutDuplicatingItAndKeepFetch()throws Exception {
+        UUID originalId=UUID.randomUUID(),originalEarning=UUID.randomUUID();var originalFields=ReceiptInputTest.draft(originalId);
+        originalFields.put("receiptNumber","original-manager-test");originalFields.put("earnings",List.of(Map.of("earningId",originalEarning,"kind","WALGREENS_CASH","provider","Walgreens","form","STORE_REWARD","amount","15","status","REJECTED","rejectionReason","Manager override")));
+        var original=ReceiptInput.read(Json.parseObject(Json.object(originalFields)));receipts.save(originalId,original.transaction(),original.metadata(),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        var children=new ArrayList<UUID>();
+        for(String amount:List.of("10","5","1")){
+            UUID child=UUID.randomUUID();var f=new LinkedHashMap<String,Object>(ReceiptInputTest.draft(child));f.remove("rrUsed");f.remove("rrUsageId");f.put("receiptKind","REWARD_ADJUSTMENT");f.put("receiptNumber","manager-"+amount);f.put("printedTime","09:00");f.put("items",List.of());f.put("discounts",List.of());f.put("payments",List.of());f.put("tax","0");f.put("reportedTotal","0");f.put("printedTotalBasis","BEFORE_PAYMENT_FUNDING");f.put("paymentEntryStatus","COMPLETE");f.put("earnings",List.of(Map.ofEntries(Map.entry("earningId",UUID.randomUUID()),Map.entry("kind","WALGREENS_CASH"),Map.entry("provider","Walgreens"),Map.entry("form","STORE_REWARD"),Map.entry("amount",amount),Map.entry("status","CREDITED"),Map.entry("confirmedAmount",amount),Map.entry("unit","USD"),Map.entry("confirmAmountAndUnit",true),Map.entry("originalReceiptId",originalId),Map.entry("originalEarningId",originalEarning))));
+            var preview=call("POST","/receipts/preview","owner",Json.object(f),null,null);
+            if(amount.equals("1")){assertEquals(400,preview.statusCode(),preview.body());continue;}
+            assertEquals(200,preview.statusCode(),preview.body());f.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));f.put("acknowledgeDifference",true);
+            var save=call("POST","/receipts","owner",Json.object(f),"manager-"+amount,null);assertEquals(201,save.statusCode(),save.body());children.add(child);
+            var record=receipts.findById(child).orElseThrow();assertTrue(record.transaction().getPurchaseItems().isEmpty());assertEquals(ReceiptMeta.ReceiptKind.REWARD_ADJUSTMENT,record.metadata().receiptKind());assertEquals(1,record.transaction().getObservations().earnings().stream().filter(e->e.provider().equals("Fetch")).count());
+        }
+        var source=receipts.findById(originalId).orElseThrow();assertEquals(RebateStatus.REJECTED,source.transaction().getObservations().earnings().getFirst().status());assertEquals(2,receipts.findRewardCredits(originalId,originalEarning).size());
+        var detail=call("GET","/receipts/"+originalId,"owner",null,null,null);assertEquals(200,detail.statusCode());assertTrue(detail.body().contains("creditSettlements"));assertTrue(detail.body().contains("received\":15"));
+        var doubleCredit=call("PUT","/receipts/"+originalId+"/earnings/"+originalEarning+"/status","owner",Json.object(Map.of("status","CREDITED","amount","15","unit","USD","confirmAmountAndUnit",true)),"do-not-double-credit","1");assertEquals(400,doubleCredit.statusCode(),doubleCredit.body());
+    }
+
+    @Test void receiptPdfImportIsReadOnly()throws Exception {
+        var bytes=new java.io.ByteArrayOutputStream();
+        try(var pdf=new org.apache.pdfbox.pdmodel.PDDocument()) {
+            var page=new org.apache.pdfbox.pdmodel.PDPage();pdf.addPage(page);
+            try(var content=new org.apache.pdfbox.pdmodel.PDPageContentStream(pdf,page)){content.beginText();content.setFont(new org.apache.pdfbox.pdmodel.font.PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),12);content.setLeading(16);content.newLineAtOffset(40,740);for(var line:List.of("Walgreens","10/08/2026 9:34 AM","TEST LOTION","000123456789 A 4.00","REGULAR PRICE 5.00","MYWALGREENS SAVINGS 1.00","SUBTOTAL 4.00","SALES TAX 0.33","TOTAL 4.33","VISA 4.33","RFN# 0476-1231-0521-2610-0803")){content.showText(line);content.newLine();}content.endText();}pdf.save(bytes);
+        }
+        String body=Json.object(Map.of("files",List.of(Map.of("name","synthetic.pdf","mediaType","application/pdf","contentBase64",Base64.getEncoder().encodeToString(bytes.toByteArray())))));
+        assertEquals(403,call("POST","/receipts/import-preview","reader",body,null,null).statusCode());
+        var result=call("POST","/receipts/import-preview","owner",body,null,null);assertEquals(200,result.statusCode(),result.body());assertTrue(result.body().contains("4.33"));assertTrue(receipts.findPossibleDuplicates(new ReceiptMeta("Walgreens","0476-1231-0521-2610-0803",null,null)).isEmpty());
+        UUID existing=UUID.randomUUID();var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));tx.addPurchaseItem(new PurchaseItem("Synthetic",null,BigDecimal.ONE,BigDecimal.ONE,1));
+        receipts.save(existing,tx,new ReceiptMeta("walgreens","04761231052126100803",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        var duplicate=call("POST","/receipts/import-preview","owner",body,null,null);assertEquals(200,duplicate.statusCode());assertTrue(duplicate.body().contains(existing.toString()));assertEquals(1,receipts.history().findByReceiptId(existing).size());
+
+    }
+
     @Test void editsEcbExpirationWithoutChangingMoneyOrStatusAndCanClearIt() throws Exception {
         UUID id=UUID.randomUUID(),earningId=UUID.randomUUID();
         var earning=EarningInput.read(Map.of("earningId",earningId.toString(),"kind","THIRD_PARTY_REBATE","provider","ECB","form","STORE_REWARD","amount","10","status","CREDITED","confirmedAmount","10","unit","USD","confirmAmountAndUnit",true));
@@ -49,10 +82,42 @@ class CouponApiServiceTest {
         assertNull(receipts.findById(id).orElseThrow().transaction().getObservations().earnings().getFirst().expirationDate());
     }
 
+    @Test void savesRebateFollowUpWithRevisionAndWithoutCreditingMoney()throws Exception {
+        UUID id=UUID.randomUUID(),earningId=UUID.randomUUID();
+        var earning=EarningInput.read(Map.of("earningId",earningId.toString(),"kind","THIRD_PARTY_REBATE","provider","Ibotta","form","CASH","amount","4","status","EXPECTED"));
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));tx.addPurchaseItem(new PurchaseItem("Synthetic",null,BigDecimal.ONE,BigDecimal.ONE,1));tx.setObservations(new ReceiptObservations(LocalDate.of(2026,10,4),null,List.of(earning),List.of(),null,List.of(),Map.of()));
+        receipts.save(id,tx,new ReceiptMeta("Synthetic","Follow-up",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        String path="/receipts/"+id+"/earnings/"+earningId+"/follow-up",body=Json.object(Map.of("submissionStatus","FOLLOW_UP","submittedOn","2026-10-25","followUpOn","2026-11-01","followUpNote","Waiting"));
+        assertEquals(403,call("PUT",path,"reader",body,"reader-followup","1").statusCode());
+        var result=call("PUT",path,"owner",body,"followup-save","1");assertEquals(200,result.statusCode(),result.body());assertEquals(result.body(),call("PUT",path,"owner",body,"followup-save","1").body());
+        var updated=receipts.findById(id).orElseThrow().transaction().getObservations().earnings().getFirst();
+        assertEquals(earning.expected(),updated.expected());assertNull(updated.confirmed());assertEquals(RebateStatus.EXPECTED,updated.status());assertEquals(LocalDate.of(2026,11,1),updated.details().followUpOn());
+        assertEquals(409,call("PUT",path,"owner",body,"stale-followup","1").statusCode());
+        assertEquals(2,receipts.history().findByReceiptId(id).size());
+    }
+
+    @Test void correctsRewardAmountWithRevisionAuditAndIdempotentRetry()throws Exception {
+        UUID receipt=UUID.randomUUID(),earningId=UUID.randomUUID();
+        var earning=EarningInput.read(Map.of("earningId",earningId.toString(),"kind","THIRD_PARTY_REBATE","provider","Fetch","form","POINTS","amount","25","status","CREDITED","confirmedAmount","25","unit","points","confirmAmountAndUnit",true));
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));tx.addPurchaseItem(new PurchaseItem("Synthetic",null,BigDecimal.ONE,BigDecimal.ONE,1));tx.setObservations(new ReceiptObservations(LocalDate.of(2026,10,4),null,List.of(earning),List.of(),null,List.of(),Map.of()));
+        receipts.save(receipt,tx,new ReceiptMeta("Synthetic","Amount test",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        String path="/receipts/"+receipt+"/earnings/"+earningId+"/amount",body="{\"amount\":\"50\",\"unit\":\"points\"}";
+        assertEquals(403,call("PUT",path,"reader",body,"denied-amount","1").statusCode());
+        var result=call("PUT",path,"owner",body,"correct-amount","1");assertEquals(200,result.statusCode(),result.body());assertEquals(result.body(),call("PUT",path,"owner",body,"correct-amount","1").body());
+        var changed=receipts.findById(receipt).orElseThrow();assertEquals(2,changed.revision());assertEquals(1,changed.transaction().getObservations().earnings().size());var value=changed.transaction().getObservations().earnings().getFirst();assertEquals(earningId,value.earningId());assertEquals(earning.status(),value.status());assertEquals(new BigDecimal("50"),value.confirmed().amount());
+        assertEquals(409,call("PUT",path,"owner",body,"stale-amount","1").statusCode());assertEquals(400,call("PUT",path,"owner","{\"amount\":\"0\",\"unit\":\"points\"}","zero-amount","2").statusCode());
+        assertEquals(2,receipts.history().findByReceiptId(receipt).size());
+        var deletion=call("PUT","/receipts/"+receipt+"/earnings/"+earningId+"/delete","owner","{}","delete-reward","2");assertEquals(200,deletion.statusCode(),deletion.body());var removed=receipts.findById(receipt).orElseThrow().transaction().getObservations().earnings().getFirst();assertEquals(RebateStatus.REJECTED,removed.status());assertEquals(new BigDecimal("50"),removed.confirmed().amount());assertEquals(3,receipts.history().findByReceiptId(receipt).size());
+    }
+
     @Test void scenarioPreviewAndPlanSaveAreSeparateFromReceiptsAndBalances()throws Exception{
         var line=Map.of("id",UUID.randomUUID().toString(),"name","Scott","regular","5.00","quantity",2);
         var scenario=Map.of("items",List.of(line),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
         var preview=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",scenario)),null,null);assertEquals(200,preview.statusCode(),preview.body());assertEquals(new BigDecimal("10.00"),Json.parseObject(preview.body()).get("calculatedOop"));
+        var memberLine=new LinkedHashMap<String,Object>(line);memberLine.put("memberRewardRate",5);
+        var memberScenario=new LinkedHashMap<String,Object>(scenario);memberScenario.put("items",List.of(memberLine));
+        var memberPreview=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",memberScenario,"retailer","Walgreens")),null,null);
+        assertEquals(200,memberPreview.statusCode(),memberPreview.body());assertEquals(new BigDecimal("0.50"),Json.parseObject(memberPreview.body()).get("memberRewardEstimate"));
         var paid=new java.util.LinkedHashMap<String,Object>(scenario);paid.put("payments",List.of(Map.of("id",UUID.randomUUID().toString(),"type","ECB","amount","2","notes","Scott")));
         var paidPreview=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",paid)),null,null);assertEquals(200,paidPreview.statusCode(),paidPreview.body());assertEquals(new BigDecimal("8.00"),Json.parseObject(paidPreview.body()).get("calculatedOop"));
         var whole=new java.util.LinkedHashMap<String,Object>(scenario);whole.put("coupons",List.of(Map.of("id",UUID.randomUUID().toString(),"description","ONLINE2","amount","2","requiredQuantity",1,"lineIds",List.of(),"kind","SALE_PROMOTION","wholeReceipt",true)));
@@ -76,6 +141,15 @@ class CouponApiServiceTest {
         var platform=new PostgresPlatformRepository(connections);
         var service=new coupons.api.CouponApiService(repository,new PostgresShoppingPlanRepository(connections),new PostgresClippedCouponRepository(connections),"reader","owner",new PostgresApiRequestStore(connections),platform);
         var server=service.start(0);try{
+            var bonus=UUID.randomUUID();var root="http://127.0.0.1:"+server.getAddress().getPort();var http=java.net.http.HttpClient.newHttpClient();
+            java.util.function.BiFunction<String,String,java.net.http.HttpResponse<String>> change=(path,payload)->{try{return http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(root+path)).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key",UUID.randomUUID().toString()).method((path.endsWith("/member-rewards")||path.endsWith("/payouts"))?"POST":"PUT",java.net.http.HttpRequest.BodyPublishers.ofString(payload)).build(),java.net.http.HttpResponse.BodyHandlers.ofString());}catch(Exception ex){throw new RuntimeException(ex);}};
+            var added=change.apply("/accounts/member-rewards",Json.object(Map.of("eventId",bonus.toString(),"provider","P&G Brand","date","2026-10-26","points","75","time","08:17","description","Survey bonus")));assertEquals(201,added.statusCode(),added.body());assertEquals(0,new BigDecimal("0.5").compareTo(platform.memberAmount(bonus)));assertEquals(java.time.LocalTime.of(8,17),new PostgresProviderAccountRepository(connections).findAdjustment(bonus).orElseThrow().time());assertEquals(java.time.LocalTime.of(8,17),platform.memberReward(bonus).get("time"));
+            var edited=change.apply("/accounts/member-rewards/"+bonus,Json.object(Map.of("correctionId",UUID.randomUUID().toString(),"amount","1","expectedAmount","0.5","points","150","expectedPoints","75")));assertEquals(200,edited.statusCode(),edited.body());assertEquals(0,BigDecimal.ONE.compareTo(platform.memberAmount(bonus)));
+            var deletion=java.net.http.HttpRequest.newBuilder(java.net.URI.create(root+"/accounts/member-rewards/"+bonus)).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key",UUID.randomUUID().toString()).method("DELETE",java.net.http.HttpRequest.BodyPublishers.ofString(Json.object(Map.of("expectedAmount","1","expectedPoints","150","correctionId",UUID.randomUUID().toString())))).build();var deleted=http.send(deletion,java.net.http.HttpResponse.BodyHandlers.ofString());assertEquals(200,deleted.statusCode(),deleted.body());assertEquals(0,platform.memberAmount(bonus).signum());assertEquals(0,((BigDecimal)platform.memberReward(bonus).get("points")).signum());
+            var payout=UUID.randomUUID();var payoutAdded=change.apply("/accounts/payouts",Json.object(Map.of("payoutId",payout.toString(),"provider","P&G Brand","date","2026-10-26","points","75","destination","GIFT_CARD","brand","Target","status","REQUESTED")));assertEquals(201,payoutAdded.statusCode(),payoutAdded.body());
+            var payoutRecord=new PostgresProviderAccountRepository(connections).findRedemption(payout).orElseThrow();assertEquals(0,new BigDecimal("0.5").compareTo(payoutRecord.sourceUsdValue()));assertEquals(new BigDecimal("75"),payoutRecord.originalUnitsUsed());assertEquals(ProviderRedemption.Status.REQUESTED,payoutRecord.status());
+            var completedRequest=java.net.http.HttpRequest.newBuilder(java.net.URI.create(root+"/accounts/payouts/"+payout)).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key","payout-complete").header("If-Match-Revision","1").PUT(java.net.http.HttpRequest.BodyPublishers.ofString("{\"status\":\"RECEIVED\",\"date\":\"2026-10-26\"}")).build();var completedResponse=http.send(completedRequest,java.net.http.HttpResponse.BodyHandlers.ofString());assertEquals(200,completedResponse.statusCode(),completedResponse.body());assertEquals(completedResponse.body(),http.send(completedRequest,java.net.http.HttpResponse.BodyHandlers.ofString()).body());assertEquals(ProviderRedemption.Status.RECEIVED,new PostgresProviderAccountRepository(connections).findRedemption(payout).orElseThrow().status());
+            var invalidCard=change.apply("/accounts/payouts",Json.object(Map.of("payoutId",UUID.randomUUID().toString(),"provider","Ibotta","amount","5","destination","CREDIT_CARD","number","123456789")));assertEquals(400,invalidCard.statusCode());
             var id=UUID.randomUUID();var uri=java.net.URI.create("http://127.0.0.1:"+server.getAddress().getPort()+"/receipt-drafts/"+id);
             var client=java.net.http.HttpClient.newHttpClient();String body="{\"state\":{\"id\":\""+id+"\",\"store\":\"Walmart\",\"lines\":[]}}";
             var put=java.net.http.HttpRequest.newBuilder(uri).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key","draft-http").header("If-Match-Revision","0").PUT(java.net.http.HttpRequest.BodyPublishers.ofString(body)).build();

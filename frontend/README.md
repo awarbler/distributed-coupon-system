@@ -30,3 +30,6 @@ verification guides remain local while under review and are not published yet.
 
 Frontend validation uses TypeScript, Oxlint, Vitest, and Playwright. Browser tests
 use synthetic fixtures or an explicitly configured disposable API database.
+
+
+Receipt Import (1.61): Add Receipt includes an owner-only PDF/image import into its existing editable draft. It retains original evidence and review flags, offers source comparison and duplicate links, and uses the existing preview/save flow. OCR stays on the local Java server; no frontend OCR key or external upload service is used.

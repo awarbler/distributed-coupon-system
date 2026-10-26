@@ -86,8 +86,17 @@ public final class ProviderBalanceSummary {
                         source + " | earning " + e.earningId(), ReceiptTimeInput.parse(tx.getObservations().printedTime()).orElse(null),r.transactionId(),e.earningId()));
             }
         }
-        state().adjustments().forEach(a -> result.add(new Movement(a.date(), a.provider(), a.unitChange(), a.usdChange(),
-                "Adjustment " + a.eventId() + " | " + a.reason() + (a.expirationDate()==null?"":" | Expires "+a.expirationDate()) + " | " + a.recordedBy())));
+        var adjustments=state().adjustments();
+        for(var a:adjustments) {
+            if(a.reason().startsWith("Member reward correction: "))continue;
+            BigDecimal dollars=a.usdChange(),units=a.unitChange();
+            if(a.reason().startsWith("Member reward:"))for(var correction:adjustments)if(correction.reason().equals("Member reward correction: "+a.eventId())) {
+                if(correction.usdChange()!=null)dollars=dollars==null?correction.usdChange():dollars.add(correction.usdChange());
+                if(correction.unitChange()!=null)units=units==null?correction.unitChange():units.add(correction.unitChange());
+            }
+            if(a.reason().startsWith("Member reward:")&&dollars!=null&&dollars.signum()==0&&(units==null||units.signum()==0))continue;
+            result.add(new Movement(a.date(),a.provider(),units,dollars,"Adjustment "+a.eventId()+" | "+a.reason()+(a.expirationDate()==null?"":" | Expires "+a.expirationDate())+" | "+a.recordedBy(),a.time(),null,a.eventId()));
+        }
         for(var r:redemptions()) {
             result.add(new Movement(r.requestedDate(),canonical(r.provider()),r.originalUnitsUsed()==null?null:r.originalUnitsUsed().negate(),r.sourceUsdValue().negate(),"Redemption "+r.redemptionId()+" | reserved",r.requestedTime()));
             if(r.status()==ProviderRedemption.Status.CANCELLED)
@@ -101,6 +110,7 @@ public final class ProviderBalanceSummary {
         var latest=new LinkedHashMap<UUID,ProviderRedemption>(); state().redemptionHistory().forEach(r->latest.put(r.redemptionId(),r)); return List.copyOf(latest.values());
     }
     public static String accountName(String name) { return canonical(name); }
+    public static boolean supportsAccount(String name){return PROGRAMS.contains(canonical(name));}
     /** Accounts potentially affected by a receipt, including removed/reclassified earnings in an earlier revision. */
     public Set<String> receiptProviders(ReceiptRecord receipt) {
         var providers = new LinkedHashSet<String>();
@@ -342,7 +352,7 @@ public final class ProviderBalanceSummary {
             case "rr", "registerreward", "registerrewards" -> "Register Rewards";
             case "swag", "swagbuck", "swagbucks" -> "Swagbucks";
             case "mypoint", "mypoints" -> "MyPoints";
-            case "pgbrand", "pg", "pggoodeveryday" -> "P&G Brand";
+            case "pgbrand", "pg", "pggoodeveryday", "pgbrandsaver" -> "P&G Brand";
             case "couponcom", "couponscom", "couponsdotcom" -> "Coupons DotCom";
             case "mckenna", "makenna", "makeena" -> "Makeena";
             case "shop", "shopmuim", "shopmium" -> "Shopmium";
@@ -422,7 +432,7 @@ public static final class AccountActivityView {
                 valuationBasis=SavingsReport.effectiveValuation(e)==null?null:SavingsReport.effectiveValuation(e).basis();
                 matches=links.stream().filter(l->l.sourceId().equals(e.earningId())).flatMap(l->links(records,links,l.usageEventId(),instruments).stream()).distinct().toList(); }
             boolean ordered=m.date()!=null && movements.stream().filter(x->Objects.equals(x.date(),m.date()) && x.provider().equals(m.provider())).allMatch(x->x.time()!=null)
-                && movements.stream().noneMatch(x->x!=m && Objects.equals(x.date(),m.date()) && x.provider().equals(m.provider()) && !Objects.equals(x.receiptId(),m.receiptId()) && Objects.equals(x.time(),m.time()));
+                && movements.stream().noneMatch(x->x!=m && Objects.equals(x.date(),m.date()) && x.provider().equals(m.provider()) && (!Objects.equals(x.receiptId(),m.receiptId()) || m.receiptId()==null&&!Objects.equals(x.eventId(),m.eventId())) && Objects.equals(x.time(),m.time()));
             if(m.date()!=null && !m.date().equals(days.get(m.provider()))) {
                 var b=summary.balance(m.date(),m.provider(),records); dollars.put(m.provider(),b.startUsd());points.put(m.provider(),b.startPoints()); days.put(m.provider(),m.date());
             }

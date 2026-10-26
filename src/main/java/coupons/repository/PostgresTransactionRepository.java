@@ -95,6 +95,19 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             if (exists(connection, "receipt_current", "transaction_id", id)) {
                 throw new IllegalArgumentException("Receipt ID already exists.");
             }
+            // Serialize receipt-number checks across API processes, within this database transaction.
+            // The lock ends at commit/rollback; equal purchase timestamps are intentionally irrelevant.
+            try(var lock=connection.createStatement()){lock.execute("LOCK TABLE receipt_current IN SHARE ROW EXCLUSIVE MODE");}
+            if(metadata!=null&&metadata.receiptNumber()!=null){
+                String number=metadata.receiptNumber().replaceAll("[^A-Za-z0-9]","");
+                try(var query=connection.prepareStatement("SELECT metadata FROM receipt_current");var rows=query.executeQuery()){
+                    while(rows.next()){
+                        var other=deserialize(rows.getBytes(1),ReceiptMeta.class);
+                        if(other!=null&&other.receiptNumber()!=null&&metadata.retailer().trim().equalsIgnoreCase(other.retailer().trim())&&number.equalsIgnoreCase(other.receiptNumber().replaceAll("[^A-Za-z0-9]","")))
+                            throw new IllegalArgumentException("This store and receipt number already exist. Open the existing receipt instead.");
+                    }
+                }
+            }
             var state = PostgresReceiptState.read(connection);
             PostgresReceiptState.rules(state).validateWrite(state, ReceiptRevSnap.from(candidate), evidence, null);
             ensureEvidenceAvailable(connection, evidence);
@@ -206,6 +219,11 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     @Override
     public List<ReceiptRecord> findDeleted() {
         return findAllByStatus(ReceiptStatus.DELETED);
+    }
+
+    @Override public List<ReceiptRecord> findRewardCredits(UUID receiptId,UUID earningId){return inTransaction(connection->{var result=new ArrayList<ReceiptRecord>();try(var statement=connection.prepareStatement("SELECT transaction_id,status,revision,contents,metadata,evidence_ids FROM receipt_current ORDER BY transaction_id");var rows=statement.executeQuery()){while(rows.next()){var r=Row.read(rows).record();if(r.transaction().getObservations().earnings().stream().anyMatch(e->e.details()!=null&&receiptId.equals(e.details().originalReceiptId())&&earningId.equals(e.details().originalEarningId())))result.add(r);}}return List.copyOf(result);});}
+    @Override public List<ReceiptRecord> findImportDuplicates(ReceiptMeta metadata){
+        Objects.requireNonNull(metadata);return inTransaction(connection->{var result=new ArrayList<ReceiptRecord>();try(var statement=connection.prepareStatement("SELECT transaction_id,status,revision,contents,metadata,evidence_ids FROM receipt_current ORDER BY transaction_id");var rows=statement.executeQuery()){while(rows.next()){var row=Row.read(rows);var m=row.metadata;if(m!=null&&metadata.retailer().trim().equalsIgnoreCase(m.retailer().trim())&&metadata.receiptNumber()!=null&&m.receiptNumber()!=null&&metadata.receiptNumber().replaceAll("[^A-Za-z0-9]","").equalsIgnoreCase(m.receiptNumber().replaceAll("[^A-Za-z0-9]","")))result.add(row.record());}}return List.copyOf(result);});
     }
 
     @Override
@@ -616,8 +634,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     private static boolean matches(ReceiptMeta expected, ReceiptMeta candidate) {
         if (candidate == null || !expected.retailer().equals(candidate.retailer())) return false;
         boolean identity = expected.receiptNumber() != null && expected.receiptNumber().equals(candidate.receiptNumber());
-        boolean time = expected.purchasedAt() != null && expected.purchasedAt().equals(candidate.purchasedAt());
-        if (!identity && !time) return false;
+        if (!identity) return false;
         return expected.storeReference() == null || candidate.storeReference() == null
                 || expected.storeReference().equals(candidate.storeReference());
     }

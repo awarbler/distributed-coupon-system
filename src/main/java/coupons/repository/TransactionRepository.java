@@ -308,4 +308,10 @@ public interface TransactionRepository {
      */
     List<ReceiptRecord> findPossibleDuplicates(ReceiptMeta metadata);
 
+    /** Receipts documenting credits received for an original earning. */
+    default List<ReceiptRecord> findRewardCredits(UUID receiptId,UUID earningId){return List.of();}
+
+    /** Web import identity matching tolerates receipt-number separators and store casing. */
+    default List<ReceiptRecord> findImportDuplicates(ReceiptMeta metadata){return findPossibleDuplicates(metadata);}
+
 }

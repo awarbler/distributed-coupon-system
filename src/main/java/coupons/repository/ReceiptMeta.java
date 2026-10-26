@@ -23,8 +23,10 @@ public record ReceiptMeta(
         String storeReference,
         PurchaseChannel purchaseChannel,
         PrintedTotalBasis printedTotalBasis,
-        PaymentEntryStatus paymentEntryStatus
+        PaymentEntryStatus paymentEntryStatus, ReceiptKind receiptKind
 ) implements java.io.Serializable {
+    public enum ReceiptKind { PURCHASE, REWARD_ADJUSTMENT }
+    public ReceiptMeta(String retailer,String number,LocalDateTime at,String store,PurchaseChannel channel,PrintedTotalBasis basis,PaymentEntryStatus payments){this(retailer,number,at,store,channel,basis,payments,ReceiptKind.PURCHASE);}
     public enum PurchaseChannel { IN_STORE, ONLINE, UNKNOWN }
     public enum PrintedTotalBasis { BEFORE_PAYMENT_FUNDING, AFTER_REWARD_REDEMPTIONS, UNKNOWN }
     public enum PaymentEntryStatus { COMPLETE, PARTIAL, UNKNOWN }
@@ -51,6 +53,7 @@ public record ReceiptMeta(
      *         optional text field is blank
      */
     public ReceiptMeta {
+        receiptKind=receiptKind==null?ReceiptKind.PURCHASE:receiptKind;
         printedTotalBasis = printedTotalBasis == null ? PrintedTotalBasis.UNKNOWN : printedTotalBasis;
         paymentEntryStatus = paymentEntryStatus == null ? PaymentEntryStatus.UNKNOWN : paymentEntryStatus;
         purchaseChannel=purchaseChannel==null?PurchaseChannel.UNKNOWN:purchaseChannel;

@@ -1,10 +1,11 @@
+import { useState } from 'react'
 import { EarningLinksForm } from './EarningLinksForm'
 import { RewardFields } from './RewardFields'
 import { newReward } from './rewardStatus'
 import { ReceiptEdit, ReceiptStatusAction, ReceiptRRMatch } from './ReceiptDetail'
-import { WorkspacePages, RewardsAccounts, StandaloneRewardPanel, MemberRewardEntry, PlanScenarioEditor, ProductCouponSubtotal, ScenarioBreakdown } from '../../pages/WorkspacePages'
+import { WorkspacePages, RewardsAccounts, StandaloneRewardPanel, MemberRewardEntry, PayoutEntry, PlanScenarioEditor, ProductCouponSubtotal, ScenarioBreakdown } from '../../pages/WorkspacePages'
 import { browseReceipts, matchesReceiptSearch, receiptTime, shoppingWeek } from '../../api/format'
-import type { Receipt, AccountReport } from '../../types/platform'
+import type { Receipt, AccountReport, Workspace } from '../../types/platform'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -75,12 +76,12 @@ it('shows receipt facts and cash/card out of pocket separately from legacy compa
   expect(screen.getByText(/Combined benefit value is incomplete/)).toBeInTheDocument()
   expect(screen.getByText('Legacy reported/calculated difference').parentElement).toHaveTextContent('$20.00')
 })
-it('sends explicit total basis and payment completeness as reviewed facts', async () => {
+it('sends reviewed total basis without asking or inventing payment completeness', async () => {
   const { user, mutate } = setup(); await minimum(user)
   await user.selectOptions(screen.getByLabelText('Printed total represents'), 'BEFORE_PAYMENT_FUNDING')
-  await user.selectOptions(screen.getByLabelText('Have you entered all payments shown on this receipt?'), 'COMPLETE')
+  expect(screen.queryByLabelText('Have you entered all payments shown on this receipt?')).not.toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'Review calculated totals' }))
-  expect(mutate.mock.calls[0][2]).toMatchObject({ printedTotalBasis: 'BEFORE_PAYMENT_FUNDING', paymentEntryStatus: 'COMPLETE' })
+  expect(mutate.mock.calls[0][2]).toMatchObject({ printedTotalBasis: 'BEFORE_PAYMENT_FUNDING', paymentEntryStatus: 'UNKNOWN' })
 })
 
 it('shows total saved outside legacy calculations while preserving the cash/card amount', () => {
@@ -189,7 +190,7 @@ it('omits a wholly blank receipt-wide discount while saving printed zero and unk
   const mutate = vi.spyOn(api, 'mutate').mockResolvedValue({ reviewToken: 'reviewed', totals: receiptRow('test').totals })
   render(<ReceiptEdit receipt={receipt()} api={api} enabled onSaved={vi.fn()} onCancel={vi.fn()} />)
   await user.click(screen.getByRole('button', { name: 'Add receipt-wide discount' }))
-  await user.type(screen.getByLabelText('Walgreens Cash Used This Visit'), '0')
+  await user.type(screen.getByLabelText('Used This Visit'), '0')
   await user.type(screen.getByLabelText('Reason for correction'), 'Printed footer')
   await user.click(screen.getByRole('button', { name: 'Review updated totals' }))
   expect(mutate.mock.calls[0][2]).toMatchObject({ printedFooter: { wcUsed: '0', wcEarned: null }, discounts: [{ applicationId: 'old-price-reduction' }] })
@@ -346,7 +347,7 @@ it.each(['MyPoints','Fetch','P&G Brand','Swagbucks','Merryfield'])('shows points
  vi.spyOn(api,'workspaceAt').mockResolvedValue(data)
  render(<RewardsAccounts data={data} api={api} writable onReceipt={vi.fn()}/> )
  await user.click(await screen.findByRole('button',{name:provider}))
- expect(await screen.findByText('Beginning Points')).toBeInTheDocument()
+ expect(await screen.findByRole('columnheader',{name:'Dollar Value'})).toBeInTheDocument()
  expect(screen.getByRole('columnheader',{name:'Points Before'})).toBeInTheDocument()
  await user.click(screen.getByRole('button',{name:'Set Beginning Balance'}))
  expect(screen.getByLabelText('Original Points')).toBeInTheDocument()
@@ -616,11 +617,12 @@ it('saves a member account credit without creating a receipt',async()=>{
  const api=new ApiClient('test'),saved=vi.fn(),mutate=vi.spyOn(api,'mutate').mockResolvedValue({}),user=userEvent.setup()
  render(<MemberRewardEntry provider="ECB" api={api} writable day="2026-10-24" onSaved={saved}/>)
  await user.click(screen.getByRole('button',{name:'Add member reward without a receipt'}))
+ const time=screen.getByLabelText('Reward Time');expect(time).not.toBeRequired();expect((time as HTMLInputElement).value).toMatch(/^\d{2}:\d{2}$/);await user.clear(time);await user.type(time,'08:45')
  await user.type(screen.getByLabelText('Member reward amount'),'.98')
  await user.type(screen.getByLabelText('Member reward name / description'),'Member bonus')
  await user.type(screen.getByLabelText('ECB expiration date (optional)'),'2026-11-24')
  await user.click(screen.getByRole('button',{name:'Save member reward'}))
- expect(mutate).toHaveBeenCalledWith('/accounts/member-rewards','POST',expect.objectContaining({provider:'ECB',amount:'.98',description:'Member bonus',date:'2026-10-24',expirationDate:'2026-11-24'}),expect.any(String))
+ expect(mutate).toHaveBeenCalledWith('/accounts/member-rewards','POST',expect.objectContaining({provider:'ECB',amount:'.98',description:'Member bonus',date:'2026-10-24',time:'08:45',expirationDate:'2026-11-24'}),expect.any(String))
  expect(saved).toHaveBeenCalled()
 })
 
@@ -759,14 +761,14 @@ it('offers whole-receipt rebate scope and preserves it in a receipt draft',async
 it('lets a planned rebate switch between whole receipt and selected products',async()=>{
  const draft=planningFixture(),api=new ApiClient('test'),user=userEvent.setup();vi.spyOn(api,'mutate').mockResolvedValue(draft.estimate)
  render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onReceipt={vi.fn()}/>)
- const scope=screen.getByLabelText('Rebate applies to 1');expect(scope).toHaveValue('PRODUCTS')
- await user.selectOptions(scope,'WHOLE_RECEIPT');expect(scope).toHaveValue('WHOLE_RECEIPT')
+ const scope=screen.getByLabelText('Rebate applies to 1');expect(scope).toHaveValue('PRODUCTS');expect(screen.getByRole('checkbox',{name:/Neutrogena/})).toBeVisible()
+ await user.selectOptions(scope,'WHOLE_RECEIPT');expect(scope).toHaveValue('WHOLE_RECEIPT');expect(screen.queryByRole('checkbox',{name:/Neutrogena/})).not.toBeInTheDocument()
  await user.selectOptions(scope,'PRODUCTS');expect(scope).toHaveValue('PRODUCTS')
 })
 
 it('labels checkout OOP after tax before subtracting earned rewards',()=>{
  const draft=planningFixture();render(<ScenarioBreakdown report={draft.estimate}/>)
- expect(screen.getByText('OOP before rewards, after tax').parentElement).toHaveTextContent('$3.60')
+ expect(screen.getByText('OOP After Rewards, After Tax').parentElement).toHaveTextContent('$3.60')
 })
 
 it('keeps copied product coupons under the product instead of suggesting another entry',()=>{
@@ -787,7 +789,7 @@ it('includes the saved plan revision in receipt review for atomic purchased mark
 it('shows purchased status and opens its saved receipt without enabling checkout again',async()=>{
  const data=workspace(),row=planningRow();row.plan.purchasedReceiptId='saved-receipt';data.plans=[row];const open=vi.fn(),user=userEvent.setup()
  render(<WorkspacePages page="shopping" data={data} api={new ApiClient('test')} writable onPage={vi.fn()} onReceipt={open} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
- expect(screen.getByText('Purchased')).toBeVisible();expect(screen.getByRole('button',{name:/^Checkout$/})).toBeDisabled()
+ expect(screen.getByText('Purchased')).toBeVisible();expect(screen.queryByRole('button',{name:/^Checkout$/})).not.toBeInTheDocument()
  await user.click(screen.getByRole('button',{name:'View receipt'}));expect(open).toHaveBeenCalledWith('saved-receipt')
 })
 
@@ -873,7 +875,7 @@ it('collapses inventory sections without losing filters or stock form inputs',as
  const data=workspace();data.inventory=[{inventoryId:'stock',productId:'product',revision:'2',productName:'Olay',sku:'00123',totalPurchased:'5',quantityOnHand:null}];const user=userEvent.setup()
  render(<WorkspacePages page="inventory" data={data} api={new ApiClient('test')} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
  const search=screen.getByLabelText('Search products');await user.type(search,'Olay')
- await user.click(screen.getAllByRole('button',{name:'Collapse'})[0]);expect(search).not.toBeVisible();await user.click(screen.getByRole('button',{name:'Expand'}));expect(search).toHaveValue('Olay')
+ await user.click(screen.getByRole('button',{name:'Collapse Inventory filters'}));expect(search).not.toBeVisible();await user.click(screen.getByRole('button',{name:'Expand Inventory filters'}));expect(search).toHaveValue('Olay')
  await user.click(screen.getByRole('button',{name:'View / update'}));await user.selectOptions(screen.getByLabelText('Inventory action'),'SET');const quantity=screen.getByLabelText('Quantity on hand');await user.type(quantity,'3')
  await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).not.toBeVisible();await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).toHaveValue('3')
  expect(screen.getByText('Product summary')).toBeInTheDocument();expect(screen.getByText('Purchase evidence')).toBeInTheDocument();expect(screen.getByText('Stock history')).toBeInTheDocument()
@@ -912,4 +914,168 @@ it('sorts inventory headings in both directions using numeric quantities',async(
  await user.click(screen.getByRole('button',{name:'SKU / UPC'}));expect(first()).toContain('Beta')
  await user.click(screen.getByRole('button',{name:'Quantity on hand'}));expect(first()).toContain('Alpha')
  await user.click(screen.getByRole('button',{name:'Location'}));expect(first()).toContain('Beta')
+})
+
+
+it('previews the latest five inventory additions and expands with an arrow',async()=>{
+ const data=workspace();data.inventory=Array.from({length:7},(_,i)=>({inventoryId:`stock-${i}`,productId:`p-${i}`,revision:'1',productName:`Item ${i}`,quantityOnHand:'1',addedAt:`2026-10-${String(i+10).padStart(2,'0')}T12:00:00Z`}))
+ const user=userEvent.setup();render(<WorkspacePages page="inventory" data={data} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ expect(screen.getAllByRole('row')).toHaveLength(6);expect(screen.getAllByRole('row')[1]).toHaveTextContent('Item 6');expect(screen.queryByText('Item 0')).not.toBeInTheDocument()
+ const arrow=screen.getByRole('button',{name:'Show All Inventory Items'});expect(arrow).toHaveTextContent('');await user.click(arrow);expect(screen.getAllByRole('row')).toHaveLength(8)
+ await user.click(screen.getByRole('button',{name:'Show Latest Five Inventory Items'}));expect(screen.getAllByRole('row')).toHaveLength(6)
+})
+it('shows a recurring Sunday receipt and rebate review on the dashboard',async()=>{
+ const dateSpy=vi.spyOn(Date.prototype,'toLocaleDateString').mockReturnValue('2026-10-25');const data=workspace();data.asOf='2026-10-26';const onPage=vi.fn(),user=userEvent.setup()
+ render(<WorkspacePages page="dashboard" data={data} writable onPage={onPage} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ expect(screen.getByText('Sunday Receipt & Rebate Review')).toBeInTheDocument();expect(screen.getByText('Oct 19, 2026 – Oct 25, 2026 · Past Seven Days')).toBeInTheDocument()
+ await user.click(screen.getByRole('button',{name:'Check Receipts'}));expect(onPage).toHaveBeenCalledWith('receipts');await user.click(screen.getByRole('button',{name:'Check Rebates'}));expect(onPage).toHaveBeenCalledWith('rebates');dateSpy.mockRestore()
+})
+
+
+it('adds a P&G bonus as points without requiring a manual dollar conversion',async()=>{
+ const api=new ApiClient('test'),saved=vi.fn(),mutate=vi.spyOn(api,'mutate').mockResolvedValue({}),user=userEvent.setup()
+ render(<MemberRewardEntry provider="P&G Brand" api={api} writable day="2026-10-26" onSaved={saved}/>)
+ await user.click(screen.getByRole('button',{name:'Add member reward without a receipt'}));expect(screen.queryByLabelText('Member reward amount')).not.toBeInTheDocument()
+ await user.type(screen.getByLabelText('Bonus Reward Points'),'25');await user.type(screen.getByLabelText('Member reward name / description'),'Survey Bonus');await user.click(screen.getByRole('button',{name:'Save member reward'}))
+ expect(mutate).toHaveBeenCalledWith('/accounts/member-rewards','POST',expect.objectContaining({provider:'P&G Brand',points:'25',amount:null,description:'Survey Bonus'}),expect.any(String));expect(saved).toHaveBeenCalled()
+})
+it('previews five account entries, expands, searches by day and sorts dollar values numerically',async()=>{
+ const data=workspace(),api=new ApiClient('test'),user=userEvent.setup();data.asOf=new Date().toLocaleDateString('sv-SE');const report=pointsReport('P&G Brand',data.asOf)
+ report.activity=Array.from({length:7},(_,i)=>({...report.activity[0],description:`Bonus ${i}`,movement:{...report.activity[0].movement,date:`${data.asOf.slice(0,7)}-${String(i+1).padStart(2,'0')}`,usd:String(i===0?100:i+1)}}))
+ data.balances=[{provider:'P&G Brand',balance:report.ending}];vi.spyOn(api,'account').mockResolvedValue(report);vi.spyOn(api,'workspaceAt').mockResolvedValue(data)
+ render(<RewardsAccounts data={data} api={api} writable onReceipt={vi.fn()}/>);await user.click(await screen.findByRole('button',{name:'P&G Brand'}));await screen.findByText('Bonus 6')
+ expect(screen.queryByText('Bonus 0')).not.toBeInTheDocument();await user.click(screen.getByRole('button',{name:'Show All Account Activity'}));expect(screen.getByText('Bonus 0')).toBeInTheDocument()
+ await user.click(screen.getByRole('button',{name:/^Total$/}));expect(screen.getByRole('columnheader',{name:'Total ↑'})).toHaveAttribute('aria-sort','ascending')
+ await user.type(screen.getByLabelText('Search Account By Day'),`${data.asOf.slice(0,7)}-01`);expect(screen.getByText('Bonus 0')).toBeInTheDocument();expect(screen.queryByText('Bonus 6')).not.toBeInTheDocument()
+})
+
+
+it('hides the Sunday reminder on Monday even when the workspace date is Sunday',()=>{
+ const dateSpy=vi.spyOn(Date.prototype,'toLocaleDateString').mockReturnValue('2026-10-26');const data=workspace();data.asOf='2026-10-25'
+ render(<WorkspacePages page="dashboard" data={data} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ expect(screen.queryByText('Sunday Receipt & Rebate Review')).not.toBeInTheDocument();dateSpy.mockRestore()
+})
+it('records a payout separately with optional gift-card details',async()=>{
+ const api=new ApiClient('test'),saved=vi.fn(),mutate=vi.spyOn(api,'mutate').mockResolvedValue({}),user=userEvent.setup()
+ render(<PayoutEntry provider="Fetch" pointsAccount api={api} writable day="2026-10-26" onSaved={saved}/>)
+ await user.click(screen.getByRole('button',{name:'Record Payout / Use Rewards'}));expect(screen.getByLabelText('Description (Optional)')).not.toBeRequired()
+ await user.type(screen.getByLabelText('Points Used (Optional)'),'5000');await user.selectOptions(screen.getByLabelText('How Paid (Optional)'),'GIFT_CARD');expect(screen.getByLabelText('Gift Card Number (Optional)')).not.toBeRequired()
+ await user.type(screen.getByLabelText('Gift Card Brand (Optional)'),'Target');await user.click(screen.getByRole('button',{name:'Save Payout'}))
+ expect(mutate).toHaveBeenCalledWith('/accounts/payouts','POST',expect.objectContaining({provider:'Fetch',points:'5000',amount:null,destination:'GIFT_CARD',brand:'Target',number:null,status:'REQUESTED'}),expect.any(String));expect(saved).toHaveBeenCalled()
+})
+
+
+it('focuses Rebates on follow-up and keeps all reward details accessible from Rewards',async()=>{
+ const data=workspace();data.receiptEarnings=Array.from({length:7},(_,i)=>({receiptId:`r${i}`,receiptNumber:`R${i}`,receiptStatus:'ACTIVE',earning:{earningId:`e${i}`,kind:'THIRD_PARTY_REBATE',provider:'Ibotta',offerReference:`Offer ${i}`,scope:'RECEIPT',lineItemIds:[],status:'CREDITED',expected:null,confirmed:{kind:'CASH',amount:'1',currency:'USD',program:null},valuation:null}})) as Workspace['receiptEarnings']
+ const {unmount}=render(<WorkspacePages page="rebates" data={data} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ expect(screen.queryByText(/Ibotta · Offer/)).not.toBeInTheDocument();await userEvent.setup().selectOptions(screen.getByLabelText('Submission Filter'),'ALL');expect(screen.getAllByText(/Ibotta · Offer/)).toHaveLength(5);await userEvent.setup().click(screen.getByRole('button',{name:'Show All Rebates'}));expect(screen.getAllByText(/Ibotta · Offer/)).toHaveLength(7);expect(screen.queryByText('Add Missing Rewards')).not.toBeInTheDocument();unmount()
+ const api=new ApiClient('test');vi.spyOn(api,'workspaceAt').mockResolvedValue(data);const user=userEvent.setup()
+ render(<RewardsAccounts data={data} api={api} writable onReceipt={vi.fn()}/>);await user.click(screen.getByRole('button',{name:'Add Missing Rewards'}));expect(screen.getByRole('heading',{name:'Add Missing Rewards'})).toBeInTheDocument();expect(screen.queryByRole('button',{name:'Add member reward without a receipt'})).not.toBeInTheDocument()
+})
+
+
+it('opens the Sunday receipt review with only the last seven days selected',async()=>{
+ const dateSpy=vi.spyOn(Date.prototype,'toLocaleDateString').mockReturnValue('2026-10-25'),user=userEvent.setup(),data=workspace(),api=new ApiClient('test');vi.spyOn(api,'receiptSummary').mockResolvedValue(data.summaries.all)
+ const props={data,api,writable:true,onReceipt:vi.fn(),onEdit:vi.fn(),onAddReceipt:vi.fn(),onCheckout:vi.fn()};let view:ReturnType<typeof render>
+ const navigate=(page:'receipts'|'rebates'|'dashboard')=>view.rerender(<WorkspacePages {...props} page={page} onPage={p=>navigate(p as 'receipts'|'rebates'|'dashboard')}/>)
+ view=render(<WorkspacePages {...props} page="dashboard" onPage={p=>navigate(p as 'receipts'|'rebates'|'dashboard')}/>);await user.click(screen.getByRole('button',{name:'Check Receipts'}));await waitFor(()=>expect(api.receiptSummary).toHaveBeenCalledWith('2026-10-19','2026-10-25',expect.anything()));dateSpy.mockRestore()
+})
+
+
+it('shows every reward account in the preferred order and resets sorting when reopened',async()=>{
+ const data=workspace(),user=userEvent.setup();const names=['Rakuten','Fetch','Walgreens Cash','Ibotta','Register Rewards','ECB','Walmart Cash','Checkout 51','Venmo','P&G Brand','Swagbucks','MyPoints','Coupons DotCom','PayPal','Gift Cards','Returns','Target','Merryfield','Makeena','Shopmium'];const balance={monthUsd:'0',startUsd:'0',endUsd:'0',startPoints:null,endPoints:null}
+ data.balances=names.map(provider=>({provider,balance}));render(<RewardsAccounts data={data} writable onReceipt={vi.fn()}/> )
+ const accountRows=()=>within(document.querySelector('.account-balances-panel') as HTMLElement).getAllByRole('row').slice(1).map(row=>within(row).getByRole('button').textContent)
+ expect(accountRows()).toEqual(['Walgreens Cash','Register Rewards','ECB','Walmart Cash','Checkout 51','Ibotta','Venmo','Fetch','P&G Brand','Swagbucks','MyPoints','Coupons DotCom','PayPal','Gift Cards','Returns','Target','Merryfield','Makeena','Shopmium','Rakuten'])
+ await user.click(screen.getByRole('button',{name:/^Account$/}));expect(accountRows()[0]).toBe('Checkout 51')
+ await user.click(screen.getByRole('button',{name:/^Fetch$/}));await user.click(screen.getByRole('button',{name:'← All Accounts'}));expect(accountRows()[0]).toBe('Walgreens Cash');expect(accountRows()).toHaveLength(20)
+})
+
+
+it('keeps checkout funding visible when coupon details collapse and hides unused detail rows',async()=>{
+ const draft=planningFixture(),user=userEvent.setup();draft.estimate.regularTotal=draft.estimate.saleTotal;draft.estimate.totalWithTax='15.60';draft.estimate.promotions=[];draft.estimate.potentialRewards='0';draft.estimate.afterPotentialRewards='3.60';draft.estimate.afterCashRebates='3.60'
+ render(<ScenarioBreakdown report={draft.estimate} scenario={draft.plan.scenario!} onEdit={vi.fn()}/>)
+ expect(screen.getByText('Regular And Sale Prices Match')).toBeInTheDocument();expect(screen.queryByText('Sale Merchandise')).not.toBeInTheDocument()
+ expect(screen.getByRole('columnheader',{name:'Quantity'})).toBeInTheDocument()
+ await user.click(screen.getByRole('button',{name:'Collapse Coupons Applied'}));expect(screen.queryByText('Neutrogena $4 off 2')).not.toBeInTheDocument();expect(screen.getByText(/Register Rewards Used:.*2.00.*Walgreens Cash Used:.*10.00/)).toBeInTheDocument()
+ expect(screen.getByText('No Rebates.')).toBeInTheDocument();expect(screen.queryByText('Gift Cards Used')).not.toBeInTheDocument();expect(screen.queryByText('Manual / Calculated Difference')).not.toBeInTheDocument();expect(screen.queryByText('Net Before Tax')).not.toBeInTheDocument()
+ await user.click(screen.getByRole('button',{name:'Expand Coupons Applied'}));expect(screen.getByText('Neutrogena $4 off 2')).toBeInTheDocument()
+})
+
+it('retains nested shopping inputs while section arrows collapse independently',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),user=userEvent.setup();vi.spyOn(api,'mutate').mockResolvedValue(draft.estimate)
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={vi.fn()} onReceipt={vi.fn()}/>)
+ const payment=screen.getByText('Payment Or Rewards').closest('summary')!,section=payment.parentElement!
+ await user.click(payment);expect(section).not.toHaveAttribute('open');await user.click(payment);expect(section).toHaveAttribute('open')
+ await screen.findByText('Adjust Eligibility / Rates');await user.click(screen.getByText('Adjust Eligibility / Rates'))
+ expect(screen.getByLabelText('Member Reward Rate 1')).toHaveValue('1')
+ await user.selectOptions(screen.getByLabelText('Member Reward Rate 1'),'5');expect(await screen.findByLabelText('Member Reward Rate 1')).toHaveValue('5')
+})
+
+it.each([['0','15.12',false],['5','15.12',true],['20.12','0',false]])('shows rebate categories only for a mixed cash/store reward total (%s / %s)',(cash,other,mixed)=>{
+ const draft=planningFixture();draft.estimate.cashRebates=cash;draft.estimate.otherRebates=other;draft.estimate.potentialRewards=mixed?'20.12':cash==='0'?other:cash
+ render(<ScenarioBreakdown report={draft.estimate}/>)
+ expect(screen.getAllByText('Total Rebates')).toHaveLength(1)
+ expect(!!screen.queryByText('Cash Rebates')).toBe(mixed);expect(!!screen.queryByText('Store Rewards & Points')).toBe(mixed)
+ expect(screen.queryByText('Other Rebates')).not.toBeInTheDocument()
+})
+
+it('closes the scenario only after a successful save and keeps server errors visible',async()=>{
+ const draft=planningFixture(),api=new ApiClient('test'),close=vi.fn(),user=userEvent.setup()
+ const mutate=vi.spyOn(api,'mutate').mockImplementation(async(path)=>{if(path.endsWith('/preview'))return draft.estimate;throw new ApiError(400,'Shopping deal could not be saved.')})
+ render(<PlanScenarioEditor plan={draft.plan} data={workspace()} api={api} writable onClose={close} onReceipt={vi.fn()}/>)
+ await screen.findByRole('heading',{name:'Planning breakdown'});await user.click(screen.getByRole('button',{name:'Save scenario'}))
+ expect(screen.getByRole('alert')).toHaveTextContent('Shopping deal could not be saved.');expect(close).not.toHaveBeenCalled()
+ mutate.mockImplementation(async(path)=>path.endsWith('/preview')?draft.estimate:{...draft.plan,revision:'4'})
+ await user.click(screen.getByRole('button',{name:'Save scenario'}));expect(close).toHaveBeenCalledOnce()
+})
+
+it('shows whole-receipt reward amounts separately and suppresses zero points and zero payment differences',()=>{
+ const draft=planningFixture();draft.plan.scenario!.promotions[0].wholeReceipt=true;draft.estimate.receiptLevelRewards='15.12';draft.estimate.promotions[0].points='0';draft.estimate.manualDifference='0.00'
+ render(<ScenarioBreakdown report={draft.estimate} scenario={draft.plan.scenario!}/>)
+ expect(screen.getByRole('row',{name:/Whole-Receipt Rewards.*15.12/})).toBeInTheDocument();expect(screen.queryByText(/0 Points/)).not.toBeInTheDocument();expect(screen.queryByText('Manual / Calculated Difference')).not.toBeInTheDocument()
+ expect(screen.getByText(/Applies To: Whole Receipt/)).toBeInTheDocument()
+})
+
+it('imports into editable fields without saving a receipt and lets the owner classify an RR once',async()=>{
+ const api=new ApiClient('test'),user=userEvent.setup(),id='import-line'
+ const mutate=vi.spyOn(api,'mutate').mockResolvedValue({sources:[{name:'receipt.pdf',rawText:'Synthetic Walgreens receipt',scanned:false,store:'Walgreens',storeReference:'Store 1',number:'RFN-TEST',day:'2026-10-08',time:'9:34 AM',tax:'0.27',reported:'3.50',footer:{},wcEarned:'',warnings:['Review regular price'],items:[{id,description:'Aquaphor',sku:'000123',regular:'13.49',sale:'',quantity:'1'}],deductions:[{id:'import-coupon',label:'MFG CPN',amount:'10.00',kind:'UNCLASSIFIED'}],payments:[]}],duplicates:[]})
+ render(<ReceiptCreate api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ await user.upload(screen.getByLabelText('Import Receipt Files'),new File(['pdf'],'receipt.pdf',{type:'application/pdf'}))
+ expect(await screen.findByRole('heading',{name:'Import Review'})).toBeInTheDocument();expect(screen.getByLabelText('Product description 1')).toHaveValue('Aquaphor');expect(screen.getByLabelText('SKU / UPC 1 (optional)')).toHaveValue('000123')
+ await user.selectOptions(screen.getByLabelText('Classify Imported Deduction import-coupon'),'REGISTER_REWARD')
+ expect(screen.getByLabelText('RR used amount 1')).toHaveValue('10.00');expect(mutate).toHaveBeenCalledTimes(1);expect(mutate.mock.calls[0][0]).toBe('/receipts/import-preview')
+ await user.clear(screen.getByLabelText('Regular price 1'));await user.type(screen.getByLabelText('Regular price 1'),'14.00');expect(screen.getByLabelText('Regular price 1')).toHaveValue('14.00')
+})
+
+it('copies a completed shopping plan into a new editable scenario without editing the source',async()=>{
+ const draft=planningFixture(),data=workspace(),api=new ApiClient('test'),user=userEvent.setup();draft.plan.purchasedReceiptId='saved-receipt';const row=planningRow();row.plan=draft.plan;row.scenarioEstimate=draft.estimate;data.plans=[row];const mutate=vi.spyOn(api,'mutate').mockImplementation(async(path)=>path.endsWith('/preview')?draft.estimate:{...draft.plan,planId:'new-plan',purchasedReceiptId:null,revision:'1'})
+ render(<WorkspacePages page="shopping" data={data} api={api} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+ expect(screen.getByText('Completed Shopping Plans')).toBeInTheDocument();expect(screen.getByText('Purchased')).toBeInTheDocument()
+ await user.click(screen.getByRole('button',{name:'Copy Plan'}));expect(screen.getByLabelText('Plan name')).toHaveValue('Walgreens deal Copy')
+ await screen.findByRole('heading',{name:'Planning breakdown'});await user.click(screen.getByRole('button',{name:'Save scenario'}))
+ expect(mutate).toHaveBeenCalledWith('/shopping-plans','POST',expect.objectContaining({name:'Walgreens deal Copy'}),expect.any(String),undefined)
+ expect(draft.plan.purchasedReceiptId).toBe('saved-receipt')
+})
+
+it('fills a Walgreens purchase member estimate once and keeps the amount editable',async()=>{
+ const user=userEvent.setup(),estimate=vi.fn().mockResolvedValue('0.60')
+ function Example(){const [value,setValue]=useState({...newReward(),kind:'WALGREENS_CASH',provider:'Walgreens',form:'STORE_REWARD'});return <RewardFields retailer="Walgreens" value={value} onChange={setValue} lines={[]} onMemberEstimate={estimate}/>}
+ render(<Example/>);await user.selectOptions(screen.getByLabelText('Walgreens Cash reward type 1'),'MEMBER')
+ await waitFor(()=>expect(screen.getByLabelText('Reward amount 1 (USD)')).toHaveValue('0.60'))
+ await user.clear(screen.getByLabelText('Reward amount 1 (USD)'));await user.type(screen.getByLabelText('Reward amount 1 (USD)'),'.75');expect(screen.getByLabelText('Reward amount 1 (USD)')).toHaveValue('.75');expect(estimate).toHaveBeenCalledOnce()
+})
+
+it('offers Cancel at the top of the receipt draft and closes after confirming discard',async()=>{
+ const user=userEvent.setup(),close=vi.fn(),confirm=vi.spyOn(window,'confirm').mockReturnValue(true)
+ render(<ReceiptCreate api={new ApiClient('test')} enabled onClose={close} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ await user.click(screen.getByRole('button',{name:/^Cancel$/}));expect(confirm).toHaveBeenCalled();expect(close).toHaveBeenCalledOnce();confirm.mockRestore()
+})
+
+it('previews a manager adjustment without placeholder products and sends its original reward link',async()=>{
+ const api=new ApiClient('test'),user=userEvent.setup(),data=workspace();data.receipts=[{...receiptRow('source','2026-10-25'),transactionId:'source',metadata:{...receiptRow('source','2026-10-25').metadata!,receiptNumber:'11513219089526102503'}}];data.receiptEarnings=[{receiptId:'source',receiptNumber:'11513219089526102503',receiptStatus:'ACTIVE',earning:{earningId:'missing',kind:'WALGREENS_CASH',provider:'Walgreens',offerReference:'Spend 5 Get 15',scope:'RECEIPT',lineItemIds:[],status:'REJECTED',expected:{kind:'STORE_REWARD',amount:'15',currency:'USD',program:'Walgreens'},confirmed:null,valuation:null}}]
+ const mutate=vi.spyOn(api,'mutate').mockResolvedValue(result());render(<ReceiptCreate workspace={data} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
+ await user.selectOptions(screen.getByLabelText('Receipt Type'),'REWARD_ADJUSTMENT');await user.type(screen.getByLabelText('Store'),'Walgreens');await user.selectOptions(screen.getByLabelText('Original Receipt'),'source');await user.selectOptions(screen.getByLabelText('Original Walgreens Cash Reward'),'missing');await user.type(screen.getByLabelText('Reward amount 1 (USD)'),'10')
+ expect(screen.queryByLabelText('Product description 1')).not.toBeInTheDocument();await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ expect(mutate).toHaveBeenCalledWith('/receipts/preview','POST',expect.objectContaining({receiptKind:'REWARD_ADJUSTMENT',items:[],payments:[],tax:'0',reportedTotal:'0',earnings:expect.arrayContaining([expect.objectContaining({amount:'10',originalReceiptId:'source',originalEarningId:'missing'})])}),expect.any(String))
 })

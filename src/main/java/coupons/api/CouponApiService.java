@@ -44,7 +44,8 @@ import static coupons.api.Json.number;
 import static coupons.api.Json.optional;
 import static coupons.api.Json.required;
 import coupons.repository.ClippedCouponRepository;
-import coupons.repository.PostgresPlatformRepository;
+import coupons.repository.PlatformRepository;
+import coupons.repository.ReceiptViews;
 import coupons.repository.ProviderRedemption;
 import coupons.repository.ReceiptChangeContext;
 import coupons.repository.ReceiptCreateCtx;
@@ -67,7 +68,7 @@ public final class CouponApiService implements HttpHandler {
     private final ShoppingPlanRepository plans;
     private final ClippedCouponRepository coupons;
     private final ApiRequestStore requestStore;
-    private final PostgresPlatformRepository platform;
+    private final PlatformRepository platform;
     private final String token;
     private final String adminToken;
     private final Map<String, Cached> idempotency = new HashMap<>();
@@ -83,7 +84,7 @@ public final class CouponApiService implements HttpHandler {
     }
 
     CouponApiService(TransactionRepository receipts, ShoppingPlanRepository plans, ClippedCouponRepository coupons,
-            String token, String adminToken, ApiRequestStore requestStore, PostgresPlatformRepository platform) {
+            String token, String adminToken, ApiRequestStore requestStore, PlatformRepository platform) {
         this.platform = platform;
         this.requestStore = requestStore;
         this.receipts = Objects.requireNonNull(receipts);
@@ -197,7 +198,7 @@ public final class CouponApiService implements HttpHandler {
             requireMethod(method, "POST");
             var input = receiptInput(body(e, 16 * 1024 * 1024));
             var duplicate = possibleDuplicates(input);
-            return json(200, fields("transactionId", input.id(), "reviewToken", input.reviewToken(), "totals", PostgresPlatformRepository.totals(input.record()),
+            return json(200, fields("transactionId", input.id(), "reviewToken", input.reviewToken(), "totals", ReceiptViews.totals(input.record()),
                     "possibleDuplicates", duplicate.stream().map(r -> fields("transactionId", r.transactionId(), "status", r.status(), "revision", r.revision())).toList(),
                     "evidence", input.evidence().stream().map(v -> fields("evidenceId", v.getEvidenceId(), "mediaType", v.getMediaType(), "bytes", v.getContent().length)).toList()));
         }
@@ -390,7 +391,7 @@ public final class CouponApiService implements HttpHandler {
                     throw new ConcurrentModificationException();
                 }
                 var addition = ReceiptEarningAddition.read(old, Json.parseObject(body(e, 8 * 1024 * 1024)));
-                return json(200, fields("earning", addition.earning(), "qualification", PromotionQualification.evaluate(addition.earning(), addition.transaction()), "totals", PostgresPlatformRepository.totals(new ReceiptRecord(old.transactionId(), old.status(), old.revision(), addition.transaction(), old.metadata(), old.evidenceIds()))));
+                return json(200, fields("earning", addition.earning(), "qualification", PromotionQualification.evaluate(addition.earning(), addition.transaction()), "totals", ReceiptViews.totals(new ReceiptRecord(old.transactionId(), old.status(), old.revision(), addition.transaction(), old.metadata(), old.evidenceIds()))));
             }
             return write(e, principal, 8 * 1024 * 1024, request -> {
                 var old = receipts.findById(receiptId).orElseThrow();
@@ -488,7 +489,7 @@ public final class CouponApiService implements HttpHandler {
             var correction = ReceiptCorrection.read(old, Json.parseObject(body(e, MAX_BODY)));
             validateCreditSources(old.transactionId(),correction.transaction());
             var candidate = new ReceiptRecord(old.transactionId(), old.status(), old.revision(), correction.transaction(), correction.metadata(), old.evidenceIds());
-            return json(200, fields("reviewToken", correction.token(), "totals", PostgresPlatformRepository.totals(candidate)));
+            return json(200, fields("reviewToken", correction.token(), "totals", ReceiptViews.totals(candidate)));
         }
         if (parts.length == 4 && parts[1].equals("receipts") && parts[3].equals("restore")) {
             requireMethod(method, "POST");
@@ -858,7 +859,7 @@ public final class CouponApiService implements HttpHandler {
     }
 
     private static Map<String, Object> couponFields(ClippedCoupon c) {
-        return PostgresPlatformRepository.couponFields(c);
+        return ReceiptViews.couponFields(c);
     }
 
     private static Response json(int status, Object value) {

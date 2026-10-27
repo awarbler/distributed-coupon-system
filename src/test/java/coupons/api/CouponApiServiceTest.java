@@ -129,6 +129,75 @@ class CouponApiServiceTest {
         assertTrue(receipts.findById(id).isEmpty());
     }
 
+    @Test void platformWorkspaceAccountsAndPayoutsUseInjectedInterfaceWithoutPostgres() throws Exception {
+        server.stop(0);
+        var payouts = new HashMap<UUID, ProviderRedemption>();
+        var account = Map.of("provider", "Fetch", "availablePoints", new BigDecimal("10000"),
+                "availableUsd", new BigDecimal("10.00"));
+        PlatformRepository substitute = (PlatformRepository) java.lang.reflect.Proxy.newProxyInstance(
+                PlatformRepository.class.getClassLoader(), new Class<?>[]{PlatformRepository.class},
+                (proxy, method, args) -> switch (method.getName()) {
+                    case "workspace" -> Map.of("accounts", List.of(account));
+                    case "receiptDrafts" -> List.of();
+                    case "account" -> {
+                        assertEquals("Fetch", args[0]);
+                        assertEquals(LocalDate.of(2026, 10, 1), args[1]);
+                        assertEquals(LocalDate.of(2026, 10, 27), args[2]);
+                        yield account;
+                    }
+                    case "savePayout" -> {
+                        var payout = (ProviderRedemption) args[0];
+                        payouts.put(payout.redemptionId(), payout);
+                        yield null;
+                    }
+                    case "payout" -> Map.of("revision", 1, "payout", payouts.get(args[0]));
+                    case "finishPayout" -> {
+                        assertEquals(1L, args[1]);
+                        var old = payouts.get(args[0]);
+                        payouts.put(old.redemptionId(), old.complete((ProviderRedemption.Status) args[2],
+                                (LocalDate) args[3], null));
+                        yield null;
+                    }
+                    default -> throw new AssertionError("Unexpected platform operation: " + method.getName());
+                });
+        server = new CouponApiService(receipts, plans, coupons, "reader", "owner", null, substitute).start(0);
+        base = "http://127.0.0.1:" + server.getAddress().getPort();
+        var workspace = call("GET", "/workspace", "owner", null, null, null);
+        assertEquals(200, workspace.statusCode(), workspace.body());
+        assertTrue(workspace.body().contains("10000"));
+        var activity = call("GET", "/accounts/activity?provider=Fetch&from=2026-10-01&to=2026-10-27",
+                "reader", null, null, null);
+        assertEquals(200, activity.statusCode(), activity.body());
+        assertEquals(new BigDecimal("10.00"), Json.parseObject(activity.body()).get("availableUsd"));
+        UUID id = UUID.randomUUID();
+        var created = call("POST", "/accounts/payouts", "owner", Json.object(Map.of(
+                "payoutId", id, "provider", "Fetch", "date", "2026-10-27", "points", "3000",
+                "description", "Synthetic payout", "destination", "GIFT_CARD", "status", "REQUESTED")),
+                "interface-payout", null);
+        assertEquals(201, created.statusCode(), created.body());
+        var payout = payouts.get(id);
+        assertEquals(new BigDecimal("3000"), payout.originalUnitsUsed());
+        assertEquals(new BigDecimal("3.000"), payout.sourceUsdValue());
+        assertEquals(ProviderRedemption.Status.REQUESTED, payout.status());
+        assertEquals("Synthetic payout", payout.notes());
+        var loaded = call("GET", "/accounts/payouts/" + id, "reader", null, null, null);
+        assertEquals(200, loaded.statusCode(), loaded.body());
+        assertTrue(loaded.body().contains("REQUESTED"));
+        var cancelled = call("PUT", "/accounts/payouts/" + id, "owner",
+                Json.object(Map.of("status", "CANCELLED", "date", "2026-10-27")), "interface-cancel", "1");
+        assertEquals(200, cancelled.statusCode(), cancelled.body());
+        assertEquals(ProviderRedemption.Status.CANCELLED, payouts.get(id).status());
+        assertEquals(payout.originalUnitsUsed(), payouts.get(id).originalUnitsUsed());
+    }
+
+    @Test void receiptViewsCalculateWithoutStorageAndPreserveKnownDiscrepancy() {
+        var input = ReceiptInput.read(Json.parseObject(Json.object(ReceiptInputTest.draft(UUID.randomUUID()))));
+        var totals = ReceiptViews.totals(input.record());
+        assertEquals(0, new BigDecimal("7.27").compareTo((BigDecimal) totals.get("calculatedDue")));
+        assertEquals(0, new BigDecimal("7.28").compareTo((BigDecimal) totals.get("reportedDue")));
+        assertEquals(0, new BigDecimal("0.01").compareTo((BigDecimal) totals.get("difference")));
+    }
+
     @Test void linkedReceiptCreationDispatchesThroughInjectedInterface() throws Exception {
         server.stop(0);
         var dispatched = new java.util.concurrent.atomic.AtomicBoolean();

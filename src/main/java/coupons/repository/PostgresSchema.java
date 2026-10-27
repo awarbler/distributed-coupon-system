@@ -21,10 +21,27 @@ public final class PostgresSchema {
     /**
      * Applies the receipt-repository schema to the supplied connection.
      *
-     * <p>This method never opens local receipt files and does not migrate data.
+     * <p>This method never opens local receipt files. It adds V12 projections from existing audit snapshots atomically.
      */
     public static void apply(Connection connection) throws SQLException, IOException {
         Objects.requireNonNull(connection, "Connection cannot be null.");
+        boolean ownsTransaction = connection.getAutoCommit();
+        java.sql.Savepoint savepoint = null;
+        if (ownsTransaction) connection.setAutoCommit(false); else savepoint = connection.setSavepoint();
+        try {
+            PostgresReceiptState.lock(connection);
+            applyWithinTransaction(connection);
+            ReceiptFinancialProjection.install(connection);
+            ReceiptFinancialProjection.appendAll(connection);
+            if (ownsTransaction) connection.commit(); else connection.releaseSavepoint(savepoint);
+        } catch (SQLException | IOException | RuntimeException failure) {
+            try { if (ownsTransaction) connection.rollback(); else connection.rollback(savepoint); }
+            catch (SQLException rollback) { failure.addSuppressed(rollback); }
+            throw failure;
+        } finally { if (ownsTransaction) connection.setAutoCommit(true); }
+    }
+
+    private static void applyWithinTransaction(Connection connection) throws SQLException, IOException {
         applyMigration(connection, V1, 1, "receipt repository");
         applyMigration(connection, V2, 2, "catalog, deal, rebate, and inventory repositories");
         applyMigration(connection, V3, 3, "provider account ledger");

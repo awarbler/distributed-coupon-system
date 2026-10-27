@@ -56,7 +56,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
         this.clock = Objects.requireNonNull(clock);
     }
 
-    /** Explicit test-only opt-in; never selected by production environment configuration. */
+    /** Additional disposable-target verification; ordinary repositories already project receipts. */
     public static PostgresTransactionRepository withFinancialProjections(PostgresConnectionFactory connections,
             DisposablePostgresTarget target) throws SQLException {
         try (var connection = target.open(connections)) { ReceiptFinancialProjection.verifyInstalled(connection, target); }
@@ -509,7 +509,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             statement.setLong(3, history.after().revision()); statement.setObject(4, history.request().requestId());
             statement.setBytes(5, serialize(history)); statement.executeUpdate();
         }
-        if (financialTarget != null) ReceiptFinancialProjection.append(connection, financialTarget,
+        ReceiptFinancialProjection.append(connection, financialTarget,
                 history.after().transactionId(), history.after().revision());
         PostgresInventoryRepository.syncReceipts(connection,history.createCtx()!=null?history.createCtx().requestedBy():history.changeCtx().requestedBy());
     }

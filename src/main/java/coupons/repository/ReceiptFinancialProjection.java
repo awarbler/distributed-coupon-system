@@ -9,7 +9,7 @@ import java.sql.*;
 import java.util.*;
 import static coupons.repository.PostgresRepositorySupport.*;
 
-/** Opt-in experimental projection. Never used by normal schema application or startup. */
+/** Exact receipt revision projections, integrated with normal schema and receipt writes. */
 public final class ReceiptFinancialProjection {
     private static final int VERSION = 1;
     private static final String FORMULA = "existing-transaction-calculator-v1";
@@ -32,43 +32,51 @@ public final class ReceiptFinancialProjection {
         else System.out.println(backfill(factory, target, UUID.fromString(args[2]), Integer.parseInt(args[3])));
     }
 
+    /** Additional target verification for disposable operator commands and tests. */
     public static void install(PostgresConnectionFactory factory, DisposablePostgresTarget target) throws Exception {
         try (var connection = target.open(factory)) {
             target.verifySchema(connection);
             connection.setAutoCommit(false);
-            try {
-                PostgresReceiptState.lock(connection);
-                try (var query = connection.createStatement(); var rows = query.executeQuery("SELECT to_regclass('receipt_financial_projection_config')")) {
-                    rows.next();
-                    if (rows.getString(1) != null) { verifyInstalled(connection, target); connection.commit(); return; }
-                }
-                try (var resource = ReceiptFinancialProjection.class.getResourceAsStream("/db/migration/V12__experimental_receipt_financial_projections.sql")) {
-                    if (resource == null) throw new IOException("Missing experimental monetary migration.");
-                    try (var statement = connection.createStatement()) { statement.execute(new String(resource.readAllBytes(), StandardCharsets.UTF_8)); }
-                }
-                try (var statement = connection.prepareStatement("INSERT INTO receipt_financial_projection_config VALUES(true,?,1)")) {
-                    statement.setString(1, target.marker()); statement.executeUpdate();
-                }
-                try (var statement = connection.createStatement()) {
-                    statement.executeUpdate("INSERT INTO schema_version(version,description) VALUES(12,'experimental receipt financial projections')");
-                }
-                connection.commit();
-            } catch (Exception failure) { connection.rollback(); throw failure; }
+            try { install(connection); connection.commit(); }
+            catch (Exception failure) { connection.rollback(); throw failure; }
+        }
+    }
+
+    /** Runs within the normal migration transaction; never opens another connection. */
+    static void install(Connection connection) throws SQLException, IOException {
+        PostgresReceiptState.lock(connection);
+        try (var query = connection.createStatement(); var rows = query.executeQuery("SELECT to_regclass('receipt_financial_projection_config')")) {
+            rows.next();
+            if (rows.getString(1) != null) { verifyInstalled(connection); return; }
+        }
+        try (var resource = ReceiptFinancialProjection.class.getResourceAsStream("/db/migration/V12__experimental_receipt_financial_projections.sql")) {
+            if (resource == null) throw new IOException("Missing receipt financial migration.");
+            try (var statement = connection.createStatement()) { statement.execute(new String(resource.readAllBytes(), StandardCharsets.UTF_8)); }
+        }
+        try (var statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO receipt_financial_projection_config VALUES(true,'APPLICATION',1)");
+            statement.executeUpdate("INSERT INTO schema_version(version,description) VALUES(12,'receipt financial projections')");
+        }
+    }
+
+    static void verifyInstalled(Connection connection) throws SQLException {
+        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT projection_version FROM receipt_financial_projection_config WHERE singleton=true")) {
+            if (!rows.next() || VERSION != rows.getInt(1)) throw new IllegalStateException("Receipt projection schema is missing or incompatible.");
         }
     }
 
     static void verifyInstalled(Connection connection, DisposablePostgresTarget target) throws SQLException {
         target.verifySchema(connection);
-        try (var statement = connection.createStatement(); var rows = statement.executeQuery("SELECT marker,projection_version FROM receipt_financial_projection_config WHERE singleton=true")) {
-            if (!rows.next() || !target.marker().equals(rows.getString(1)) || VERSION != rows.getInt(2)) {
-                throw new IllegalStateException("Experimental projection installation does not match this target.");
-            }
-        }
+        verifyInstalled(connection);
+    }
+
+    static void append(Connection connection, UUID id, long revision) throws SQLException {
+        append(connection, null, id, revision);
     }
 
     /** Called inside the same transaction that inserted the authoritative audit row. */
     static void append(Connection connection, DisposablePostgresTarget target, UUID id, long revision) throws SQLException {
-        verifyInstalled(connection, target);
+        if (target == null) verifyInstalled(connection); else verifyInstalled(connection, target);
         byte[] bytes;
         try (var query = connection.prepareStatement("SELECT payload FROM receipt_history WHERE transaction_id=? AND revision=?")) {
             query.setObject(1, id); query.setLong(2, revision);
@@ -183,8 +191,10 @@ public final class ReceiptFinancialProjection {
         }
     }
 
+    static void appendAll(Connection connection) throws SQLException { appendAll(connection, null); }
+
     static void appendAll(Connection connection, DisposablePostgresTarget target) throws SQLException {
-        verifyInstalled(connection, target);
+        if (target == null) verifyInstalled(connection); else verifyInstalled(connection, target);
         for (var source : sources(connection)) append(connection, target, source.id(), source.revision());
     }
 

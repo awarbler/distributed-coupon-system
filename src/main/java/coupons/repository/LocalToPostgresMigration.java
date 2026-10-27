@@ -46,7 +46,7 @@ public final class LocalToPostgresMigration {
                 lockTables(c);
                 if(alreadyImported(c,source)) {
                     validateArchive(c,source);source.verifyUnchanged();
-                    if (disposable != null) ReceiptFinancialProjection.appendAll(c, disposable);
+                    ReceiptFinancialProjection.appendAll(c, disposable);
                     c.commit();return report(source,true);
                 }
                 requireEmpty(c, disposable);
@@ -54,7 +54,7 @@ public final class LocalToPostgresMigration {
                 execute(c,"INSERT INTO local_migrations(source_digest,checkpoint,manifest) VALUES (?,?,?)",source.digest,source.checkpoint,serialize(manifest(source)));
                 for(var file:source.files)execute(c,"INSERT INTO local_migration_files(source_digest,relative_path,sha256,content) VALUES (?,?,?,?)",source.digest,file.path(),file.sha256(),file.bytes());
                 validateRecords(c,source);validateArchive(c,source);source.verifyUnchanged();
-                if (disposable != null) ReceiptFinancialProjection.appendAll(c, disposable);
+                ReceiptFinancialProjection.appendAll(c, disposable);
                 c.commit();return report(source,false);
             }catch(Exception e) {
                 try{c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
@@ -92,7 +92,9 @@ public final class LocalToPostgresMigration {
     static long destinationRows(Connection c, String table) throws SQLException {
         if (table.equals("schema_version")) return 0;
         String filter = table.equals("inventory_receipt_settings")
-                ? " WHERE NOT (singleton = true AND enabled = false)" : "";
+                ? " WHERE NOT (singleton = true AND enabled = false)"
+                : table.equals("receipt_financial_projection_config")
+                ? " WHERE NOT (singleton = true AND marker = 'APPLICATION' AND projection_version = 1)" : "";
         try (var statement = c.createStatement();
                 var rows = statement.executeQuery("SELECT count(*) FROM " + identifier(table) + filter)) {
             rows.next();

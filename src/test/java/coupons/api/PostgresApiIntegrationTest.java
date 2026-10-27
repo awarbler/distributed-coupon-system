@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -516,6 +517,23 @@ class PostgresApiIntegrationTest {
         changed.put("transactionId", UUID.randomUUID());
         assertEquals(409, call("POST", "/receipts", Json.object(changed), "stale-preview", null).statusCode());
         assertEquals(1, receipts.findHistoryByReceiptId(id).size());
+        // Ordinary application construction must project both creation and correction automatically.
+        var edit = new LinkedHashMap<String,Object>(Map.of("reason","Correct entered tax", "tax","0.28", "reportedTotal","7.29"));
+        var editPreview = call("POST", "/receipts/"+id+"/edit-preview", Json.object(edit), null, "1");
+        assertEquals(200,editPreview.statusCode(),editPreview.body());
+        edit.put("reviewToken",Json.parseObject(editPreview.body()).get("reviewToken"));
+        edit.put("acknowledgeDifference",true);
+        var corrected=call("PUT","/receipts/"+id,Json.object(edit),"normal-correction","1");
+        assertEquals(200,corrected.statusCode(),corrected.body());
+        assertEquals(2,receipts.findById(id).orElseThrow().revision());
+        try(var connection=db.open();var query=connection.prepareStatement("SELECT revision,tax_amount,difference FROM receipt_financial_revisions WHERE transaction_id=? ORDER BY revision")) {
+            query.setObject(1,id);
+            try(var rows=query.executeQuery()) {
+                assertTrue(rows.next());assertEquals(1,rows.getLong(1));assertEquals(0,new BigDecimal("0.27").compareTo(rows.getBigDecimal(2)));
+                assertTrue(rows.next());assertEquals(2,rows.getLong(1));assertEquals(0,new BigDecimal("0.28").compareTo(rows.getBigDecimal(2)));
+                assertEquals(0,new BigDecimal("0.01").compareTo(rows.getBigDecimal(3)));assertFalse(rows.next());
+            }
+        }
     }
 
     @Test

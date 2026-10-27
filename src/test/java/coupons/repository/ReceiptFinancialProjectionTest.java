@@ -16,7 +16,7 @@ class ReceiptFinancialProjectionTest {
     @BeforeEach void setup() throws Exception {
         database = new PostgresTestDatabase();
         ReceiptFinancialProjection.install(database.connections,database.target());
-        repository = PostgresTransactionRepository.withFinancialProjections(database.connections,database.target());
+        repository = new PostgresTransactionRepository(database.connections);
     }
     @AfterEach void cleanup() throws Exception { if(database!=null)database.close(); }
     static BigDecimal n(String value) { return new BigDecimal(value); }
@@ -35,6 +35,23 @@ class ReceiptFinancialProjectionTest {
     byte[] source(UUID id) throws Exception {
         try(var c=database.connections.open();var s=c.prepareStatement("SELECT payload FROM receipt_history WHERE transaction_id=? ORDER BY revision")) {
             s.setObject(1,id);try(var r=s.executeQuery()){assertTrue(r.next());return r.getBytes(1);}
+        }
+    }
+
+    /** Model a pre-V12 audit revision without a production bypass switch. */
+    void seedLegacy(UUID id, CouponTransaction tx) throws Exception {
+        try (var memory = new InMemoryTransactionRepository(); var c = database.connections.open()) {
+            memory.save(id,tx,null,List.of(),request(),new ReceiptCreateCtx("test"));
+            var record=memory.findById(id).orElseThrow();
+            var history=memory.history().findByReceiptId(id).getFirst();
+            try (var insert=c.prepareStatement("INSERT INTO receipt_current VALUES(?,'ACTIVE',1,?,NULL,?)")) {
+                insert.setObject(1,id);insert.setBytes(2,PostgresRepositorySupport.serialize(ReceiptSnapshot.from(tx)));
+                insert.setBytes(3,PostgresRepositorySupport.serialize(List.of()));insert.executeUpdate();
+            }
+            try (var insert=c.prepareStatement("INSERT INTO receipt_history VALUES(?,?,?,?,?)")) {
+                insert.setObject(1,history.historyId());insert.setObject(2,id);insert.setLong(3,record.revision());
+                insert.setObject(4,history.request().requestId());insert.setBytes(5,PostgresRepositorySupport.serialize(history));insert.executeUpdate();
+            }
         }
     }
 
@@ -84,8 +101,8 @@ class ReceiptFinancialProjectionTest {
     @Test void restartableBackfillPreservesBytesAndNeverDuplicatesEvents() throws Exception {
         var plain=new PostgresTransactionRepository(database.connections);
         UUID a=UUID.randomUUID(),b=UUID.randomUUID(),run=UUID.randomUUID();
-        plain.save(a,transaction(),null,List.of(),request(),new ReceiptCreateCtx("test"));
-        plain.save(b,transaction(),null,List.of(),request(),new ReceiptCreateCtx("test"));
+        seedLegacy(a,transaction());
+        seedLegacy(b,transaction());
         byte[] original=source(a);
         var first=ReceiptFinancialProjection.backfill(database.connections,database.target(),run,1);
         assertEquals(1,first.projectedRevisions());assertFalse(first.complete());
@@ -96,7 +113,7 @@ class ReceiptFinancialProjectionTest {
         assertArrayEquals(original,source(a));
         var restarted=PostgresTransactionRepository.withFinancialProjections(database.connections,database.target());
         assertEquals(n("0.00126"),restarted.findById(a).orElseThrow().transaction().getReceiptTotals().getFinalTotal());
-        plain.save(UUID.randomUUID(),transaction(),null,List.of(),request(),new ReceiptCreateCtx("test"));
+        seedLegacy(UUID.randomUUID(),transaction());
         assertThrows(IllegalStateException.class,()->ReceiptFinancialProjection.backfill(database.connections,database.target(),run,10));
     }
 
@@ -181,7 +198,7 @@ class ReceiptFinancialProjectionTest {
 
     @Test void failedBackfillLeavesNoPartialRevisionAndCanResume() throws Exception {
         UUID id=UUID.randomUUID(),run=UUID.randomUUID();
-        new PostgresTransactionRepository(database.connections).save(id,transaction(),null,List.of(),request(),new ReceiptCreateCtx("test"));
+        seedLegacy(id,transaction());
         byte[] original=source(id);
         try(var c=database.connections.open();var s=c.createStatement()) {
             s.execute("ALTER TABLE receipt_purchase_lines ADD CONSTRAINT backfill_failure CHECK(product_name <> 'Free product')");
@@ -196,7 +213,7 @@ class ReceiptFinancialProjectionTest {
 
     @Test void concurrentBackfillsCreateOnlyOneProjectionPerSourceRevision() throws Exception {
         UUID id=UUID.randomUUID();
-        new PostgresTransactionRepository(database.connections).save(id,transaction(),null,List.of(),request(),new ReceiptCreateCtx("test"));
+        seedLegacy(id,transaction());
         try(var executor=java.util.concurrent.Executors.newFixedThreadPool(2)) {
             var tasks=new ArrayList<java.util.concurrent.Future<ReceiptFinancialProjection.BackfillResult>>();
             for(int i=0;i<2;i++)tasks.add(executor.submit(()->ReceiptFinancialProjection.backfill(database.connections,database.target(),UUID.randomUUID(),10)));
@@ -234,9 +251,12 @@ class ReceiptFinancialProjectionTest {
         assertEquals(0,new BigDecimal("0.01").compareTo((BigDecimal)value("SELECT difference FROM receipt_financial_revisions")));
     }
 
-    @Test void normalSchemaInstallDoesNotEnableExperimentalTables() throws Exception {
-        try(var other=new PostgresTestDatabase();var c=other.connections.open();var s=c.createStatement();var r=s.executeQuery("SELECT to_regclass('receipt_financial_revisions')")) {
-            assertTrue(r.next());assertNull(r.getObject(1));
-        }
+    @Test void normalSchemaInstallAutomaticallyCreatesAndBackfillsProjections() throws Exception {
+        UUID id=UUID.randomUUID();seedLegacy(id,transaction());byte[] original=source(id);
+        try(var c=database.connections.open()){PostgresSchema.apply(c);PostgresSchema.apply(c);}
+        assertEquals(1,count("receipt_financial_revisions"));assertArrayEquals(original,source(id));
+        new PostgresTransactionRepository(database.connections).save(UUID.randomUUID(),transaction(),null,List.of(),request(),new ReceiptCreateCtx("test"));
+        assertEquals(2,count("receipt_financial_revisions"));
+        assertEquals(1L,((Number)value("SELECT count(*) FROM schema_version WHERE version=12")).longValue());
     }
 }

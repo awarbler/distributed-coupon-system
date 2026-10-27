@@ -21,6 +21,19 @@ public final class PostgresConnectionFactory {
         return DriverManager.getConnection(url, user, password);
     }
 
+    /** Validates the endpoint before connecting, then verifies server identity and privileges. */
+    Connection openDisposable(DisposablePostgresTarget target) throws SQLException {
+        target.verifyUrl(url, user);
+        Connection connection = open();
+        try {
+            target.verifyServer(connection);
+            return connection;
+        } catch (SQLException | RuntimeException failure) {
+            try { connection.close(); } catch (SQLException close) { failure.addSuppressed(close); }
+            throw failure;
+        }
+    }
+
     public static PostgresConnectionFactory fromEnvironment() {
         return new PostgresConnectionFactory(
                 environment("COUPON_POSTGRES_URL"),

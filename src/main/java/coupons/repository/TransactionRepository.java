@@ -124,6 +124,24 @@ import coupons.CouponTransaction;
 public interface TransactionRepository {
 
     /**
+     * Creates a receipt and consumes its selected coupons, shopping plan and saved
+     * draft atomically. Revisions identify the exact linked records reviewed by
+     * the caller. Implementations without linked storage reject the operation
+     * before writing anything; they must never fall back to a partial save.
+     * An unlinked creation uses the ordinary save contract.
+     */
+    default ReceiptWriteResult saveWithDraft(UUID transactionId, CouponTransaction transaction,
+            ReceiptMeta metadata, List<ReceiptEvidence> newEvidence, ReceiptWriteRequest request,
+            ReceiptCreateCtx context, List<UUID> couponIds, UUID planId, long planRevision,
+            UUID draftId, long draftRevision) {
+        java.util.Objects.requireNonNull(couponIds, "Coupon IDs cannot be null.");
+        if (!couponIds.isEmpty() || planId != null || draftId != null) {
+            throw new IllegalArgumentException("This repository does not support atomic linked receipt creation.");
+        }
+        return save(transactionId, transaction, metadata, newEvidence, request, context);
+    }
+
+    /**
      * Creates a receipt at revision one with ACTIVE status.
      *
      * <p>Commits the receipt, redemptions, creation history, and request

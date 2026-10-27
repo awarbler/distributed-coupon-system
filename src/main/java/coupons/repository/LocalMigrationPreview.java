@@ -66,7 +66,7 @@ public final class LocalMigrationPreview {
         for(var entry:Map.of("Shopping plans","shopping_plan_current","Clipped coupons","clipped_coupon_current","Inventory balances","inventory_current","Rebate claims","rebate_current","Advertised deals","deal_current").entrySet())
             rows.add(new Category(entry.getKey(),0,count(c,entry.getValue()),0,0,0));
         long nonempty=0;try(var p=c.prepareStatement("SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename <> 'schema_version'");var r=p.executeQuery()) {
-            while(r.next())nonempty+=count(c,r.getString(1));
+            while(r.next())nonempty+=LocalToPostgresMigration.destinationRows(c,r.getString(1));
         }
         boolean replay=false;try(var p=c.prepareStatement("SELECT 1 FROM local_migrations WHERE source_digest=?")) {p.setString(1,source.digest);try(var r=p.executeQuery()){replay=r.next();}}
         for(int i=0;i<rows.size();i++) {var row=rows.get(i);if(row.conflicts()>0)warnings.add(row.name()+": "+row.conflicts()+" existing identities differ; do not overwrite.");}

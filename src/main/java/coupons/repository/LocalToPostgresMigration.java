@@ -22,25 +22,39 @@ public final class LocalToPostgresMigration {
     }
     public static Report migrateCopy(Path copy,Path protectedSource,PostgresConnectionFactory target,
             String expectedDatabase)throws IOException,SQLException {
+        return migrateCopy(copy, protectedSource, target, expectedDatabase, null);
+    }
+    /** Experimental import into verified disposable storage only. */
+    public static Report migrateCopyWithFinancials(Path copy, Path protectedSource, PostgresConnectionFactory target,
+            DisposablePostgresTarget disposable) throws Exception {
+        ReceiptFinancialProjection.install(target, disposable);
+        return migrateCopy(copy, protectedSource, target, "distributed_coupons_test", disposable);
+    }
+    private static Report migrateCopy(Path copy,Path protectedSource,PostgresConnectionFactory target,
+            String expectedDatabase, DisposablePostgresTarget disposable)throws IOException,SQLException {
         var source=LocalMigrationSource.read(copy,protectedSource);
         Objects.requireNonNull(target);
         if(expectedDatabase==null||expectedDatabase.isBlank())throw new IllegalArgumentException("Explicit expected database name is required.");
-        try(Connection c=target.open()) {
+        try(Connection c=disposable == null ? target.open() : disposable.open(target)) {
             c.setAutoCommit(false);
             try {
                 checkDatabase(c,expectedDatabase);
+                if (disposable != null) ReceiptFinancialProjection.verifyInstalled(c, disposable);
                 PostgresReceiptState.lock(c);
                 PostgresSchema.apply(c); // PostgreSQL DDL and import roll back together on failure.
                 // Exclude concurrent API, ledger, plan and coupon writes, not only receipt writes.
                 lockTables(c);
                 if(alreadyImported(c,source)) {
-                    validateArchive(c,source);source.verifyUnchanged();c.commit();return report(source,true);
+                    validateArchive(c,source);source.verifyUnchanged();
+                    if (disposable != null) ReceiptFinancialProjection.appendAll(c, disposable);
+                    c.commit();return report(source,true);
                 }
-                requireEmpty(c);
+                requireEmpty(c, disposable);
                 PostgresReceiptState.insert(c,source.state);
                 execute(c,"INSERT INTO local_migrations(source_digest,checkpoint,manifest) VALUES (?,?,?)",source.digest,source.checkpoint,serialize(manifest(source)));
                 for(var file:source.files)execute(c,"INSERT INTO local_migration_files(source_digest,relative_path,sha256,content) VALUES (?,?,?,?)",source.digest,file.path(),file.sha256(),file.bytes());
                 validateRecords(c,source);validateArchive(c,source);source.verifyUnchanged();
+                if (disposable != null) ReceiptFinancialProjection.appendAll(c, disposable);
                 c.commit();return report(source,false);
             }catch(Exception e) {
                 try{c.rollback();}catch(SQLException rollback){e.addSuppressed(rollback);}
@@ -74,11 +88,22 @@ public final class LocalToPostgresMigration {
         List<String> tables=tables(c);if(tables.isEmpty())throw new IllegalStateException("No migration schema is selected.");
         try(var p=c.createStatement()){p.execute("LOCK TABLE "+String.join(",",tables.stream().map(LocalToPostgresMigration::identifier).toList())+" IN EXCLUSIVE MODE");}
     }
-    private static void requireEmpty(Connection c)throws SQLException {
+    /** Count user state while allowing only the exact schema-created defaults. */
+    static long destinationRows(Connection c, String table) throws SQLException {
+        if (table.equals("schema_version")) return 0;
+        String filter = table.equals("inventory_receipt_settings")
+                ? " WHERE NOT (singleton = true AND enabled = false)" : "";
+        try (var statement = c.createStatement();
+                var rows = statement.executeQuery("SELECT count(*) FROM " + identifier(table) + filter)) {
+            rows.next();
+            return rows.getLong(1);
+        }
+    }
+    private static void requireEmpty(Connection c, DisposablePostgresTarget disposable)throws SQLException {
         for(String table:tables(c)) {
-            if(table.equals("schema_version"))continue;
-            try(var p=c.createStatement();var r=p.executeQuery("SELECT EXISTS (SELECT 1 FROM "+identifier(table)+")")) {
-                r.next();if(r.getBoolean(1))throw new IllegalStateException("Destination must be empty; refusing to merge or overwrite table "+table+".");
+            if (disposable != null && table.equals("receipt_financial_projection_config")) continue;
+            if(destinationRows(c, table) > 0) {
+                throw new IllegalStateException("Destination must be empty; refusing to merge or overwrite table " + table + ".");
             }
         }
     }

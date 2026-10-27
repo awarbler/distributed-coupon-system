@@ -23,26 +23,16 @@ class PostgresMilestone2RepositoryTest {
     private PostgresDealRepository deals;
     private PostgresRebateRepository rebates;
 
+    private PostgresTestDatabase testDatabase;
+
+    @org.junit.jupiter.api.AfterEach void releaseTestDatabase() throws Exception {
+        if (testDatabase != null) testDatabase.close();
+    }
+
     @BeforeEach
     void setUp() throws Exception {
-        Assumptions.assumeTrue(System.getenv("COUPON_POSTGRES_TEST_URL") != null
-                        && System.getenv("COUPON_POSTGRES_TEST_USER") != null
-                        && System.getenv("COUPON_POSTGRES_TEST_PASSWORD") != null,
-                "Dedicated PostgreSQL integration variables are required.");
-        connections = new PostgresConnectionFactory(
-                System.getenv("COUPON_POSTGRES_TEST_URL"),
-                System.getenv("COUPON_POSTGRES_TEST_USER"),
-                System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
-        try (Connection c = connections.open()) {
-            PostgresSchema.apply(c);
-            c.createStatement().executeUpdate("""
-                    TRUNCATE rebate_history_sources, rebate_history, rebate_sources,
-                        rebate_current, deal_history_sources, deal_history, deal_sources,
-                        deal_current, inventory_history, inventory_current, source_artifacts,
-                        rr_usage_links, reward_removals, gift_card_promotions, receipt_write_requests, receipt_history, register_reward_redemptions,
-                        receipt_evidence, register_rewards, receipt_current
-                    """);
-        }
+        testDatabase = new PostgresTestDatabase();
+        connections = testDatabase.connections;
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         artifacts = new PostgresSourceArtifactRepository(connections);
         inventory = new PostgresInventoryRepository(connections, clock);

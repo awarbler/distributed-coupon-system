@@ -32,13 +32,20 @@ class LocalToPostgresMigrationTest {
         String url=System.getenv("COUPON_POSTGRES_TEST_URL");
         Assumptions.assumeTrue(url!=null&&System.getenv("COUPON_POSTGRES_TEST_USER")!=null&&System.getenv("COUPON_POSTGRES_TEST_PASSWORD")!=null);
         admin=new PostgresConnectionFactory(url,System.getenv("COUPON_POSTGRES_TEST_USER"),System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
-        schema="migration_test_"+UUID.randomUUID().toString().replace("-","");
-        try(var c=admin.open()){try(var r=c.createStatement().executeQuery("SELECT current_database()")){r.next();database=r.getString(1);}c.createStatement().execute("CREATE SCHEMA "+schema);}
+        String candidate="migration_test_"+UUID.randomUUID().toString().replace("-","");
+        try(var c=PostgresTestDatabase.targetForSchema(candidate).open(admin)) {
+            try(var r=c.createStatement().executeQuery("SELECT current_database()")) {
+                r.next(); database=r.getString(1);
+                assertEquals("distributed_coupons_test", database, "Refusing a non-test database before schema changes");
+            }
+            schema=candidate;
+            c.createStatement().execute("CREATE SCHEMA "+schema);
+        }
         db=new PostgresConnectionFactory(url+(url.contains("?")?"&":"?")+"currentSchema="+schema,System.getenv("COUPON_POSTGRES_TEST_USER"),System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
-        try(var c=db.open()){PostgresSchema.apply(c);}
+        try(var c=PostgresTestDatabase.targetForSchema(schema).open(db)){PostgresTestDatabase.targetForSchema(schema).verifySchema(c);PostgresSchema.apply(c);}
         fixture();
     }
-    @AfterEach void cleanup()throws Exception {if(admin!=null&&schema!=null)try(var c=admin.open()){c.createStatement().execute("DROP SCHEMA "+schema+" CASCADE");}}
+    @AfterEach void cleanup()throws Exception {if(admin!=null&&schema!=null)try(var c=PostgresTestDatabase.targetForSchema(schema).open(admin)){c.createStatement().execute("DROP SCHEMA "+schema+" CASCADE");}}
     void fixture()throws Exception {
         original=Files.createDirectory(temp.resolve("protected-original"));Files.writeString(original.resolve("sentinel"),"do not touch");
         copy=Files.createDirectory(temp.resolve("independent-copy"));
@@ -239,6 +246,19 @@ class LocalToPostgresMigrationTest {
         repo.update(id,4,source.receipts().get(id).contents().toTransaction(),new ReceiptMeta("Walgreens","unique-source-receipt",metadata.purchasedAt(),null),List.of(),request(),approval);
         source=store.state;writeSource(source);
     }
+    @Test void enabledInventorySettingIsUserStateAndCannotBeOverwritten() throws Exception {
+        distinguishCurrentReceiptMetadata();
+        try (var c = db.open()) {
+            c.createStatement().executeUpdate("UPDATE inventory_receipt_settings SET enabled=true WHERE singleton=true");
+        }
+        assertTrue(LocalMigrationPreview.inspect(copy, original, db, database).importDecision().contains("destination is populated"));
+        assertThrows(IllegalStateException.class, () -> migrate());
+        assertEquals(0, count("receipt_current"));
+        try (var c = db.open(); var rows = c.createStatement().executeQuery("SELECT enabled FROM inventory_receipt_settings")) {
+            assertTrue(rows.next()); assertTrue(rows.getBoolean(1));
+        }
+    }
+
     @Test void previewDistinguishesEmptyDestinationFromUnsupportedMerge()throws Exception {
         distinguishCurrentReceiptMetadata();
         assertTrue(LocalMigrationPreview.inspect(copy,original,db,database).importDecision().startsWith("ELIGIBLE FOR APPROVAL"));

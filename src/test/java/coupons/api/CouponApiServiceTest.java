@@ -18,13 +18,14 @@ class CouponApiServiceTest {
     final Plans plans = new Plans();
     final Coupons coupons = new Coupons();
     HttpServer server;
+    PostgresTestDatabase testDatabase;
     final HttpClient client = HttpClient.newHttpClient();
     String base;
     @BeforeEach void start() throws Exception {
         server = new CouponApiService(receipts,plans,coupons,"reader","owner").start(0);
         base="http://127.0.0.1:"+server.getAddress().getPort();
     }
-    @AfterEach void stop() throws Exception { server.stop(0); client.close(); receipts.close(); }
+    @AfterEach void stop() throws Exception { server.stop(0); client.close(); receipts.close(); if(testDatabase!=null)testDatabase.close(); }
     HttpResponse<String> call(String method,String path,String token,String body,String key,String revision) throws Exception {
         var b=HttpRequest.newBuilder(URI.create(base+path)).timeout(Duration.ofSeconds(10));
         if(token!=null)b.header("Authorization","Bearer "+token);
@@ -128,15 +129,41 @@ class CouponApiServiceTest {
         assertTrue(receipts.findById(id).isEmpty());
     }
 
+    @Test void linkedReceiptCreationDispatchesThroughInjectedInterface() throws Exception {
+        server.stop(0);
+        var dispatched = new java.util.concurrent.atomic.AtomicBoolean();
+        TransactionRepository substitute = (TransactionRepository) java.lang.reflect.Proxy.newProxyInstance(
+                TransactionRepository.class.getClassLoader(), new Class<?>[]{TransactionRepository.class},
+                (proxy, method, args) -> {
+                    if (method.getName().equals("saveWithDraft")) {
+                        dispatched.set(true);
+                        throw new IllegalArgumentException("Injected linked repository reached");
+                    }
+                    try { return method.invoke(receipts, args); }
+                    catch (java.lang.reflect.InvocationTargetException failure) { throw failure.getCause(); }
+                });
+        server = new CouponApiService(substitute, plans, coupons, "reader", "owner").start(0);
+        base = "http://127.0.0.1:" + server.getAddress().getPort();
+        UUID id = UUID.randomUUID();
+        var fields = ReceiptInputTest.draft(id);
+        fields.put("shoppingPlanId", UUID.randomUUID()); fields.put("shoppingPlanRevision", "1");
+        var preview = call("POST", "/receipts/preview", "owner", Json.object(fields), null, null);
+        fields.put("reviewToken", Json.parseObject(preview.body()).get("reviewToken"));
+        fields.put("acknowledgeDifference", true);
+        var result = call("POST", "/receipts", "owner", Json.object(fields), "interface-dispatch", null);
+        assertEquals(400, result.statusCode(), result.body());
+        assertTrue(dispatched.get(), result.body());
+        assertTrue(receipts.findById(id).isEmpty());
+    }
+
     @Test void clearedPurchaseDateRemainsUnknownWhilePrintedTimeIsPreserved() {
         var fields=new java.util.LinkedHashMap<String,Object>();fields.put("transactionId",UUID.randomUUID().toString());fields.put("retailer","Store");fields.put("purchaseDate",null);fields.put("printedTime","14:07");fields.put("purchaseChannel","IN_STORE");fields.put("tax","0");fields.put("reportedTotal","1");fields.put("items",List.of(Map.of("lineItemId",UUID.randomUUID().toString(),"description","Product","regularUnitPrice","1","unitPrice","1","quantity",1)));
         var input=ReceiptInput.read(Json.parseObject(Json.object(fields)));assertNull(input.metadata().purchasedAt());assertNull(input.transaction().getObservations().purchaseDate());assertEquals("14:07",input.transaction().getObservations().printedTime());
     }
 
     @Test void draftHttpEndpointsAreOwnerOnlyAndIdempotent() throws Exception {
-        org.junit.jupiter.api.Assumptions.assumeTrue(System.getenv("COUPON_POSTGRES_TEST_URL")!=null);
-        var connections=new PostgresConnectionFactory(System.getenv("COUPON_POSTGRES_TEST_URL"),System.getenv("COUPON_POSTGRES_TEST_USER"),System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
-        try(var c=connections.open()){PostgresSchema.apply(c);}
+        testDatabase = new PostgresTestDatabase();
+        var connections = testDatabase.connections;
         var repository=new PostgresTransactionRepository(connections);
         var platform=new PostgresPlatformRepository(connections);
         var service=new coupons.api.CouponApiService(repository,new PostgresShoppingPlanRepository(connections),new PostgresClippedCouponRepository(connections),"reader","owner",new PostgresApiRequestStore(connections),platform);

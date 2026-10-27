@@ -22,6 +22,27 @@ class InMemoryTransactionRepositoryTest {
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
     private static final ReceiptCreateCtx ACTOR = new ReceiptCreateCtx("test-user");
 
+    @Test void unsupportedLinkedSaveDoesNotPublishReceiptEvidenceOrHistory() throws Exception {
+        try (var memory = new InMemoryTransactionRepository()) {
+            TransactionRepository storage = memory;
+            for (int kind = 0; kind < 3; kind++) {
+                UUID id = UUID.randomUUID();
+                var evidence = new ReceiptEvidence(UUID.randomUUID(), id, "text/plain", new byte[]{1});
+                var couponIds = kind == 0 ? List.of(UUID.randomUUID()) : List.<UUID>of();
+                UUID plan = kind == 1 ? UUID.randomUUID() : null;
+                UUID draft = kind == 2 ? id : null;
+                assertThrows(IllegalArgumentException.class, () -> storage.saveWithDraft(id,
+                        transaction(), null, List.of(evidence), request(), ACTOR, couponIds, plan, 1, draft, 1));
+                assertTrue(storage.findById(id).isEmpty());
+                assertTrue(memory.history().findByReceiptId(id).isEmpty());
+                assertTrue(memory.evidence().findById(evidence.getEvidenceId()).isEmpty());
+            }
+            UUID id = UUID.randomUUID();
+            storage.saveWithDraft(id, transaction(), null, List.of(), request(), ACTOR, List.of(), null, 0, null, 0);
+            assertTrue(storage.findById(id).isPresent());
+        }
+    }
+
     /** Creates a new logical write identity. */
     private ReceiptWriteRequest request() {
         return new ReceiptWriteRequest(UUID.randomUUID(), NOW);

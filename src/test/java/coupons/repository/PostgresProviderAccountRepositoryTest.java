@@ -13,18 +13,15 @@ class PostgresProviderAccountRepositoryTest {
     private static final Instant NOW = Instant.parse("2026-10-19T12:00:00Z");
     private PostgresProviderAccountRepository repository;
 
+    private PostgresTestDatabase testDatabase;
+
+    @org.junit.jupiter.api.AfterEach void releaseTestDatabase() throws Exception {
+        if (testDatabase != null) testDatabase.close();
+    }
+
     @BeforeEach void setUp() throws Exception {
-        Assumptions.assumeTrue(System.getenv("COUPON_POSTGRES_TEST_URL") != null
-                && System.getenv("COUPON_POSTGRES_TEST_USER") != null
-                && System.getenv("COUPON_POSTGRES_TEST_PASSWORD") != null);
-        var factory = new PostgresConnectionFactory(System.getenv("COUPON_POSTGRES_TEST_URL"),
-                System.getenv("COUPON_POSTGRES_TEST_USER"), System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
-        try (Connection c = factory.open()) {
-            PostgresSchema.apply(c);
-            c.createStatement().executeUpdate(
-                    "TRUNCATE provider_redemptions_history, provider_redemptions_current, " +
-                    "provider_account_adjustments, provider_account_openings");
-        }
+        testDatabase = new PostgresTestDatabase();
+        var factory = testDatabase.connections;
         repository = new PostgresProviderAccountRepository(factory);
     }
 

@@ -222,9 +222,8 @@ public final class CouponApiService implements HttpHandler {
                 var writeRequest=new ReceiptWriteRequest(UUID.randomUUID(),java.time.Instant.now());
                 var source=Json.parseObject(request);var planId=optional(source,"shoppingPlanId");var draftId=optional(source,"receiptDraftId");if(draftId!=null&&!input.id().toString().equals(draftId))throw new ApiError(400,"Saved draft must match this receipt.");
                 var result = draftId!=null || planId!=null || !selected.isEmpty() ?
-                    receipts instanceof coupons.repository.PostgresTransactionRepository postgres?postgres.saveWithDraft(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal),selected,planId==null?null:UUID.fromString(planId),planId==null?0:Long.parseLong(required(source,"shoppingPlanRevision")),draftId==null?null:UUID.fromString(draftId),draftId==null?0:Long.parseLong(required(source,"receiptDraftRevision"))):null:
+                    receipts.saveWithDraft(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal),selected,planId==null?null:UUID.fromString(planId),planId==null?0:Long.parseLong(required(source,"shoppingPlanRevision")),draftId==null?null:UUID.fromString(draftId),draftId==null?0:Long.parseLong(required(source,"receiptDraftRevision"))):
                     receipts.save(input.id(),input.transaction(),input.metadata(),input.evidence(),writeRequest,new ReceiptCreateCtx(principal));
-                if(result==null)throw new ApiError(400,"Linked shopping plans and coupons require PostgreSQL.");
                 e.getResponseHeaders().set("Location", "/receipts/" + input.id());
                 return json(201, result);
             });

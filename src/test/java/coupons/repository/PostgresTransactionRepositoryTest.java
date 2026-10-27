@@ -32,24 +32,24 @@ class PostgresTransactionRepositoryTest {
     private PostgresConnectionFactory connections;
     private PostgresTransactionRepository repository;
 
+    private PostgresTestDatabase testDatabase;
+
+    @org.junit.jupiter.api.AfterEach void releaseTestDatabase() throws Exception {
+        if (testDatabase != null) testDatabase.close();
+    }
+
+    boolean financialsEnabled() { return false; }
+
     @BeforeEach
     void setUp() throws Exception {
-        Assumptions.assumeTrue(System.getenv("COUPON_POSTGRES_TEST_URL") != null,
-                "PostgreSQL integration tests require an explicitly configured test database.");
-        connections = new PostgresConnectionFactory(
-                System.getenv("COUPON_POSTGRES_TEST_URL"),
-                System.getenv("COUPON_POSTGRES_TEST_USER"),
-                System.getenv("COUPON_POSTGRES_TEST_PASSWORD"));
-        try (Connection connection = connections.open()) {
-            PostgresSchema.apply(connection);
-            connection.createStatement().executeUpdate("TRUNCATE receipt_draft_history,receipt_drafts,inventory_receipt_lines,inventory_receipt_products,inventory_history,inventory_current");
-            connection.createStatement().executeUpdate("UPDATE inventory_receipt_settings SET enabled=false WHERE singleton=true");
-            connection.createStatement().executeUpdate(
-                    "TRUNCATE rr_usage_links, reward_removals, gift_card_promotions, receipt_write_requests, receipt_history, register_reward_redemptions, "
-                            + "receipt_evidence, register_rewards, receipt_current");
-        }
+        testDatabase = new PostgresTestDatabase();
+        connections = testDatabase.connections;
         repository = new PostgresTransactionRepository(connections,
                 Clock.fixed(NOW, ZoneOffset.UTC));
+        if (financialsEnabled()) {
+            ReceiptFinancialProjection.install(connections, testDatabase.target());
+            repository = PostgresTransactionRepository.withFinancialProjections(connections, testDatabase.target());
+        }
     }
 
     @Test void receiptNumbersNotTimesIdentifyConcurrentPurchases() throws Exception {
@@ -126,7 +126,64 @@ class PostgresTransactionRepositoryTest {
                 new ReceiptCreateCtx("test-user")));
     }
 
-    @Test void selectedCouponsCommitWithReceiptAndFailureRollsEverythingBack() {
+    @Test void linkedReceiptCouponPlanAndDraftCommitOrRollBackTogether() {
+        UUID id = UUID.randomUUID(), planId = UUID.randomUUID(), couponId = UUID.randomUUID();
+        var plans = new PostgresShoppingPlanRepository(connections);
+        var clipped = new PostgresClippedCouponRepository(connections);
+        var platform = new PostgresPlatformRepository(connections);
+        var day = java.time.LocalDate.of(2026, 10, 18);
+        plans.save(new ShoppingPlan(planId, "Atomic links", null, day, List.of(), 1), "test");
+        clipped.save(new ClippedCoupon(couponId, "Synthetic", null,
+                new Coupon("Coupon", BigDecimal.ONE, 1, CouponType.MANUFACTURER, null),
+                CouponStatus.CLIPPED, day, 1), "test");
+        platform.saveReceiptDraft(id, 0, "{}", "Synthetic", null, "test");
+        var tx = transaction();
+        tx.addAppliedCoupon(new CouponApplied(couponId, "Coupon", BigDecimal.ONE, List.of(), 1, true));
+        tx.setObservations(new ReceiptObservations(day, null, List.of(), List.of(), null, List.of(), java.util.Map.of()));
+        var meta = new ReceiptMeta("Synthetic", id.toString(), null, null);
+        var evidence = new ReceiptEvidence(UUID.randomUUID(), id, "text/plain", new byte[]{1});
+        var request = new ReceiptWriteRequest(UUID.randomUUID(), NOW);
+        TransactionRepository storage = repository;
+        assertThrows(java.util.ConcurrentModificationException.class, () -> storage.saveWithDraft(
+                id, tx, meta, List.of(evidence), request, new ReceiptCreateCtx("test"), List.of(couponId), planId, 2, id, 1));
+        assertTrue(repository.findById(id).isEmpty());
+        assertTrue(repository.findHistoryByReceiptId(id).isEmpty());
+        assertTrue(repository.findEvidenceById(evidence.getEvidenceId()).isEmpty());
+        assertEquals(CouponStatus.CLIPPED, clipped.findById(couponId).orElseThrow().status());
+        assertNotNull(platform.receiptDraft(id, "test"));
+        assertNull(plans.findById(planId).orElseThrow().purchasedReceiptId());
+        var result = storage.saveWithDraft(id, tx, meta, List.of(evidence), request,
+                new ReceiptCreateCtx("test"), List.of(couponId), planId, 1, id, 1);
+        assertEquals(result, storage.saveWithDraft(id, tx, meta, List.of(evidence), request,
+                new ReceiptCreateCtx("test"), List.of(couponId), planId, 1, id, 1));
+        assertEquals(CouponStatus.APPLIED, clipped.findById(couponId).orElseThrow().status());
+        assertEquals(id, plans.findById(planId).orElseThrow().purchasedReceiptId());
+        assertThrows(java.util.NoSuchElementException.class, () -> platform.receiptDraft(id, "test"));
+        assertEquals(1, repository.findHistoryByReceiptId(id).size());
+    }
+
+    @Test void retryIdentityIncludesCouponSelectionAndRejectsDuplicatesBeforeWriting() {
+        UUID id = UUID.randomUUID(), coupon = UUID.randomUUID();
+        var tx = transaction();
+        var request = new ReceiptWriteRequest(UUID.randomUUID(), NOW);
+        TransactionRepository storage = repository;
+        var result = storage.saveWithDraft(id, tx, null, List.of(), request,
+                new ReceiptCreateCtx("test"), List.of(), null, 0, null, 0);
+        assertEquals(result, storage.saveWithDraft(id, tx, null, List.of(), request,
+                new ReceiptCreateCtx("test"), List.of(), null, 0, null, 0));
+        var conflict = assertThrows(IllegalArgumentException.class, () -> storage.saveWithDraft(
+                id, tx, null, List.of(), request, new ReceiptCreateCtx("test"),
+                List.of(coupon), null, 0, null, 0));
+        assertTrue(conflict.getMessage().contains("different contents"));
+        UUID rejected = UUID.randomUUID();
+        assertThrows(IllegalArgumentException.class, () -> storage.saveWithDraft(rejected, tx,
+                null, List.of(), new ReceiptWriteRequest(UUID.randomUUID(), NOW),
+                new ReceiptCreateCtx("test"), List.of(coupon, coupon), null, 0, null, 0));
+        assertTrue(repository.findById(rejected).isEmpty());
+        assertEquals(1, repository.findHistoryByReceiptId(id).size());
+    }
+
+    @Test void selectedCouponsCommitWithReceiptAndFailureRollsEverythingBack() throws Exception {
         var couponRepo=new PostgresClippedCouponRepository(connections);
         var coupon=new coupons.ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new coupons.Coupon("Synthetic coupon",BigDecimal.ONE,1,coupons.CouponType.MANUFACTURER,java.time.LocalDate.of(2026,10,31)),coupons.CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
         couponRepo.save(coupon,"test");
@@ -134,7 +191,26 @@ class PostgresTransactionRepositoryTest {
         tx.addAppliedCoupon(new coupons.CouponApplied(coupon.couponId(),"Synthetic coupon",BigDecimal.ONE,List.of(),1,true));
         tx.setObservations(new coupons.ReceiptObservations(java.time.LocalDate.of(2026,10,18),null,List.of(),List.of(),null,List.of(),java.util.Map.of()));
         var metadata=new ReceiptMeta("Synthetic",id.toString(),null,null);
-        repository.saveWithCoupons(id,tx,metadata,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(coupon.couponId()));
+        var request = new ReceiptWriteRequest(UUID.randomUUID(),NOW);
+        var result = repository.saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of(coupon.couponId()));
+        assertEquals(result, new PostgresTransactionRepository(connections).saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of(coupon.couponId())));
+        assertThrows(IllegalArgumentException.class, () -> repository.saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of()));
+        assertEquals(1, repository.findHistoryByReceiptId(id).size());
+        // Simulate a pre-extension serialized request, whose new couponIds field is absent/null.
+        try (var connection = connections.open()) {
+            var type = Class.forName("coupons.repository.PostgresTransactionRepository$CreatePayload");
+            var constructor = java.util.Arrays.stream(type.getDeclaredConstructors())
+                    .filter(c -> c.getParameterCount() == 11).findFirst().orElseThrow();
+            constructor.setAccessible(true);
+            var legacy = constructor.newInstance(id, ReceiptSnapshot.from(tx), metadata, List.of(),
+                    request, new ReceiptCreateCtx("test"), null, 0L, null, 0L, null);
+            try (var update = connection.prepareStatement("UPDATE receipt_write_requests SET payload=? WHERE request_id=?")) {
+                update.setBytes(1, PostgresRepositorySupport.serialize(legacy));
+                update.setObject(2, request.requestId()); update.executeUpdate();
+            }
+        }
+        assertEquals(result, repository.saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of(coupon.couponId())));
+        assertThrows(IllegalArgumentException.class, () -> repository.saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of()));
         assertEquals(coupons.CouponStatus.APPLIED,couponRepo.findById(coupon.couponId()).orElseThrow().status());
         var failed=UUID.randomUUID();
         assertThrows(IllegalArgumentException.class,()->repository.saveWithCoupons(failed,tx,metadata,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(coupon.couponId())));

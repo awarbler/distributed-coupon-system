@@ -40,14 +40,27 @@ import java.util.UUID;
 public final class PostgresTransactionRepository implements TransactionRepository, AutoCloseable {
     private final PostgresConnectionFactory connections;
     private final Clock clock;
+    private final DisposablePostgresTarget financialTarget;
 
     public PostgresTransactionRepository(PostgresConnectionFactory connections) {
         this(connections, Clock.systemUTC());
     }
 
     public PostgresTransactionRepository(PostgresConnectionFactory connections, Clock clock) {
+        this(connections, clock, null);
+    }
+
+    private PostgresTransactionRepository(PostgresConnectionFactory connections, Clock clock, DisposablePostgresTarget target) {
+        this.financialTarget = target;
         this.connections = Objects.requireNonNull(connections);
         this.clock = Objects.requireNonNull(clock);
+    }
+
+    /** Explicit test-only opt-in; never selected by production environment configuration. */
+    public static PostgresTransactionRepository withFinancialProjections(PostgresConnectionFactory connections,
+            DisposablePostgresTarget target) throws SQLException {
+        try (var connection = target.open(connections)) { ReceiptFinancialProjection.verifyInstalled(connection, target); }
+        return new PostgresTransactionRepository(connections, Clock.systemUTC(), target);
     }
 
     public static PostgresTransactionRepository fromEnvironment() {
@@ -75,8 +88,11 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             List<ReceiptEvidence> newEvidence,ReceiptWriteRequest request,ReceiptCreateCtx context,List<UUID> couponIds,UUID planId,long planRevision) {
         return saveWithDraft(id,transaction,metadata,newEvidence,request,context,couponIds,planId,planRevision,null,0);
     }
+    @Override
     public ReceiptWriteResult saveWithDraft(UUID id,CouponTransaction transaction,ReceiptMeta metadata,
             List<ReceiptEvidence> newEvidence,ReceiptWriteRequest request,ReceiptCreateCtx context,List<UUID> couponIds,UUID planId,long planRevision,UUID draftId,long draftRevision) {
+        couponIds = List.copyOf(couponIds).stream().sorted().toList();
+        if (new HashSet<>(couponIds).size() != couponIds.size()) throw new IllegalArgumentException("Select each clipped coupon once.");
         if(draftId!=null&&!id.equals(draftId))throw new IllegalArgumentException("Draft must match receipt.");
         Objects.requireNonNull(id);
         Objects.requireNonNull(transaction);
@@ -88,7 +104,8 @@ public final class PostgresTransactionRepository implements TransactionRepositor
         ReceiptRecord candidate = new ReceiptRecord(id, ReceiptStatus.ACTIVE, 1,
                 snapshot.toTransaction(), metadata, evidence.stream().map(ReceiptEvidence::getEvidenceId).toList());
         ReceiptValidator.validate(candidate);
-        CreatePayload payload = new CreatePayload(id, snapshot, metadata, evidence, request, context,planId,planRevision,draftId,draftRevision);
+        CreatePayload payload = new CreatePayload(id, snapshot, metadata, evidence, request, context,planId,planRevision,draftId,draftRevision,couponIds);
+        final var selectedCouponIds = couponIds;
         return inTransaction(connection -> {
             ReceiptWriteResult retry = matchingRequest(connection, request.requestId(), payload);
             if (retry != null) return retry;
@@ -123,7 +140,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             PostgresReceiptState.promotions(connection, promotions);
             insertEvidence(connection, evidence);
             insertRedemptions(connection, snapshot.registerRewardRedemptions());
-            for(var couponId:couponIds.stream().sorted().toList()) {
+            for(var couponId:selectedCouponIds) {
                 ClippedCoupon coupon;
                 try(var p=connection.prepareStatement("SELECT payload FROM clipped_coupon_current WHERE coupon_id=? FOR UPDATE")){p.setObject(1,couponId);try(var r=p.executeQuery()){if(!r.next())throw new IllegalArgumentException("Selected coupon no longer exists.");coupon=PostgresRepositorySupport.deserialize(r.getBytes(1),ClippedCoupon.class);}}
                 if(snapshot.appliedCoupons().stream().noneMatch(x->x.getApplicationId().equals(couponId)))throw new IllegalArgumentException("Selected coupon must have one receipt discount.");
@@ -492,6 +509,8 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             statement.setLong(3, history.after().revision()); statement.setObject(4, history.request().requestId());
             statement.setBytes(5, serialize(history)); statement.executeUpdate();
         }
+        if (financialTarget != null) ReceiptFinancialProjection.append(connection, financialTarget,
+                history.after().transactionId(), history.after().revision());
         PostgresInventoryRepository.syncReceipts(connection,history.createCtx()!=null?history.createCtx().requestedBy():history.changeCtx().requestedBy());
     }
 
@@ -510,12 +529,25 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             statement.setObject(1, requestId);
             try (ResultSet rows = statement.executeQuery()) {
                 if (!rows.next()) return null;
-                if (!Objects.equals(deserialize(rows.getBytes(1), Object.class), payload)) {
+                if (!Objects.equals(restoreCouponSelection(connection, deserialize(rows.getBytes(1), Object.class)), payload)) {
                     throw new IllegalArgumentException("Request ID was used with different contents.");
                 }
                 return deserialize(rows.getBytes(2), ReceiptWriteResult.class);
             }
         }
+    }
+
+    /** Recover pre-extension retry identity from durable coupon redemption links. */
+    private Object restoreCouponSelection(Connection connection, Object stored) throws SQLException {
+        if (!(stored instanceof CreatePayload original) || original.couponIds() != null) return stored;
+        var ids = new ArrayList<UUID>();
+        try (var query = connection.prepareStatement("SELECT coupon_id FROM clipped_coupon_redemptions WHERE transaction_id=?")) {
+            query.setObject(1, original.id());
+            try (var rows = query.executeQuery()) { while (rows.next()) ids.add((UUID) rows.getObject(1)); }
+        }
+        return new CreatePayload(original.id(), original.snapshot(), original.metadata(), original.evidence(),
+                original.request(), original.context(), original.planId(), original.planRevision(),
+                original.draftId(), original.draftRevision(), ids.stream().sorted().toList());
     }
 
     private void ensureEvidenceAvailable(Connection connection, List<ReceiptEvidence> evidence) throws SQLException {
@@ -695,10 +727,11 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     }
 
     private <T> T inTransaction(SqlWork<T> work) {
-        try (Connection connection = connections.open()) {
+        try (Connection connection = financialTarget == null ? connections.open() : financialTarget.open(connections)) {
             boolean original = connection.getAutoCommit();
             connection.setAutoCommit(false);
             try {
+                if (financialTarget != null) ReceiptFinancialProjection.verifyInstalled(connection, financialTarget);
                 PostgresReceiptState.lock(connection);
                 T result = work.run(connection);
                 connection.commit();
@@ -722,9 +755,13 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     private enum SetMode { NEW, UPDATE }
 
     private record CreatePayload(UUID id, ReceiptSnapshot snapshot, ReceiptMeta metadata,
-            List<ReceiptEvidence> evidence, ReceiptWriteRequest request, ReceiptCreateCtx context,UUID planId,long planRevision,UUID draftId,long draftRevision)
+            List<ReceiptEvidence> evidence, ReceiptWriteRequest request, ReceiptCreateCtx context,UUID planId,long planRevision,UUID draftId,long draftRevision,List<UUID> couponIds)
             implements java.io.Serializable {
-        CreatePayload(UUID id,ReceiptSnapshot snapshot,ReceiptMeta metadata,List<ReceiptEvidence> evidence,ReceiptWriteRequest request,ReceiptCreateCtx context){this(id,snapshot,metadata,evidence,request,context,null,0,null,0);}
+        CreatePayload {
+            // Null identifies legacy serialized requests; matching restores their durable links.
+            couponIds = couponIds == null ? null : List.copyOf(couponIds);
+        }
+        CreatePayload(UUID id,ReceiptSnapshot snapshot,ReceiptMeta metadata,List<ReceiptEvidence> evidence,ReceiptWriteRequest request,ReceiptCreateCtx context){this(id,snapshot,metadata,evidence,request,context,null,0,null,0,List.of());}
     }
     private record UpdatePayload(UUID id, long expectedRevision, ReceiptSnapshot snapshot,
             ReceiptMeta metadata, List<ReceiptEvidence> evidence, ReceiptWriteRequest request,

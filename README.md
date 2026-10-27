@@ -58,6 +58,11 @@ Changes should include appropriate tests and updates to the relevant canonical
 documentation. The current specification revision is listed in the documentation
 index.
 
-## License
+License
 
-A license file has not been added to this repository.
+This project is proprietary software. No open-source license has been granted.
+
+Copyright © 2026 Anita Woodford. All rights reserved.
+
+No permission is granted to copy, modify, distribute, sublicense, or commercially use the original source code or documentation without prior written authorization from the copyright holder, except as permitted by applicable law.
+

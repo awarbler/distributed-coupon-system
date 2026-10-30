@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.InventoryBalance;
+import coupons.inventory.InventoryBalance;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;

@@ -1,6 +1,10 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.promotions.BenefitKind;
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.PromotionType;
+import coupons.receipts.TransactionCalculator;
+
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;

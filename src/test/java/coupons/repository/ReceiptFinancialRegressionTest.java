@@ -1,7 +1,18 @@
 package coupons.repository;
 
-import coupons.*;
-import coupons.ReceiptObservations.WalgreensCashAccount;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponApplied;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
+import coupons.receipts.TransactionCalculator;
+
+import coupons.receipts.ReceiptObservations.WalgreensCashAccount;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;

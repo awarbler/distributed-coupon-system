@@ -14,7 +14,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.UUID;
 
-import coupons.ShoppingEstimate;
+import coupons.shopping.ShoppingEstimate;
 
 public final class PostgresPlanCheckoutRepository {
 

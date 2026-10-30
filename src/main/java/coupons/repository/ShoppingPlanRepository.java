@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.ShoppingPlan;
+import coupons.shopping.ShoppingPlan;
 import java.util.*;
 
 public interface ShoppingPlanRepository {

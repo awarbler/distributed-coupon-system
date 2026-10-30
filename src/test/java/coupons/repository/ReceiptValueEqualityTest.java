@@ -1,7 +1,7 @@
 package coupons.repository;
 
-import coupons.CouponApplied;
-import coupons.RegisterRewardRedemption;
+import coupons.promotions.CouponApplied;
+import coupons.rewards.RegisterRewardRedemption;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;

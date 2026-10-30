@@ -1,7 +1,9 @@
 package coupons.api;
 
-import coupons.*;
-import coupons.ReceiptObservations.*;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.ReceiptObservations;
+
+import coupons.receipts.ReceiptObservations.*;
 import coupons.repository.*;
 import java.time.Instant;
 import java.util.*;

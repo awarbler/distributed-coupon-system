@@ -1,7 +1,7 @@
 package coupons.repository;
 
-import coupons.RegisterReward;
-import coupons.RegisterRewardRedemption;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
 import java.sql.*;
 import java.time.Clock;
 import java.util.*;

@@ -41,6 +41,28 @@ planned area of the project.
 | `frontend/` | Browser application and frontend tests |
 | `docs/` | Specifications, reference guides, and operating documentation |
 
+The Java backend is organized by feature under `src/main/java/coupons/`:
+
+```text
+coupons/
+  receipts/       Receipt models, calculations, import and reports
+  shopping/       Shopping plans, purchases and estimates
+  rewards/        Rewards, balances and reward display
+  promotions/     Coupons, promotions, deals and rebates
+  inventory/      Inventory models
+  api/            HTTP routes, request validation and authentication
+  repository/     Persistence and database transaction ownership
+  cli/            Console entry points, input and draft recovery
+  distributed/    Distributed simulation and demonstration
+  serialization/  Compatibility with existing saved Java objects
+```
+
+Java tests mirror these packages under `src/test/java/coupons/`. The HTTP
+entry point remains `coupons.api.CouponApiServer`; the console entry points
+are `coupons.cli.ReceiptEntryApp` and `coupons.cli.CouponTrackerApp`.
+Existing saved objects retain their original serialization names so package
+organization does not require a data migration.
+
 ## Documentation
 
 Specifications, design references, and operating guides are maintained locally

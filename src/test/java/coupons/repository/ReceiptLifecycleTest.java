@@ -1,7 +1,20 @@
 package coupons.repository;
 
-import coupons.*;
-import coupons.ReceiptObservations.*;
+import coupons.promotions.BenefitKind;
+import coupons.promotions.CouponApplied;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
+
+import coupons.receipts.ReceiptObservations.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.math.BigDecimal;

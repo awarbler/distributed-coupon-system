@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.ReceiptTotals;
+import coupons.receipts.ReceiptTotals;
 import java.math.BigDecimal;
 import java.util.Objects;
 

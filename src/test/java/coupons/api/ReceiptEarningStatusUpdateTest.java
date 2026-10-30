@@ -1,6 +1,10 @@
 package coupons.api;
-import coupons.*;
-import coupons.ReceiptObservations.*;
+
+import coupons.promotions.BenefitKind;
+import coupons.promotions.Coupon;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations.*;
 import java.math.BigDecimal;
 import java.util.*;
 import org.junit.jupiter.api.Test;

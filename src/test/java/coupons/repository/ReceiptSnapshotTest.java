@@ -1,6 +1,19 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponApplied;
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.CouponType;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.promotions.Promotion;
+import coupons.promotions.PromotionType;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterRewardRedemption;
+import coupons.rewards.Reward;
+import coupons.rewards.RewardType;
+
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;

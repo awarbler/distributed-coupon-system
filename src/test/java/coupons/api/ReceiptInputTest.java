@@ -1,6 +1,21 @@
 package coupons.api;
 
-import coupons.*;
+import coupons.promotions.BenefitKind;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponApplied;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.promotions.PromotionQualification;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.receipts.ReceiptWorksheetData;
+import coupons.receipts.SavingsReport;
+import coupons.receipts.TransactionCalculator;
+
 import coupons.repository.*;
 import java.math.BigDecimal;
 import java.util.*;

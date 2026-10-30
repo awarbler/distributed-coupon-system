@@ -1,6 +1,12 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.promotions.ClippedCoupon;
+import coupons.receipts.PaymentType;
+import coupons.promotions.PromotionQualification;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.SavingsReport;
+import coupons.receipts.TransactionCalculator;
+
 import java.math.BigDecimal;
 import java.util.*;
 
@@ -35,7 +41,7 @@ public final class ReceiptViews {
                 "reportedDue", tx.getReceiptTotals().getFinalTotal(), "difference", calculator.calculateReceiptDifference(tx), "savings", savings(List.of(new ReceiptRecord(receipt.transactionId(), ReceiptStatus.ACTIVE, receipt.revision(), tx, receipt.metadata(), receipt.evidenceIds()))));
     }
 
-    static Map<String,Object> discountBreakdown(coupons.CouponTransaction tx) {
+    static Map<String,Object> discountBreakdown(coupons.receipts.CouponTransaction tx) {
         Map<String,BigDecimal> totals = new LinkedHashMap<>();
         for (String name : List.of("salePromotions","manufacturerCoupons","storeDiscounts","unclassified")) totals.put(name,BigDecimal.ZERO);
         for (var discount : tx.getAppliedCoupons()) {

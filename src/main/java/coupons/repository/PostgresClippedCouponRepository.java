@@ -1,6 +1,9 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.promotions.ClippedCoupon;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponStatus;
+
 import java.sql.*;
 import java.time.LocalDate;
 import java.util.*;

@@ -1,6 +1,10 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
+
 import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.*;

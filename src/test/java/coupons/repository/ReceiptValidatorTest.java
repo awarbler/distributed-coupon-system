@@ -1,5 +1,7 @@
 package coupons.repository;
 
+import coupons.rewards.Reward;
+
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
@@ -9,9 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 
-import coupons.CouponTransaction;
-import coupons.ReceiptTotals;
-import coupons.RegisterRewardRedemption;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterRewardRedemption;
 
 /**
  * Tests receipt-ID consistency for Register Reward redemptions.

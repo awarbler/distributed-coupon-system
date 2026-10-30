@@ -1,6 +1,11 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptPromotionLink;
+import coupons.receipts.ReceiptTotals;
+
 import java.math.BigDecimal;
 import java.time.*;
 import java.nio.file.*;
@@ -130,7 +135,7 @@ class AtomicReceiptPromotionTest {
             try(var output=new java.io.ObjectOutputStream(buffer)) { output.writeObject(legacy); }
             bytes=buffer.toByteArray();
         }
-        try(var input=new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytes))) {
+        try(var input=coupons.serialization.LegacyObjectStreams.input(new java.io.ByteArrayInputStream(bytes))) {
             var restored=(ReceiptObservations)input.readObject();
             assertTrue(restored.promotionLinks().isEmpty());
             assertEquals(new BigDecimal("247.75"),restored.walgreensCash().startingBalance());

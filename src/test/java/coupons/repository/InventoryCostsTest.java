@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.CouponApplied;
+import coupons.promotions.CouponApplied;
 import java.math.BigDecimal;
 import java.util.*;
 import org.junit.jupiter.api.Test;

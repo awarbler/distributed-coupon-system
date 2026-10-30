@@ -1,6 +1,9 @@
 package coupons.api;
 
-import coupons.*;
+import coupons.promotions.AdvertisedDeal;
+import coupons.promotions.DealTerms;
+import coupons.promotions.SourceArtifact;
+
 import java.time.*;
 import java.util.*;
 import static coupons.api.Json.*;

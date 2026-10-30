@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.AdvertisedDeal;
+import coupons.promotions.AdvertisedDeal;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;

@@ -4,8 +4,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.Objects;
 
-import coupons.Coupon;
-import coupons.CouponType;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponType;
 
 /**
  * Preserves the coupon-offer fields currently supported by Coupon.

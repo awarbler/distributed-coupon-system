@@ -1,8 +1,10 @@
 package coupons.repository;
 
-import coupons.BenefitKind;
-import coupons.ReceiptObservations.EventKind;
-import coupons.ReceiptObservations.EventReference;
+import coupons.promotions.Coupon;
+
+import coupons.promotions.BenefitKind;
+import coupons.receipts.ReceiptObservations.EventKind;
+import coupons.receipts.ReceiptObservations.EventReference;
 import java.math.BigDecimal;
 import java.util.Currency;
 import java.util.HashMap;
@@ -67,7 +69,7 @@ public final class ReceiptObservationValidator {
      */
     public static void validate(ReceiptSnapshot contents, List<UUID> evidenceIds) {
         var worksheet=contents.observations().worksheet();
-        var earningIds=contents.observations().earnings().stream().map(coupons.ReceiptObservations.Earning::earningId).collect(java.util.stream.Collectors.toSet());
+        var earningIds=contents.observations().earnings().stream().map(coupons.receipts.ReceiptObservations.Earning::earningId).collect(java.util.stream.Collectors.toSet());
         if(!earningIds.containsAll(worksheet.earningGroups().keySet())) throw new IllegalArgumentException("Worksheet references a missing earning.");
         var useIds=new HashSet<UUID>(); contents.payments().forEach(p->useIds.add(p.paymentId()));
         contents.registerRewardRedemptions().forEach(r->useIds.add(r.getRedemptionId())); contents.observations().unidentifiedRR().forEach(r->useIds.add(r.eventId()));
@@ -76,7 +78,7 @@ public final class ReceiptObservationValidator {
             if(!useIds.contains(entry.getKey()) || !itemIds.containsAll(entry.getValue().lineIds())) throw new IllegalArgumentException("Worksheet usage references a missing payment or product.");
             var payment=contents.payments().stream().filter(p->p.paymentId().equals(entry.getKey())).findFirst();
             if(entry.getValue().originalUnits()!=null && (payment.isEmpty() || payment.orElseThrow().accountName()==null)) throw new IllegalArgumentException("Point usage requires a named provider payment.");
-            if(entry.getValue().checkoutDeduction() && (payment.isEmpty() || payment.orElseThrow().paymentType()!=coupons.PaymentType.OTHER || payment.orElseThrow().accountName()==null)) throw new IllegalArgumentException("Additional checkout deduction requires a named Other payment.");
+            if(entry.getValue().checkoutDeduction() && (payment.isEmpty() || payment.orElseThrow().paymentType()!=coupons.receipts.PaymentType.OTHER || payment.orElseThrow().accountName()==null)) throw new IllegalArgumentException("Additional checkout deduction requires a named Other payment.");
         }
         var ids = new HashSet<UUID>();
         var lines = new HashSet<UUID>();

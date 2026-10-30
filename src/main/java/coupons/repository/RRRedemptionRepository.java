@@ -1,10 +1,12 @@
 package coupons.repository;
 
+import coupons.rewards.Reward;
+
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import coupons.RegisterRewardRedemption;
+import coupons.rewards.RegisterRewardRedemption;
 
 /**
  * Defines database-independent lookup of Register Reward redemptions.

@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.RebateClaim;
+import coupons.promotions.RebateClaim;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;

@@ -1,8 +1,10 @@
 package coupons.repository;
 
+import coupons.rewards.Reward;
+
 import java.util.Objects;
 
-import coupons.RegisterRewardRedemption;
+import coupons.rewards.RegisterRewardRedemption;
 
 /**
  * Validates relationships between a receipt and its contents.
@@ -33,7 +35,7 @@ public final class ReceiptValidator {
      */
     public static void validate(ReceiptRecord receipt) {
         Objects.requireNonNull(receipt, "Receipt cannot be null.");
-        coupons.ReceiptIssues.validateOnlineRule(receipt.metadata(),receipt.transaction());
+        coupons.receipts.ReceiptIssues.validateOnlineRule(receipt.metadata(),receipt.transaction());
         ReceiptObservationValidator.validate(
                 ReceiptSnapshot.from(receipt.transaction()), receipt.evidenceIds());
 

@@ -1,6 +1,6 @@
 package coupons.api;
 
-import coupons.ShoppingPlan;
+import coupons.shopping.ShoppingPlan;
 import java.math.BigDecimal;
 import java.util.*;
 import java.util.regex.Matcher;

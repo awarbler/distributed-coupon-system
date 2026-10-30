@@ -1,5 +1,5 @@
 package coupons.api;
-import coupons.ReceiptObservations.Earning;
+import coupons.receipts.ReceiptObservations.Earning;
 import java.util.*;
 /** Reject identical new observations, without changing legacy historical earnings. */
 final class ReceiptEarningRules {

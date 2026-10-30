@@ -2,7 +2,7 @@ package coupons.repository;
 
 import java.util.Objects;
 
-import coupons.Reward;
+import coupons.rewards.Reward;
 
 /**
  * Preserves values from the legacy generic Reward model.

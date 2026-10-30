@@ -1,10 +1,12 @@
 package coupons.repository;
 
+import coupons.rewards.Reward;
+
 import java.util.Objects;
 
-import coupons.Promotion;
-import coupons.PromotionType;
-import coupons.RewardType;
+import coupons.promotions.Promotion;
+import coupons.promotions.PromotionType;
+import coupons.rewards.RewardType;
 
 /**
  * Preserves the current reward-earning promotion model.

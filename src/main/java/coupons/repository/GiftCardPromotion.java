@@ -50,10 +50,10 @@ public record GiftCardPromotion(UUID id, String name, BigDecimal threshold, BigD
         if (date == null || date.isBefore(start) || date.isAfter(end)) return Optional.empty();
         var lines = tx.getPurchaseItems().stream().filter(line -> contribution.lineIds().contains(line.getLineItemId())).toList();
         if (lines.size() != contribution.lineIds().size()) return Optional.empty();
-        if(contribution.afterCoupons()&&contribution.reviewedAmount()!=null&&contribution.reviewedAmount().compareTo(lines.stream().map(coupons.PurchaseItem::calculateLineTotal).reduce(BigDecimal.ZERO,BigDecimal::add))>0)return Optional.empty();
+        if(contribution.afterCoupons()&&contribution.reviewedAmount()!=null&&contribution.reviewedAmount().compareTo(lines.stream().map(coupons.receipts.PurchaseItem::calculateLineTotal).reduce(BigDecimal.ZERO,BigDecimal::add))>0)return Optional.empty();
         if (contribution.afterCoupons() || basis == Basis.REVIEWED_ELIGIBLE_AMOUNT) return receipt.revision() == contribution.reviewedRevision()
                 ? Optional.ofNullable(contribution.reviewedAmount()) : Optional.empty();
-        return Optional.ofNullable(coupons.QualifyingSpend.calculate(tx, contribution.lineIds()).amount());
+        return Optional.ofNullable(coupons.promotions.QualifyingSpend.calculate(tx, contribution.lineIds()).amount());
     }
 
     public String token() {

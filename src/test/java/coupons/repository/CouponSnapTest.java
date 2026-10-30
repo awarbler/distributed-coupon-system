@@ -10,8 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 
-import coupons.Coupon;
-import coupons.CouponType;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponType;
 
 /**
  * Tests immutable capture of coupon-offer values.

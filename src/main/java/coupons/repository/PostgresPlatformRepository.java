@@ -1,6 +1,15 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.promotions.BenefitKind;
+import coupons.receipts.PaymentType;
+import coupons.promotions.Promotion;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardLabel;
+import coupons.rewards.Reward;
+import coupons.shopping.ShoppingPlan;
+
 import java.time.*;
 import java.util.*;
 
@@ -21,19 +30,19 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.UUID;
 
-import coupons.AdvertisedDeal;
-import coupons.ProviderBalanceSummary.AccountActivityView;
-import coupons.ClippedCoupon;
-import coupons.PlannedPurchase;
-import coupons.PromotionQualification;
-import coupons.ProviderBalanceSummary;
-import coupons.PurchaseItem;
-import coupons.ReceiptTimeInput;
-import coupons.ReceiptWorksheetReport;
-import coupons.SavingsReport;
-import coupons.ShoppingEstimate;
-import coupons.SourceArtifact;
-import coupons.TransactionCalculator;
+import coupons.promotions.AdvertisedDeal;
+import coupons.rewards.ProviderBalanceSummary.AccountActivityView;
+import coupons.promotions.ClippedCoupon;
+import coupons.shopping.PlannedPurchase;
+import coupons.promotions.PromotionQualification;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptTimeInput;
+import coupons.receipts.ReceiptWorksheetReport;
+import coupons.receipts.SavingsReport;
+import coupons.shopping.ShoppingEstimate;
+import coupons.promotions.SourceArtifact;
+import coupons.receipts.TransactionCalculator;
 import static coupons.repository.PostgresRepositorySupport.transaction;
 
 /**
@@ -77,12 +86,12 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             boolean stale=receipt==null;
             var eligible=c.reviewedAmount()!=null?Optional.of(c.reviewedAmount()):receipt==null?Optional.<BigDecimal>empty():rebate.eligibleAmount(c,receipt);
             if(eligible.isPresent())total=total.add(eligible.get());else complete=false;
-            var selected=receipt==null?List.<coupons.PurchaseItem>of():receipt.transaction().getPurchaseItems().stream().filter(l->c.lineIds().contains(l.getLineItemId())).toList();
-            int quantity=selected.stream().mapToInt(coupons.PurchaseItem::getQuantity).sum();
-            BigDecimal saleTotal=selected.stream().map(coupons.PurchaseItem::calculateLineTotal).reduce(BigDecimal.ZERO,BigDecimal::add);
-            var discounts=receipt==null?List.<coupons.CouponApplied>of():receipt.transaction().getAppliedCoupons().stream().filter(a->a.isWholeReceipt()||a.getLineItemIds().stream().anyMatch(c.lineIds()::contains)).toList();
+            var selected=receipt==null?List.<coupons.receipts.PurchaseItem>of():receipt.transaction().getPurchaseItems().stream().filter(l->c.lineIds().contains(l.getLineItemId())).toList();
+            int quantity=selected.stream().mapToInt(coupons.receipts.PurchaseItem::getQuantity).sum();
+            BigDecimal saleTotal=selected.stream().map(coupons.receipts.PurchaseItem::calculateLineTotal).reduce(BigDecimal.ZERO,BigDecimal::add);
+            var discounts=receipt==null?List.<coupons.promotions.CouponApplied>of():receipt.transaction().getAppliedCoupons().stream().filter(a->a.isWholeReceipt()||a.getLineItemIds().stream().anyMatch(c.lineIds()::contains)).toList();
             boolean allocated=discounts.stream().allMatch(a->!a.isWholeReceipt()&&c.lineIds().containsAll(a.getLineItemIds()));
-            BigDecimal couponTotal=allocated?discounts.stream().map(coupons.CouponApplied::getAppliedAmount).reduce(BigDecimal.ZERO,BigDecimal::add):null;
+            BigDecimal couponTotal=allocated?discounts.stream().map(coupons.promotions.CouponApplied::getAppliedAmount).reduce(BigDecimal.ZERO,BigDecimal::add):null;
             contributions.put(entry.getKey(),fields("quantity",quantity,"saleTotal",saleTotal,"couponTotal",couponTotal,"receiptDate",receipt==null?null:receipt.transaction().getObservations().purchaseDate(),"receiptId",c.receiptId(),"reviewedRevision",c.reviewedRevision(),"lineIds",c.lineIds(),"reviewedAmount",c.reviewedAmount(),"note",c.note(),"afterCoupons",c.afterCoupons(),"submitted",c.submitted(),"submittedOn",c.submittedOn(),"submissionReference",c.submissionReference(),"token",GiftCardPromotion.contributionToken(c),"needsReview",stale||eligible.isEmpty(),"eligibleAmount",eligible.orElse(null)));
         }
         return fields("token",rebate.token(),"id",rebate.id(),"name",rebate.name(),"threshold",rebate.threshold(),"giftCardValue",rebate.giftCardValue(),"start",rebate.start(),"end",rebate.end(),"basis",rebate.basis(),"terms",rebate.terms(),"status",rebate.status(),"contributions",contributions,"eligibleTotal",total,"progressComplete",complete);
@@ -117,10 +126,10 @@ public final class PostgresPlatformRepository implements PlatformRepository {
     }
     public void deleteStandaloneReward(UUID id,String actor){new PostgresReceiptSupplementRepository(db).voidRecordedReward(id,"Owner deleted reward",actor);}
     public boolean earningMatched(UUID earning) {return PostgresRepositorySupport.transaction(db,c->PostgresReceiptState.read(c).rrUsageLinks().values().stream().anyMatch(link->link.sourceId().equals(earning)));}
-    public void addStandaloneReward(coupons.RegisterReward reward) {new PostgresReceiptSupplementRepository(db).addStandaloneReward(reward);}
+    public void addStandaloneReward(coupons.rewards.RegisterReward reward) {new PostgresReceiptSupplementRepository(db).addStandaloneReward(reward);}
     public List<Map<String,Object>> standaloneRewards() {
         return transaction(db,c->{c.setReadOnly(true);var state=PostgresReceiptState.read(c);
-            return state.rewards().values().stream().filter(r->r.getEarnedReceiptId()==null && !state.rewardVoids().containsKey(r.getRewardId())).sorted(Comparator.comparing(coupons.RegisterReward::getSourceDescription).thenComparing(coupons.RegisterReward::getRewardId)).map(r->fields("rewardId",r.getRewardId(),"description",r.getSourceDescription(),"amount",r.getFaceValue(),"earnedDate",r.getEarnedDate(),"expirationDate",r.getExpirationDate(),"status",state.rrUsageLinks().containsKey(r.getRewardId())?"MATCHED":state.redemptions().values().stream().anyMatch(use->use.getRewardId().equals(r.getRewardId()))?"REDEEMED":state.balances().adjustments().stream().anyMatch(a->a.unavailable()&&r.getRewardId().equals(a.unavailableSource())&&!a.date().isAfter(LocalDate.now()))?"UNAVAILABLE":"UNUSED")).toList();});
+            return state.rewards().values().stream().filter(r->r.getEarnedReceiptId()==null && !state.rewardVoids().containsKey(r.getRewardId())).sorted(Comparator.comparing(coupons.rewards.RegisterReward::getSourceDescription).thenComparing(coupons.rewards.RegisterReward::getRewardId)).map(r->fields("rewardId",r.getRewardId(),"description",r.getSourceDescription(),"amount",r.getFaceValue(),"earnedDate",r.getEarnedDate(),"expirationDate",r.getExpirationDate(),"status",state.rrUsageLinks().containsKey(r.getRewardId())?"MATCHED":state.redemptions().values().stream().anyMatch(use->use.getRewardId().equals(r.getRewardId()))?"REDEEMED":state.balances().adjustments().stream().anyMatch(a->a.unavailable()&&r.getRewardId().equals(a.unavailableSource())&&!a.date().isAfter(LocalDate.now()))?"UNAVAILABLE":"UNUSED")).toList();});
     }
     public RRUsageLink addStandaloneMatch(UUID receipt,long revision,UUID use,UUID reward,String description,LocalDate earned,LocalDate expires,String reason,String actor) {
         return new PostgresReceiptSupplementRepository(db).addStandaloneMatch(receipt,revision,use,reward,description,earned,expires,reason,actor);
@@ -328,7 +337,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
     }
 
     /** Classify only explicit recorded discount kinds; never infer from labels. */
-    static Map<String,Object> discountBreakdown(coupons.CouponTransaction tx) {
+    static Map<String,Object> discountBreakdown(coupons.receipts.CouponTransaction tx) {
         return ReceiptViews.discountBreakdown(tx);
     }
 

@@ -1,10 +1,13 @@
 package coupons.repository;
 
+import coupons.promotions.Coupon;
+import coupons.rewards.Reward;
+
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import coupons.CouponTransaction;
+import coupons.receipts.CouponTransaction;
 
 /**
  * Defines database-independent storage operations for receipts.

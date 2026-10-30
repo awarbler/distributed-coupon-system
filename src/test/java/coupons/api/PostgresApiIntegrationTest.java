@@ -34,26 +34,26 @@ import org.junit.jupiter.api.Test;
 
 import com.sun.net.httpserver.HttpServer;
 
-import coupons.AdvertisedDeal;
-import coupons.BenefitKind;
-import coupons.ClippedCoupon;
-import coupons.Coupon;
-import coupons.CouponApplied;
-import coupons.CouponStatus;
-import coupons.CouponTransaction;
-import coupons.CouponType;
-import coupons.DealTerms;
-import coupons.InventoryBalance;
-import coupons.ProviderBalanceSummary;
-import coupons.PurchaseItem;
-import coupons.RebateBenefit;
-import coupons.RebateStatus;
-import coupons.ReceiptObservations;
-import coupons.ReceiptTotals;
-import coupons.SavingsReport;
-import coupons.ShoppingPlan;
-import coupons.SourceArtifact;
-import coupons.TransactionCalculator;
+import coupons.promotions.AdvertisedDeal;
+import coupons.promotions.BenefitKind;
+import coupons.promotions.ClippedCoupon;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponApplied;
+import coupons.promotions.CouponStatus;
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.CouponType;
+import coupons.promotions.DealTerms;
+import coupons.inventory.InventoryBalance;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.receipts.SavingsReport;
+import coupons.shopping.ShoppingPlan;
+import coupons.promotions.SourceArtifact;
+import coupons.receipts.TransactionCalculator;
 import coupons.repository.GiftCardPromotion;
 import coupons.repository.PostgresClippedCouponRepository;
 import coupons.repository.PostgresConnectionFactory;
@@ -149,7 +149,7 @@ class PostgresApiIntegrationTest {
             assertEquals(result.body(),call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-"+provider,null).body());
             var report=new PostgresPlatformRepository(db).account(provider,LocalDate.of(2026,10,1),LocalDate.of(2026,10,31));
             assertEquals(new BigDecimal("10.0000"),report.get("earned"));assertEquals(0,((BigDecimal)report.get("spent")).signum());assertEquals(new BigDecimal("3.0000"),report.get("unavailable"));
-            var end=(coupons.ProviderBalanceSummary.Balance)report.get("ending");assertEquals(0,end.endUsd().compareTo(new BigDecimal("7")));
+            var end=(coupons.rewards.ProviderBalanceSummary.Balance)report.get("ending");assertEquals(0,end.endUsd().compareTo(new BigDecimal("7")));
             if(points){assertEquals(0,end.endPoints().compareTo(new BigDecimal("700")));assertEquals(new BigDecimal("300"),report.get("unavailablePoints"));assertEquals(0,((BigDecimal)report.get("spentPoints")).signum());}
             assertEquals(new BigDecimal("10.0000"),accounts.findAdjustment(source).orElseThrow().usdChange());
             body.put("eventId",UUID.randomUUID());assertEquals(400,call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-duplicate-"+provider,null).statusCode());
@@ -177,7 +177,7 @@ class PostgresApiIntegrationTest {
     @Test void standaloneUnavailableRRAndFailedAdjustmentKeepAuditableOriginals()throws Exception{
         var accounts=new coupons.repository.PostgresProviderAccountRepository(db);var platform=new PostgresPlatformRepository(db);
         accounts.saveOpening(new coupons.repository.AccountOpening(UUID.randomUUID(),LocalDate.of(2026,10,1),"Register Rewards",null,new BigDecimal("5"),true,"USD","Test RR opening",Instant.now()));
-        UUID coupon=UUID.randomUUID(),event=UUID.randomUUID();platform.addStandaloneReward(new coupons.RegisterReward(coupon,"Existing paper RR",new BigDecimal("5"),LocalDate.of(2026,10,1),null,null));
+        UUID coupon=UUID.randomUUID(),event=UUID.randomUUID();platform.addStandaloneReward(new coupons.rewards.RegisterReward(coupon,"Existing paper RR",new BigDecimal("5"),LocalDate.of(2026,10,1),null,null));
         try(var c=db.open();var statement=c.createStatement()){statement.execute("CREATE FUNCTION reject_loss() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$");statement.execute("CREATE TRIGGER reject_loss BEFORE INSERT ON provider_account_adjustments FOR EACH ROW EXECUTE FUNCTION reject_loss()");}
         assertThrows(IllegalStateException.class,()->platform.recordUnavailableReward(event,"Register Rewards",LocalDate.of(2026,10,10),new BigDecimal("5"),null,coupon,"LOST","Paper coupon lost","test"));
         assertTrue(accounts.findAdjustments("Register Rewards").isEmpty());assertEquals("UNUSED",platform.standaloneRewards().getFirst().get("status"));

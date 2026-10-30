@@ -1,14 +1,25 @@
 package coupons.repository;
 
+import coupons.promotions.AdvertisedDeal;
+import coupons.promotions.ClippedCoupon;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponApplied;
+import coupons.promotions.CouponStatus;
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.CouponType;
+import coupons.shopping.PlannedPurchase;
+import coupons.receipts.ReceiptObservations;
+import coupons.shopping.ShoppingPlan;
+import coupons.promotions.SourceArtifact;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import coupons.*;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import coupons.PurchaseItem;
-import coupons.ReceiptTotals;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptTotals;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.time.Clock;
@@ -111,11 +122,11 @@ class PostgresTransactionRepositoryTest {
     void rejectsPromotionLinksReferencingMissingPrograms() {
         var transaction = transaction();
         var observations = transaction.getObservations();
-        transaction.setObservations(new coupons.ReceiptObservations(
+        transaction.setObservations(new coupons.receipts.ReceiptObservations(
                 observations.purchaseDate(), observations.printedTime(), observations.earnings(),
                 observations.unidentifiedRR(), observations.walgreensCash(), observations.savings(),
                 observations.discountKinds(), observations.receiptSavingValuePercent(),
-                List.of(new coupons.ReceiptPromotionLink(UUID.randomUUID(),
+                List.of(new coupons.receipts.ReceiptPromotionLink(UUID.randomUUID(),
                         List.of(transaction.getPurchaseItems().get(0).getLineItemId()),
                         BigDecimal.ONE, "reviewed", NOW)), observations.worksheet(),
                 observations.footerStatus()));
@@ -185,11 +196,11 @@ class PostgresTransactionRepositoryTest {
 
     @Test void selectedCouponsCommitWithReceiptAndFailureRollsEverythingBack() throws Exception {
         var couponRepo=new PostgresClippedCouponRepository(connections);
-        var coupon=new coupons.ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new coupons.Coupon("Synthetic coupon",BigDecimal.ONE,1,coupons.CouponType.MANUFACTURER,java.time.LocalDate.of(2026,10,31)),coupons.CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
+        var coupon=new coupons.promotions.ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new coupons.promotions.Coupon("Synthetic coupon",BigDecimal.ONE,1,coupons.promotions.CouponType.MANUFACTURER,java.time.LocalDate.of(2026,10,31)),coupons.promotions.CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
         couponRepo.save(coupon,"test");
         var id=UUID.randomUUID();var tx=transaction();
-        tx.addAppliedCoupon(new coupons.CouponApplied(coupon.couponId(),"Synthetic coupon",BigDecimal.ONE,List.of(),1,true));
-        tx.setObservations(new coupons.ReceiptObservations(java.time.LocalDate.of(2026,10,18),null,List.of(),List.of(),null,List.of(),java.util.Map.of()));
+        tx.addAppliedCoupon(new coupons.promotions.CouponApplied(coupon.couponId(),"Synthetic coupon",BigDecimal.ONE,List.of(),1,true));
+        tx.setObservations(new coupons.receipts.ReceiptObservations(java.time.LocalDate.of(2026,10,18),null,List.of(),List.of(),null,List.of(),java.util.Map.of()));
         var metadata=new ReceiptMeta("Synthetic",id.toString(),null,null);
         var request = new ReceiptWriteRequest(UUID.randomUUID(),NOW);
         var result = repository.saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of(coupon.couponId()));
@@ -211,16 +222,16 @@ class PostgresTransactionRepositoryTest {
         }
         assertEquals(result, repository.saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of(coupon.couponId())));
         assertThrows(IllegalArgumentException.class, () -> repository.saveWithCoupons(id,tx,metadata,List.of(),request,new ReceiptCreateCtx("test"),List.of()));
-        assertEquals(coupons.CouponStatus.APPLIED,couponRepo.findById(coupon.couponId()).orElseThrow().status());
+        assertEquals(coupons.promotions.CouponStatus.APPLIED,couponRepo.findById(coupon.couponId()).orElseThrow().status());
         var failed=UUID.randomUUID();
         assertThrows(IllegalArgumentException.class,()->repository.saveWithCoupons(failed,tx,metadata,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(coupon.couponId())));
         assertTrue(repository.findById(failed).isEmpty());
-        var expired=new coupons.ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new coupons.Coupon("Expired",BigDecimal.ONE,1,coupons.CouponType.MANUFACTURER,java.time.LocalDate.of(2026,10,2)),coupons.CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
+        var expired=new coupons.promotions.ClippedCoupon(UUID.randomUUID(),"Synthetic",null,new coupons.promotions.Coupon("Expired",BigDecimal.ONE,1,coupons.promotions.CouponType.MANUFACTURER,java.time.LocalDate.of(2026,10,2)),coupons.promotions.CouponStatus.CLIPPED,java.time.LocalDate.of(2026,10,1),null,null,1);
         couponRepo.save(expired,"test");var rolledBack=UUID.randomUUID();var other=transaction();
-        other.addAppliedCoupon(new coupons.CouponApplied(expired.couponId(),"Expired",BigDecimal.ONE,List.of(),1,true));
-        other.setObservations(new coupons.ReceiptObservations(java.time.LocalDate.of(2026,10,18),null,List.of(),List.of(),null,List.of(),java.util.Map.of()));
+        other.addAppliedCoupon(new coupons.promotions.CouponApplied(expired.couponId(),"Expired",BigDecimal.ONE,List.of(),1,true));
+        other.setObservations(new coupons.receipts.ReceiptObservations(java.time.LocalDate.of(2026,10,18),null,List.of(),List.of(),null,List.of(),java.util.Map.of()));
         assertThrows(IllegalArgumentException.class,()->repository.saveWithCoupons(rolledBack,other,new ReceiptMeta("Synthetic",rolledBack.toString(),null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(expired.couponId())));
-        assertTrue(repository.findById(rolledBack).isEmpty());assertEquals(coupons.CouponStatus.CLIPPED,couponRepo.findById(expired.couponId()).orElseThrow().status());
+        assertTrue(repository.findById(rolledBack).isEmpty());assertEquals(coupons.promotions.CouponStatus.CLIPPED,couponRepo.findById(expired.couponId()).orElseThrow().status());
 
         assertThrows(IllegalArgumentException.class,()->new PostgresPlatformRepository(connections).deleteCatalogRecord(false,coupon.couponId(),2,"test"));
     }
@@ -338,7 +349,7 @@ class PostgresTransactionRepositoryTest {
     }
 
     @Test void standaloneRewardCorrectionsReplaceDenominationAndMemberCorrectionsPostOnlyDifference() {
-        var platform=new PostgresPlatformRepository(connections);var id=UUID.randomUUID();var reward=new coupons.RegisterReward(id,"Manual coupon",new BigDecimal("5"),null,null,null);platform.addStandaloneReward(reward);
+        var platform=new PostgresPlatformRepository(connections);var id=UUID.randomUUID();var reward=new coupons.rewards.RegisterReward(id,"Manual coupon",new BigDecimal("5"),null,null,null);platform.addStandaloneReward(reward);
         platform.correctStandaloneAmount(id,new BigDecimal("5"),new BigDecimal("7"));
         assertThrows(java.util.ConcurrentModificationException.class,()->platform.correctStandaloneAmount(id,new BigDecimal("5"),new BigDecimal("8")));
         var member=UUID.randomUUID();platform.saveMemberReward(new AccountAdjustment(member,java.time.LocalDate.of(2026,10,1),"ECB",null,new BigDecimal("2"),"Member reward: Monthly", "test",NOW));

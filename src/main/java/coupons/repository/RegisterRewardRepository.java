@@ -1,9 +1,11 @@
 package coupons.repository;
 
+import coupons.rewards.Reward;
+
 import java.util.Optional;
 import java.util.UUID;
 
-import coupons.RegisterReward;
+import coupons.rewards.RegisterReward;
 
 /**
  * Defines database-independent storage for issued Register Rewards.

@@ -1,10 +1,24 @@
 package coupons.api;
 
-import coupons.ReceiptObservations;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponApplied;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.promotions.Promotion;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptTimeInput;
+import coupons.receipts.ReceiptTotals;
+import coupons.receipts.ReceiptWorksheetData;
+import coupons.rewards.Reward;
+import coupons.receipts.TransactionCalculator;
+
+import coupons.receipts.ReceiptObservations;
 import static coupons.api.ReceiptInput.*;
 
-import coupons.*;
-import coupons.ReceiptObservations.*;
+import coupons.receipts.ReceiptObservations.*;
 import coupons.repository.*;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -229,7 +243,7 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
             known(row,"applicationId","printedLabel","appliedAmount","kind","lineItemIds","wholeReceipt","qualifyingQuantities","requiredQuantity");
             UUID id = uuid(row,"applicationId");
             var previous = s.appliedCoupons().stream().filter(c -> c.getApplicationId().equals(id)).findFirst().orElse(null);
-            if (row.containsKey("kind")) kinds.put(id,coupons.ReceiptObservations.DiscountKind.valueOf(required(row,"kind")));
+            if (row.containsKey("kind")) kinds.put(id,coupons.receipts.ReceiptObservations.DiscountKind.valueOf(required(row,"kind")));
             var lines = row.containsKey("lineItemIds") ? ids(row,"lineItemIds") : previous == null ? List.<UUID>of() : previous.getLineItemIds();
             boolean whole = row.containsKey("wholeReceipt") ? flag(row,"wholeReceipt") : previous == null || previous.isWholeReceipt();
             var quantities = row.containsKey("qualifyingQuantities") ? quantities(row) : previous == null ? Map.<UUID,Integer>of() : previous.getQualifyingQuantities();
@@ -292,14 +306,14 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
             var f = new LinkedHashMap<String,Object>();
             f.put("applicationId",discount.getApplicationId()); f.put("printedLabel",discount.getPrintedLabel()); f.put("appliedAmount",discount.getAppliedAmount());
             f.put("requiredQuantity",discount.getRequiredQuantity());
-            f.put("kind",snapshot.observations().discountKinds().getOrDefault(discount.getApplicationId(),coupons.ReceiptObservations.DiscountKind.OTHER));
+            f.put("kind",snapshot.observations().discountKinds().getOrDefault(discount.getApplicationId(),coupons.receipts.ReceiptObservations.DiscountKind.OTHER));
             f.put("lineItemIds",discount.getLineItemIds()); f.put("wholeReceipt",discount.isWholeReceipt()); f.put("qualifyingQuantities",discount.getQualifyingQuantities()); result.add(f);
         }
         for (var item : snapshot.purchaseItems()) {
             if (item.regularUnitPrice() == null || item.regularUnitPrice().compareTo(item.saleUnitPrice()) <= 0) continue;
             UUID id = UUID.nameUUIDFromBytes((receipt.transactionId()+":"+item.lineItemId()+":price-reduction").getBytes(java.nio.charset.StandardCharsets.UTF_8));
             result.add(new LinkedHashMap<>(Map.of("applicationId",id,"printedLabel","Previously recorded price reduction", "appliedAmount",item.regularUnitPrice().subtract(item.saleUnitPrice()).multiply(java.math.BigDecimal.valueOf(item.quantity())),
-                    "kind",coupons.ReceiptObservations.DiscountKind.SALE_PROMOTION,"lineItemIds",List.of(item.lineItemId()),"wholeReceipt",false,"qualifyingQuantities",Map.of(item.lineItemId(),item.quantity()))));
+                    "kind",coupons.receipts.ReceiptObservations.DiscountKind.SALE_PROMOTION,"lineItemIds",List.of(item.lineItemId()),"wholeReceipt",false,"qualifyingQuantities",Map.of(item.lineItemId(),item.quantity()))));
         }
         return result;
     }

@@ -1,7 +1,23 @@
 package coupons.repository;
 
-import coupons.*;
-import coupons.ReceiptObservations.*;
+import coupons.promotions.BenefitKind;
+import coupons.promotions.ClippedCoupon;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponApplied;
+import coupons.promotions.CouponStatus;
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.CouponType;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.shopping.ShoppingPlan;
+
+import coupons.receipts.ReceiptObservations.*;
 import java.math.*;
 import java.sql.*;
 import java.time.*;

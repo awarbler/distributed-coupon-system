@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.PlannedPurchase;
+import coupons.shopping.PlannedPurchase;
 import java.sql.*;
 import java.util.*;
 

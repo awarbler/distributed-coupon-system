@@ -1,7 +1,7 @@
 package coupons.repository;
 
-import coupons.CouponTransaction;
-import coupons.ReceiptTotals;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.ReceiptTotals;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;

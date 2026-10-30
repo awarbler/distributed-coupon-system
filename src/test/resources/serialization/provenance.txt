@@ -1,0 +1,10 @@
+Synthetic legacy serialization fixture.
+Generated using standard ObjectOutputStream from unmodified base commit
+c4c29925f16b11a648c1a379c635e188350203c0 before any backend package moves.
+Contains 11 object graphs: local state and revision history, receipt snapshot,
+console draft checkpoint, full shopping scenario, planned purchase, clipped
+coupon, deal terms, worksheet, earning details, coupon array and enum contracts.
+The shopping scenario includes the exact decimal 0.12345678901234567890.
+No personal records or application database were used.
+Keep these original bytes as the compatibility baseline; do not regenerate
+with the reorganized implementation to make a failing test pass.

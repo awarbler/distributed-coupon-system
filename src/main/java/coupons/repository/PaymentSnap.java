@@ -1,7 +1,7 @@
 package coupons.repository;
 
-import coupons.Payment;
-import coupons.PaymentType;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
 import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.UUID;

@@ -1,5 +1,7 @@
 package coupons.repository;
 
+import coupons.rewards.Reward;
+
 import coupons.repository.PostgresPlatformRepository.ReceiptRRMatching;
 
 import java.time.Clock;
@@ -60,7 +62,7 @@ public final class PostgresReceiptSupplementRepository {
     public boolean rrUsageNeedsReview(RRUsageLink link) {
         return transaction(connections,c->PostgresReceiptState.rules(PostgresReceiptState.read(c)).rrUsageNeedsReview(link));
     }
-    public void addStandaloneReward(coupons.RegisterReward reward) {
+    public void addStandaloneReward(coupons.rewards.RegisterReward reward) {
         if(reward.getEarnedReceiptId()!=null)throw new IllegalArgumentException("Use receipt earning entry for a linked reward.");
         transaction(connections,c->{
             PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);
@@ -74,7 +76,7 @@ public final class PostgresReceiptSupplementRepository {
             if(old==null)throw new NoSuchElementException();
             if(old.getEarnedReceiptId()!=null||state.rrUsageLinks().containsKey(id)||state.redemptions().values().stream().anyMatch(r->r.getRewardId().equals(id)))throw new IllegalArgumentException("Unmatch or review the used reward before correcting its denomination.");
             if(old.getFaceValue().compareTo(expected)!=0)throw new ConcurrentModificationException("Reward amount changed; refresh first.");
-            var updated=new coupons.RegisterReward(id,old.getSourceDescription(),amount,old.getEarnedDate(),old.getExpirationDate(),null);
+            var updated=new coupons.rewards.RegisterReward(id,old.getSourceDescription(),amount,old.getEarnedDate(),old.getExpirationDate(),null);
             PostgresReceiptState.execute(c,"UPDATE register_rewards SET payload=? WHERE reward_id=?",serialize(updated),id);return null;});
     }
     public RRUsageLink addStandaloneMatch(UUID receipt,long revision,UUID use,UUID reward,String description,java.time.LocalDate earned,java.time.LocalDate expires,String reason,String actor) {

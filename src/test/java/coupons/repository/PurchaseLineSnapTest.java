@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.PurchaseItem;
+import coupons.receipts.PurchaseItem;
 import java.math.BigDecimal;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;

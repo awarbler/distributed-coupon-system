@@ -26,7 +26,7 @@ final class Json {
     static String encode(Object value) {
         if (value == null) return "null";
         if (value instanceof Number || value instanceof Boolean) return value.toString();
-        if (value instanceof coupons.CouponApplied coupon) {
+        if (value instanceof coupons.promotions.CouponApplied coupon) {
             Map<String,Object> fields=new LinkedHashMap<>();
             fields.put("applicationId",coupon.getApplicationId());fields.put("printedLabel",coupon.getPrintedLabel());
             fields.put("appliedAmount",coupon.getAppliedAmount());fields.put("lineItemIds",coupon.getLineItemIds());

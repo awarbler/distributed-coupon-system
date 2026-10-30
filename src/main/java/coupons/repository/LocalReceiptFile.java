@@ -1,5 +1,7 @@
 package coupons.repository;
 
+import coupons.serialization.LegacyObjectStreams;
+
 import java.io.IOException;
 import java.io.ObjectInputFilter;
 import java.io.ObjectInputStream;
@@ -46,7 +48,7 @@ final class LocalReceiptFile implements AutoCloseable {
     /** Decode the exact bytes inventoried by migration, avoiding a second source-file read. */
     static InMemoryStore.State readSnapshot(Path path, byte[] capturedBytes) throws IOException {
         if (capturedBytes == null && !Files.exists(path)) return new InMemoryStore().state;
-        try (var input = new ObjectInputStream(capturedBytes == null ? Files.newInputStream(path) : new java.io.ByteArrayInputStream(capturedBytes))) {
+        try (var input = LegacyObjectStreams.input(capturedBytes == null ? Files.newInputStream(path) : new java.io.ByteArrayInputStream(capturedBytes))) {
             input.setObjectInputFilter(info -> {
                 if (info.depth() > 100 || info.references() > 2_000_000 || info.arrayLength() > 100_000_000) {
                     return ObjectInputFilter.Status.REJECTED;
@@ -73,7 +75,7 @@ final class LocalReceiptFile implements AutoCloseable {
         Path temporary = Files.createTempFile(path.getParent(), "receipts-", ".tmp");
         try {
             try (var channel = FileChannel.open(temporary, StandardOpenOption.WRITE);
-                    var output = new ObjectOutputStream(Channels.newOutputStream(channel))) {
+                    var output = LegacyObjectStreams.output(Channels.newOutputStream(channel))) {
                 output.writeUTF(VERSION);
                 output.writeObject(state);
                 output.flush();

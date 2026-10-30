@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.ClippedCoupon;
+import coupons.promotions.ClippedCoupon;
 import java.time.LocalDate;
 import java.util.*;
 

@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 import java.util.Objects;
 import java.util.UUID;
 
-import coupons.PurchaseItem;
+import coupons.receipts.PurchaseItem;
 
 /**
  * Preserves purchase-line values for a receipt revision.

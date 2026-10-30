@@ -1,6 +1,9 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.rewards.Reward;
+import coupons.receipts.SavingsReport;
+import coupons.receipts.TransactionCalculator;
+
 import java.nio.file.Path;
 import java.sql.*;
 import java.util.*;
@@ -91,7 +94,7 @@ public final class LocalMigrationPreview {
                 if(item.productCode()==null)warnings.add(id+" line "+line+": SKU missing; do not infer catalog identity or inventory.");
             }
             for(var earning:receipt.contents().observations().earnings()) {
-                if(earning.scope()==coupons.ReceiptObservations.Scope.UNKNOWN)warnings.add(id+": earning "+earning.earningId()+" has unknown product scope.");
+                if(earning.scope()==coupons.receipts.ReceiptObservations.Scope.UNKNOWN)warnings.add(id+": earning "+earning.earningId()+" has unknown product scope.");
                 if(earning.confirmed()==null)warnings.add(id+": earning "+earning.earningId()+" is expected-only; no confirmed earned value is invented.");
             }
             for(var coupon:receipt.contents().appliedCoupons())if(!receipt.contents().observations().discountKinds().containsKey(coupon.getApplicationId()))warnings.add(id+": deduction "+coupon.getApplicationId()+" is unclassified; preserve for review.");

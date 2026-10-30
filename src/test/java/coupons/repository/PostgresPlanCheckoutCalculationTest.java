@@ -1,12 +1,25 @@
 
 package coupons.repository;
 
+import coupons.promotions.BenefitKind;
+import coupons.promotions.CouponApplied;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterReward;
+import coupons.receipts.TransactionCalculator;
+
 import coupons.repository.PostgresPlatformRepository.ReceiptRRMatching;
 
-import coupons.ReceiptObservations.*;
+import coupons.receipts.ReceiptObservations.*;
 import java.time.*;
 
-import coupons.*;
 import java.time.LocalDate;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -22,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
-import coupons.ShoppingEstimate;
+import coupons.shopping.ShoppingEstimate;
 
 class PostgresPlanCheckoutCalculationTest {
 

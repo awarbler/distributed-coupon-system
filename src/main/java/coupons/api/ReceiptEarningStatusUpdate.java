@@ -1,8 +1,13 @@
 package coupons.api;
 
-import coupons.*;
-import coupons.ReceiptObservations.Earning;
-import coupons.ReceiptObservations.EarningKind;
+import coupons.promotions.BenefitKind;
+import coupons.rewards.EarningDetails;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateStatus;
+
+import coupons.receipts.ReceiptObservations.Earning;
+import coupons.receipts.ReceiptObservations.EarningKind;
 import java.math.BigDecimal;
 
 /** Narrow receipt status change; never a payout, redemption, amount correction, or new earning. */
@@ -19,10 +24,10 @@ final class ReceiptEarningStatusUpdate {
         var valuation=old.valuation();
         String provider=ProviderBalanceSummary.accountName(old.provider());
         if(previous.kind()==BenefitKind.POINTS) {
-            if(provider.equals("Fetch"))valuation=new coupons.ReceiptObservations.RecordedValuation(value.amount().movePointLeft(3),java.util.Currency.getInstance("USD"),"Worksheet Fetch rate: 1000 points = 1 USD");
-            else if(provider.equals("P&G Brand"))valuation=new coupons.ReceiptObservations.RecordedValuation(value.amount().divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128),java.util.Currency.getInstance("USD"),"Worksheet P&G rate: 150 points = 1 USD");
+            if(provider.equals("Fetch"))valuation=new coupons.receipts.ReceiptObservations.RecordedValuation(value.amount().movePointLeft(3),java.util.Currency.getInstance("USD"),"Worksheet Fetch rate: 1000 points = 1 USD");
+            else if(provider.equals("P&G Brand"))valuation=new coupons.receipts.ReceiptObservations.RecordedValuation(value.amount().divide(new BigDecimal("150"),java.math.MathContext.DECIMAL128),java.util.Currency.getInstance("USD"),"Worksheet P&G rate: 150 points = 1 USD");
             else if(valuation!=null&&previous.amount().signum()==0)valuation=null;
-            else if(valuation!=null)valuation=new coupons.ReceiptObservations.RecordedValuation(valuation.amount().multiply(value.amount()).divide(previous.amount(),java.math.MathContext.DECIMAL128),valuation.currency(),valuation.basis());
+            else if(valuation!=null)valuation=new coupons.receipts.ReceiptObservations.RecordedValuation(valuation.amount().multiply(value.amount()).divide(previous.amount(),java.math.MathContext.DECIMAL128),valuation.currency(),valuation.basis());
         }
         return new Earning(old.earningId(),old.kind(),old.provider(),old.offerReference(),old.scope(),old.lineItemIds(),old.confirmed()==null?value:old.expected(),old.confirmed()==null?null:value,old.status(),old.expirationDate(),old.instrumentId(),old.claimId(),old.evidenceIds(),old.recordedLifecycle(),old.requirement(),valuation,old.details());
     }

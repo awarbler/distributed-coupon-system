@@ -1,6 +1,16 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.promotions.AdvertisedDeal;
+import coupons.promotions.BenefitKind;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateClaim;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptTotals;
+import coupons.promotions.SourceArtifact;
+import coupons.inventory.InventoryBalance;
+
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.time.*;

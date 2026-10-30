@@ -1,6 +1,14 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
+import coupons.receipts.TransactionCalculator;
+
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;

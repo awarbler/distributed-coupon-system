@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.InventoryBalance;
+import coupons.inventory.InventoryBalance;
 import java.util.Optional;
 import java.util.UUID;
 

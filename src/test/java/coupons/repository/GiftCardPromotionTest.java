@@ -1,6 +1,12 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.receipts.CouponTransaction;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterReward;
+
 import java.math.BigDecimal;
 import java.time.*;
 import java.nio.file.*;

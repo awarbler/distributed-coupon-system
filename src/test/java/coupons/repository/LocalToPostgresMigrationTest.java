@@ -1,7 +1,18 @@
 package coupons.repository;
 
-import coupons.*;
-import coupons.ReceiptObservations.*;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptPromotionLink;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
+import coupons.shopping.ShoppingPlan;
+import coupons.receipts.TransactionCalculator;
+
+import coupons.receipts.ReceiptObservations.*;
 import java.math.BigDecimal;
 import java.nio.file.*;
 import java.sql.*;

@@ -5,8 +5,8 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.List;
 
-import coupons.RegisterReward;
-import coupons.RegisterRewardRedemption;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
 
 /**
  * Shared process-local state for receipt repository adapters.

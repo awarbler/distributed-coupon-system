@@ -1,15 +1,15 @@
 package coupons.repository;
 
-import coupons.CouponApplied;
-import coupons.CouponTransaction;
-import coupons.Coupon;
-import coupons.Payment;
-import coupons.Promotion;
-import coupons.PurchaseItem;
-import coupons.ReceiptTotals;
-import coupons.Reward;
-import coupons.RegisterRewardRedemption;
-import coupons.ReceiptObservations;
+import coupons.promotions.CouponApplied;
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.Coupon;
+import coupons.receipts.Payment;
+import coupons.promotions.Promotion;
+import coupons.receipts.PurchaseItem;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.Reward;
+import coupons.rewards.RegisterRewardRedemption;
+import coupons.receipts.ReceiptObservations;
 import java.util.List;
 import java.util.Objects;
 

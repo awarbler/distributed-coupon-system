@@ -1,6 +1,6 @@
 package coupons.repository;
 
-import coupons.SourceArtifact;
+import coupons.promotions.SourceArtifact;
 import java.sql.*;
 import java.util.*;
 

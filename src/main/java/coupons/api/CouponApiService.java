@@ -1,5 +1,9 @@
 package coupons.api;
 
+import coupons.promotions.Coupon;
+import coupons.promotions.Promotion;
+import coupons.rewards.Reward;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigDecimal;
@@ -30,15 +34,15 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 
-import coupons.ClippedCoupon;
-import coupons.ProviderBalanceSummary;
-import coupons.PurchaseItem;
-import coupons.EarningDetails;
-import coupons.PromotionQualification;
-import coupons.RebateStatus;
-import coupons.ReceiptObservations;
-import coupons.ShoppingPlan;
-import coupons.TransactionCalculator;
+import coupons.promotions.ClippedCoupon;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.receipts.PurchaseItem;
+import coupons.rewards.EarningDetails;
+import coupons.promotions.PromotionQualification;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.shopping.ShoppingPlan;
+import coupons.receipts.TransactionCalculator;
 import static coupons.api.Json.asText;
 import static coupons.api.Json.known;
 import static coupons.api.Json.number;
@@ -299,7 +303,7 @@ public final class CouponApiService implements HttpHandler {
                 if(!ReceiptInput.flag(f,"confirmAvailable"))throw new ApiError(400,"Confirm this is an unused RR coupon available to use.");
                 String earned=optional(f,"earnedDate"),expires=optional(f,"expirationDate");
                 var amount=ReceiptInput.decimal(f,"amount",false);if(amount.signum()<=0)throw new ApiError(400,"Enter a reward amount greater than zero.");
-                var reward=new coupons.RegisterReward(ReceiptInput.uuid(f,"rewardId"),required(f,"description"),amount,earned==null?null:LocalDate.parse(earned),expires==null?null:LocalDate.parse(expires),null);
+                var reward=new coupons.rewards.RegisterReward(ReceiptInput.uuid(f,"rewardId"),required(f,"description"),amount,earned==null?null:LocalDate.parse(earned),expires==null?null:LocalDate.parse(expires),null);
                 platform.addStandaloneReward(reward);return json(201,fields("rewardId",reward.getRewardId(),"status","UNUSED"));
             });
         }
@@ -824,7 +828,7 @@ public final class CouponApiService implements HttpHandler {
 
     private List<Object> creditSettlements(ReceiptRecord original){var result=new ArrayList<Object>();for(var earning:original.transaction().getObservations().earnings()){var credits=new ArrayList<Object>();var total=BigDecimal.ZERO;for(var receipt:receipts.findRewardCredits(original.transactionId(),earning.earningId()))if(receipt.status()==ReceiptStatus.ACTIVE)for(var credit:receipt.transaction().getObservations().earnings()){var d=credit.details();if(d!=null&&original.transactionId().equals(d.originalReceiptId())&&earning.earningId().equals(d.originalEarningId())&&credit.status()==RebateStatus.CREDITED&&credit.confirmed()!=null){total=total.add(credit.confirmed().amount());credits.add(fields("receiptId",receipt.transactionId(),"receiptNumber",receipt.metadata()==null?null:receipt.metadata().receiptNumber(),"earningId",credit.earningId(),"amount",credit.confirmed().amount()));}}if(!credits.isEmpty())result.add(fields("earningId",earning.earningId(),"received",total,"expected",earning.expected()==null?null:earning.expected().amount(),"credits",credits));}return result;}
 
-    private void validateCreditSources(UUID receiptId,coupons.CouponTransaction tx){
+    private void validateCreditSources(UUID receiptId,coupons.receipts.CouponTransaction tx){
         for(var earning:tx.getObservations().earnings())if(earning.status()==RebateStatus.CREDITED&&receipts.findRewardCredits(receiptId,earning.earningId()).stream().anyMatch(r->r.status()==ReceiptStatus.ACTIVE&&r.transaction().getObservations().earnings().stream().anyMatch(e->e.status()==RebateStatus.CREDITED&&e.confirmed()!=null&&e.details()!=null&&receiptId.equals(e.details().originalReceiptId())&&earning.earningId().equals(e.details().originalEarningId()))))throw new ApiError(400,"This original reward already has received manager credits. Keep its original rejection/unpaid status to avoid counting the reward twice.");
         var totals=new LinkedHashMap<String,BigDecimal>();
         for(var credit:tx.getObservations().earnings()){var d=credit.details();if(d==null||d.originalReceiptId()==null||credit.status()==RebateStatus.REJECTED)continue;

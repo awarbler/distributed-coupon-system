@@ -1,8 +1,12 @@
 package coupons.repository;
 
-import coupons.CouponTransaction;
-import coupons.RegisterReward;
-import coupons.RegisterRewardRedemption;
+import coupons.promotions.Coupon;
+import coupons.promotions.Promotion;
+import coupons.rewards.Reward;
+
+import coupons.receipts.CouponTransaction;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
 import java.time.Clock;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -119,7 +123,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             } else {
                 if(event.status()==ProviderRedemption.Status.CANCELLED) throw new IllegalArgumentException("Request a redemption before cancelling it.");
                 var receipts=creationHistory().stream().map(h->findById(h.after().transactionId()).orElse(null)).filter(Objects::nonNull).toList();
-                var balance=new coupons.ProviderBalanceSummary(this).balance(event.requestedDate(),event.provider(),receipts);
+                var balance=new coupons.rewards.ProviderBalanceSummary(this).balance(event.requestedDate(),event.provider(),receipts);
                 if(balance.endUsd()==null || balance.endUsd().compareTo(event.sourceUsdValue())<0) throw new IllegalArgumentException("Record a sufficient confirmed source balance before redeeming.");
                 if(event.originalUnitsUsed()!=null && (balance.endPoints()==null || balance.endPoints().compareTo(event.originalUnitsUsed())<0))
                     throw new IllegalArgumentException("Record sufficient original points before redeeming.");
@@ -184,7 +188,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         var promotions = new HashMap<>(current.giftCardPromotions());
         var lineIds = receipt.contents().purchaseItems().stream().map(PurchaseLineSnap::lineItemId).toList();
         if(previous!=null) {
-            var retained=receipt.contents().observations().promotionLinks().stream().map(coupons.ReceiptPromotionLink::promotionId).collect(java.util.stream.Collectors.toSet());
+            var retained=receipt.contents().observations().promotionLinks().stream().map(coupons.receipts.ReceiptPromotionLink::promotionId).collect(java.util.stream.Collectors.toSet());
             for(var old:previous.contents().observations().promotionLinks())if(!retained.contains(old.promotionId())) {
                 var offer=promotions.get(old.promotionId());
                 if(offer!=null){var contributions=new HashMap<>(offer.contributions());contributions.remove(receipt.transactionId());
@@ -271,8 +275,8 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             throw new IllegalArgumentException("Receipt ID already exists.");
         }
         validateStoredReferences(current, receipt, evidence, previous);
-        if(coupons.ReceiptIssues.online(receipt.metadata()))
-            coupons.ReceiptIssues.validateOnlineRule(receipt.metadata(),receipt.contents().toTransaction());
+        if(coupons.receipts.ReceiptIssues.online(receipt.metadata()))
+            coupons.receipts.ReceiptIssues.validateOnlineRule(receipt.metadata(),receipt.contents().toTransaction());
         var incomingEventIds = ReceiptObservationValidator.eventIds(receipt.contents());
         for (var existing : current.receipts().values()) {
             if (existing.transactionId().equals(receipt.transactionId())) continue;
@@ -435,7 +439,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
     /** Do not hide an earning whose recorded value is consumed by an active receipt or transfer. */
     void validateDeletionDependencies(State current, ReceiptRevSnap receipt) {
         var earningIds = receipt.contents().observations().earnings().stream()
-                .map(coupons.ReceiptObservations.Earning::earningId).collect(java.util.stream.Collectors.toSet());
+                .map(coupons.receipts.ReceiptObservations.Earning::earningId).collect(java.util.stream.Collectors.toSet());
         current.history().values().stream().filter(h -> h.after().transactionId().equals(receipt.transactionId()))
                 .flatMap(h -> h.after().contents().observations().earnings().stream())
                 .forEach(e -> earningIds.add(e.earningId()));
@@ -443,7 +447,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         current.rewards().values().stream()
                 .filter(r -> receipt.transactionId().equals(r.getEarnedReceiptId()))
                 .forEach(r -> instruments.add(r.getRewardId()));
-        receipt.contents().observations().earnings().stream().map(coupons.ReceiptObservations.Earning::instrumentId)
+        receipt.contents().observations().earnings().stream().map(coupons.receipts.ReceiptObservations.Earning::instrumentId)
                 .filter(Objects::nonNull).forEach(instruments::add);
         for (var redemption : current.redemptions().values()) {
             var spending = current.receipts().get(redemption.getRedeemedReceiptId());
@@ -568,8 +572,8 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             if (origin.status() != ReceiptStatus.ACTIVE) throw new IllegalArgumentException("Original earning receipt is deleted; restore it first.");
             if (origin.transactionId().equals(link.spentReceiptId())) throw new IllegalArgumentException("Choose an RR from an earlier purchase, not earned on the spending receipt.");
             var earning = origin.contents().observations().earnings().stream().filter(e -> e.earningId().equals(link.sourceId())).findFirst().orElseThrow();
-            if (earning.kind() != coupons.ReceiptObservations.EarningKind.REGISTER_REWARD || earning.confirmed() == null
-                    || earning.status() != coupons.RebateStatus.PAID) throw new IllegalArgumentException("Only a confirmed printed RR can be matched.");
+            if (earning.kind() != coupons.receipts.ReceiptObservations.EarningKind.REGISTER_REWARD || earning.confirmed() == null
+                    || earning.status() != coupons.promotions.RebateStatus.PAID) throw new IllegalArgumentException("Only a confirmed printed RR can be matched.");
             if (earning.instrumentId() != null && current.redemptions().values().stream().anyMatch(r -> r.getRewardId().equals(earning.instrumentId())))
                 throw new IllegalArgumentException("This earning is already redeemed through its issued instrument.");
             face = earning.confirmed().amount(); earnedDate = origin.contents().observations().purchaseDate();

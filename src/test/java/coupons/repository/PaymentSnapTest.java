@@ -8,8 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 
-import coupons.Payment;
-import coupons.PaymentType;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
 
 /**
  * Tests immutable capture of payment values.

@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
-import coupons.Reward;
+import coupons.rewards.Reward;
 
 /**
  * Tests preservation of legacy generic reward values.

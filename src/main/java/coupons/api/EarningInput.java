@@ -1,6 +1,13 @@
 package coupons.api;
-import coupons.*;
-import coupons.ReceiptObservations.*;
+
+import coupons.promotions.BenefitKind;
+import coupons.rewards.EarningDetails;
+import coupons.promotions.PromotionType;
+import coupons.rewards.ProviderBalanceSummary;
+import coupons.promotions.RebateBenefit;
+import coupons.promotions.RebateStatus;
+import coupons.rewards.Reward;
+import coupons.receipts.ReceiptObservations.*;
 import java.time.LocalDate;
 import java.util.*;
 import static coupons.api.Json.*;

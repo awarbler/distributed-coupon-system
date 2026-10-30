@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 
-import coupons.CouponTransaction;
+import coupons.receipts.CouponTransaction;
 
 /**
  * Represents a receipt's current identity, state, revision, and data.

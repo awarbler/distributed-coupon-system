@@ -1,5 +1,7 @@
 package coupons.repository;
 
+import coupons.serialization.LegacyObjectStreams;
+
 import java.io.*;
 import java.sql.*;
 import java.time.Instant;
@@ -36,7 +38,7 @@ final class PostgresRepositorySupport {
     }
 
     static byte[] serialize(Object value) {
-        try (var out = new ByteArrayOutputStream(); var stream = new ObjectOutputStream(out)) {
+        try (var out = new ByteArrayOutputStream(); var stream = LegacyObjectStreams.output(out)) {
             stream.writeObject(value);
             return out.toByteArray();
         } catch (IOException e) { throw new IllegalStateException("Could not serialize repository payload.", e); }
@@ -44,7 +46,7 @@ final class PostgresRepositorySupport {
 
     @SuppressWarnings("unchecked")
     static <T> T deserialize(byte[] bytes, Class<T> type) {
-        try (var stream = new ObjectInputStream(new ByteArrayInputStream(bytes))) {
+        try (var stream = LegacyObjectStreams.input(new ByteArrayInputStream(bytes))) {
             return (T) stream.readObject();
         } catch (IOException | ClassNotFoundException e) {
             throw new IllegalStateException("Could not deserialize repository payload.", e);

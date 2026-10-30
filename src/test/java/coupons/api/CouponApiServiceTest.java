@@ -1,7 +1,17 @@
 package coupons.api;
 
+import coupons.promotions.ClippedCoupon;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponStatus;
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.CouponType;
+import coupons.receipts.PurchaseItem;
+import coupons.promotions.RebateStatus;
+import coupons.receipts.ReceiptObservations;
+import coupons.receipts.ReceiptTotals;
+import coupons.shopping.ShoppingPlan;
+
 import com.sun.net.httpserver.HttpServer;
-import coupons.*;
 import coupons.repository.*;
 import java.math.BigDecimal;
 import java.net.URI;

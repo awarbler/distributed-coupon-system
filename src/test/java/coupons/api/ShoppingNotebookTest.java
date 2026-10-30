@@ -1,6 +1,12 @@
 package coupons.api;
 
-import coupons.*;
+import coupons.promotions.ClippedCoupon;
+import coupons.promotions.Coupon;
+import coupons.promotions.CouponStatus;
+import coupons.promotions.CouponTerms;
+import coupons.promotions.CouponType;
+import coupons.shopping.ShoppingPlan;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.*;

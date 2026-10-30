@@ -1,6 +1,8 @@
 package coupons.repository;
 
-import coupons.*;
+import coupons.promotions.RebateClaim;
+import coupons.promotions.RebateStatus;
+
 import java.sql.*;
 import java.util.*;
 

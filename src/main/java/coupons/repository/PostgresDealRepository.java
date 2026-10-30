@@ -1,8 +1,8 @@
 package coupons.repository;
 
-import coupons.AdvertisedDeal;
-import coupons.DealTerms;
-import coupons.SourceArtifact;
+import coupons.promotions.AdvertisedDeal;
+import coupons.promotions.DealTerms;
+import coupons.promotions.SourceArtifact;
 import java.sql.*;
 import java.util.*;
 

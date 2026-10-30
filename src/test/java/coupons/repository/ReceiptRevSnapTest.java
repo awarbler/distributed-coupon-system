@@ -9,11 +9,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
-import coupons.CouponTransaction;
-import coupons.Payment;
-import coupons.PaymentType;
-import coupons.ReceiptTotals;
-import coupons.RegisterRewardRedemption;
+import coupons.receipts.CouponTransaction;
+import coupons.receipts.Payment;
+import coupons.receipts.PaymentType;
+import coupons.receipts.ReceiptTotals;
+import coupons.rewards.RegisterRewardRedemption;
 
 /**
  * Tests immutable capture of receipt identity and lifecycle state.

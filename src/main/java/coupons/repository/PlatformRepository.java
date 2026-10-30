@@ -1,7 +1,11 @@
 package coupons.repository;
 
-import coupons.*;
-import coupons.ProviderBalanceSummary.AccountActivityView;
+import coupons.promotions.AdvertisedDeal;
+import coupons.promotions.ClippedCoupon;
+import coupons.shopping.PlannedPurchase;
+import coupons.promotions.SourceArtifact;
+
+import coupons.rewards.ProviderBalanceSummary.AccountActivityView;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -34,7 +38,7 @@ public interface PlatformRepository {
 
     boolean earningMatched(UUID earning);
 
-    void addStandaloneReward(coupons.RegisterReward reward);
+    void addStandaloneReward(coupons.rewards.RegisterReward reward);
 
     List<Map<String,Object>> standaloneRewards();
 

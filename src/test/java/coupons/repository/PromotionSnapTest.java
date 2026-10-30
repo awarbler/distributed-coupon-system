@@ -7,9 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
-import coupons.Promotion;
-import coupons.PromotionType;
-import coupons.RewardType;
+import coupons.promotions.Promotion;
+import coupons.promotions.PromotionType;
+import coupons.rewards.RewardType;
 
 /**
  * Tests capture of reward-earning promotion terms.

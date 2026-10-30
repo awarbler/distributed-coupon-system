@@ -1,9 +1,13 @@
 package coupons.repository;
 
-import coupons.CouponTransaction;
-import coupons.ClippedCoupon;
-import coupons.RegisterReward;
-import coupons.RegisterRewardRedemption;
+import coupons.rewards.Reward;
+
+import coupons.serialization.LegacyObjectStreams;
+
+import coupons.receipts.CouponTransaction;
+import coupons.promotions.ClippedCoupon;
+import coupons.rewards.RegisterReward;
+import coupons.rewards.RegisterRewardRedemption;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -699,7 +703,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
     private static byte[] serialize(Object value) {
         try {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {
+            try (ObjectOutputStream output = LegacyObjectStreams.output(bytes)) {
                 output.writeObject(value);
             }
             return bytes.toByteArray();
@@ -714,7 +718,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
 
     @SuppressWarnings("unchecked")
     private static <T> T deserialize(byte[] bytes, Class<T> type) {
-        try (ObjectInputStream input = new ObjectInputStream(new ByteArrayInputStream(bytes))) {
+        try (ObjectInputStream input = LegacyObjectStreams.input(new ByteArrayInputStream(bytes))) {
             Object value = input.readObject();
             return type.cast(value);
         } catch (IOException | ClassNotFoundException failure) {

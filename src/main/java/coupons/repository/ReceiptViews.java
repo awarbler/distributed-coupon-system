@@ -15,13 +15,17 @@ public final class ReceiptViews {
             String key = line.getProductCode() != null ? "sku:" + line.getProductCode() : "description:" + line.getProductName().trim().toLowerCase(java.util.Locale.ROOT);
             groups.computeIfAbsent(key, k -> new ArrayList<>()).add(line);
         }
+        var giftCardPayments=new LinkedHashMap<String,BigDecimal>();
+        tx.getPayments().stream().filter(p->p.getPaymentType()==PaymentType.GIFT_CARD).forEach(p->giftCardPayments.merge(p.getAccountName()==null||p.getAccountName().isBlank()?"Gift Card":p.getAccountName(),p.getAmount(),BigDecimal::add));
         var paymentReview = calculator.reconcilePayments(tx, receipt.metadata());
         var benefitTotals = SavingsReport.calculate(List.of(receipt));
         boolean paymentComplete = paymentReview.paymentEntryStatus() == ReceiptMeta.PaymentEntryStatus.COMPLETE
                 && paymentReview.unresolvedPaymentIds().isEmpty();
         BigDecimal adjusted = paymentComplete && benefitTotals.earningsKnown()
                 ? paymentReview.recordedCashCardPaid().subtract(benefitTotals.knownConfirmedBenefitValue()) : null;
-        return fields("calculationChecks", calculator.recordedChecks(tx,receipt.metadata()), "printedObservations", tx.getObservations(), "discountBreakdown", discountBreakdown(tx), "paymentReview", paymentReview, "benefitAdjustedCashSpending", adjusted,
+        var breakdown=discountBreakdown(tx);
+        BigDecimal merchandiseBeforeCoupons=calculator.calculateSaleMerchandiseTotal(tx).subtract((BigDecimal)breakdown.get("salePromotions"));
+        return fields("giftCardPayments",giftCardPayments,"merchandiseBeforeCoupons",merchandiseBeforeCoupons,"calculationChecks", calculator.recordedChecks(tx,receipt.metadata()), "printedObservations", tx.getObservations(), "discountBreakdown", breakdown, "paymentReview", paymentReview, "benefitAdjustedCashSpending", adjusted,
                 "benefitObservations", tx.getObservations().earnings().stream().map(e -> fields(
                         "earningId", e.earningId(), "provider", e.provider(), "status", e.status(),
                         "expected", e.expected(), "confirmed", e.confirmed(), "valuation", SavingsReport.effectiveValuation(e))).toList(),

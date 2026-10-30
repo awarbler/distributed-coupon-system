@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -155,7 +156,7 @@ public final class CouponApiService implements HttpHandler {
             }
             return json(200, Map.of("status", "ok"));
         }
-        boolean write = !method.equals("GET");
+        boolean write = !method.equals("GET") && !Set.of("/shopping-plans/compare","/shopping-plans/reconcile","/shopping-plans/match-offers").contains(path);
         String principal = authorize(e, write);
         String[] parts = path.split("/", -1);
         if(parts.length==3 && (parts[1].equals("deals") || parts[1].equals("clipped-coupons")) && method.equals("DELETE")) {
@@ -286,6 +287,10 @@ public final class CouponApiService implements HttpHandler {
                 var opening=new coupons.repository.AccountOpening(ReceiptInput.uuid(f,"observationId"),LocalDate.parse(required(f,"date")),ProviderBalanceSummary.accountName(required(f,"provider")),ReceiptInput.decimal(f,"points",true),ReceiptInput.decimal(f,"usd",true),false,required(f,"valuationBasis"),required(f,"sourceNote")+" | "+principal,java.time.Instant.now());
                 platform.saveOpening(opening); return json(201,opening);
             });
+        }
+        if(path.equals("/accounts/unavailable-rewards")){
+            requireMethod(method,"POST");requirePlatform();return write(e,principal,request->{var f=Json.parseObject(request);known(f,"eventId","provider","date","amount","points","sourceId","category","reason");
+                platform.recordUnavailableReward(ReceiptInput.uuid(f,"eventId"),required(f,"provider"),LocalDate.parse(required(f,"date")),ReceiptInput.decimal(f,"amount",true),ReceiptInput.decimal(f,"points",true),optional(f,"sourceId")==null?null:UUID.fromString(optional(f,"sourceId")),required(f,"category"),required(f,"reason"),principal);return json(201,Map.of("recorded",true));});
         }
         if(path.equals("/rewards/register-rewards")) {
             requirePlatform();if(method.equals("GET"))return json(200,platform.standaloneRewards());
@@ -557,12 +562,49 @@ public final class CouponApiService implements HttpHandler {
                 ));
             });
         }
+        if(path.equals("/shopping-plans/match-offers")) {
+            requireMethod(method,"POST");var f=Json.parseObject(body(e,1024*1024));known(f,"scenario","retailer","day","couponIds");
+            var available=ReceiptInput.ids(f,"couponIds").stream().distinct().limit(100).map(coupons::findById).flatMap(Optional::stream).toList();
+            return json(200,ShoppingOfferMatch.match(parseScenario(f.get("scenario")),optional(f,"retailer"),optional(f,"day")==null?null:LocalDate.parse(optional(f,"day")),available));
+        }
+        if(path.equals("/shopping-plans/compare")) {
+            requireMethod(method,"POST");var f=Json.parseObject(body(e,1024*1024));known(f,"a","b","storeA","storeB");
+            return json(200,ShoppingReview.compare(parseScenario(f.get("a")),optional(f,"storeA"),parseScenario(f.get("b")),optional(f,"storeB")));
+        }
+        if(parts.length==5&&parts[1].equals("rebate-programs")&&parts[3].equals("receipts")){
+            requirePlatform();
+            if(method.equals("DELETE"))return write(e,principal,request->{var f=Json.parseObject(request);known(f,"expectedContribution");platform.unlinkRebateReceipt(UUID.fromString(parts[2]),UUID.fromString(parts[4]),required(f,"expectedContribution"));return json(200,Map.of("unlinked",true));});
+            requireMethod(method,"PUT");
+            return write(e,principal,request->{
+                var f=Json.parseObject(request);known(f,"lineIds","netAmount","note","submitted","submittedOn","submissionReference","expectedContribution");
+                String date=optional(f,"submittedOn"),reference=optional(f,"submissionReference");
+                if(reference!=null&&reference.length()>500||optional(f,"note")!=null&&required(f,"note").length()>2000)throw new ApiError(400,"Submission reference or note is too long.");
+                return json(200,platform.saveRebateReceipt(UUID.fromString(parts[2]),UUID.fromString(parts[4]),revision(e),ReceiptInput.ids(f,"lineIds"),ReceiptInput.decimal(f,"netAmount",false),optional(f,"note"),ReceiptInput.flag(f,"submitted"),date==null?null:LocalDate.parse(date),reference,required(f,"expectedContribution")));
+            });
+        }
+        if(path.equals("/shopping-plans/reconcile")) {
+            requireMethod(method,"POST");var f=Json.parseObject(body(e));known(f,"beginning","earned","used","reported");
+            return json(200,ShoppingReview.reconcile(ReceiptInput.decimal(f,"beginning",true),ReceiptInput.decimal(f,"earned",true),ReceiptInput.decimal(f,"used",true),ReceiptInput.decimal(f,"reported",true)));
+        }
+        if(path.equals("/shopping-plans/import-preview")) {
+            requireMethod(method,"POST");authorize(e,true);
+            var f=Json.parseObject(body(e,8*1024*1024));known(f,"text","mediaType","contentBase64");
+            String text=optional(f,"text"),media=optional(f,"mediaType"),encoded=optional(f,"contentBase64");
+            var source=new ShoppingPlan.PlanningSource(text,media,encoded);
+            if(encoded!=null) {
+                try {String recognized=ReceiptImport.ocr(java.util.Base64.getDecoder().decode(encoded),true);text=text==null?recognized:text+"\n"+recognized;}
+                catch(ApiError failure){throw failure;}
+                catch(Exception failure){throw new ApiError(400,"Screenshot could not be read. Try a clearer JPEG or PNG.");}
+                source=new ShoppingPlan.PlanningSource(text,media,encoded);
+            }
+            return json(200,ShoppingNoteInput.parse(text,source));
+        }
         if(path.equals("/shopping-plans/scenario/preview")) {
             requireMethod(method,"POST");var fields=Json.parseObject(body(e,1024*1024));known(fields,"scenario","retailer");return json(200,parseScenario(fields.get("scenario")).estimate(optional(fields,"retailer")));
         }
         if (path.equals("/shopping-plans")) {
             requireMethod(method, "POST");
-            return write(e, principal, request -> {
+            return write(e, principal, 8*1024*1024, request -> {
                 ShoppingPlan plan = parsePlan(null, Json.parseObject(request), 1, null);
                 plans.save(plan, principal);
                 return json(201, plan);
@@ -584,7 +626,7 @@ public final class CouponApiService implements HttpHandler {
                 });
             }
             requireMethod(method, "PUT");
-            return write(e, principal, request -> {
+            return write(e, principal, 8*1024*1024, request -> {
                 long expected = revision(e);
                 ShoppingPlan previous = plans.findById(id).orElseThrow();
                 if (previous.revision() != expected) {
@@ -676,7 +718,7 @@ public final class CouponApiService implements HttpHandler {
     }
 
     private ShoppingPlan parsePlan(UUID pathId, Map<String, Object> f, long next, ShoppingPlan previous) {
-        known(f, "planId", "name", "retailer", "shoppingDate", "revision", "plannedPurchaseIds", "scenario");
+        known(f, "planId", "name", "retailer", "shoppingDate", "revision", "plannedPurchaseIds", "scenario","organization");
         UUID id = pathId == null ? UUID.fromString(required(f, "planId")) : pathId;
         if (f.containsKey("planId") && !id.toString().equals(required(f, "planId"))) {
             throw new ApiError(400, "Plan ID must match the URL.");
@@ -696,8 +738,16 @@ public final class CouponApiService implements HttpHandler {
             }
         }
         String date = f.containsKey("shoppingDate") ? optional(f, "shoppingDate") : previous == null || previous.shoppingDate() == null ? null : previous.shoppingDate().toString();
+        var organization=f.containsKey("organization")?planningOrganization(f.get("organization")):previous==null?null:previous.organization();
+        if(organization!=null) {
+            if(id.equals(organization.alternativeOf())||organization.rewardSources().contains(id))throw new ApiError(400,"A plan cannot depend on or be an alternative to itself.");
+            for(var sourceId:organization.rewardSources()) {
+                var source=plans.findById(sourceId).orElseThrow();
+                if(organization.stage().equals("TRIP")&&(source.organization()==null||source.organization().checkoutOrder()==null||organization.checkoutOrder()==null||source.organization().checkoutOrder()>=organization.checkoutOrder()))throw new ApiError(400,"Reward sources must come earlier in checkout order.");
+            }
+        }
         return new ShoppingPlan(id, required(f, "name"), f.containsKey("retailer") ? optional(f, "retailer") : previous == null ? null : previous.retailer(),
-                date == null ? null : LocalDate.parse(date), purchases, next,f.containsKey("scenario")?(f.get("scenario")==null?null:parseScenario(f.get("scenario"))):previous==null?null:previous.scenario(),previous==null?null:previous.purchasedReceiptId());
+                date == null ? null : LocalDate.parse(date), purchases, next,f.containsKey("scenario")?(f.get("scenario")==null?null:parseScenario(f.get("scenario"))):previous==null?null:previous.scenario(),previous==null?null:previous.purchasedReceiptId(),organization);
     }
 
     static ShoppingPlan.Scenario parseScenario(Object raw) {
@@ -706,11 +756,35 @@ public final class CouponApiService implements HttpHandler {
     private static ShoppingPlan.Scenario parseScenarioFields(Object raw) {
         if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Complete the planning scenario.");
         @SuppressWarnings("unchecked") var f=(Map<String,Object>)raw;
-        known(f,"items","coupons","promotions","tax","walgreensCashUsed","registerRewardsUsed","giftCardUsed","manualOop","paymentMethod","fundingNotes","taxRate","payments");
-        var items=ReceiptInput.rows(f,"items",100).stream().map(r->{known(r,"id","name","sku","regular","sale","quantity","memberRewardRate");return new ShoppingPlan.Line(ReceiptInput.uuid(r,"id"),required(r,"name"),optional(r,"sku"),ReceiptInput.decimal(r,"regular",false),ReceiptInput.decimal(r,"sale",true),Math.toIntExact(number(r.get("quantity"))),r.get("memberRewardRate")==null?null:Math.toIntExact(number(r.get("memberRewardRate"))));}).toList();
+        known(f,"items","coupons","promotions","tax","walgreensCashUsed","registerRewardsUsed","giftCardUsed","manualOop","paymentMethod","fundingNotes","taxRate","payments","source");
+        var items=ReceiptInput.rows(f,"items",100).stream().map(r->{known(r,"id","name","sku","regular","sale","quantity","memberRewardRate","priceRule");return new ShoppingPlan.Line(ReceiptInput.uuid(r,"id"),required(r,"name"),optional(r,"sku"),ReceiptInput.decimal(r,"regular",true),ReceiptInput.decimal(r,"sale",true),Math.toIntExact(number(r.get("quantity"))),r.get("memberRewardRate")==null?null:Math.toIntExact(number(r.get("memberRewardRate"))),planningPriceRule(r.get("priceRule")));}).toList();
         var coupons=ReceiptInput.rows(f,"coupons",100).stream().map(r->{known(r,"id","description","amount","requiredQuantity","lineIds","savedCouponId","kind","wholeReceipt");return new ShoppingPlan.ScenarioCoupon(ReceiptInput.uuid(r,"id"),required(r,"description"),ReceiptInput.decimal(r,"amount",false),Math.toIntExact(number(r.get("requiredQuantity"))),ReceiptInput.ids(r,"lineIds"),optional(r,"savedCouponId")==null?null:ReceiptInput.uuid(r,"savedCouponId"),optional(r,"kind"),r.containsKey("wholeReceipt")&&ReceiptInput.flag(r,"wholeReceipt"));}).toList();
         var promotions=ReceiptInput.rows(f,"promotions",100).stream().map(r->{known(r,"id","description","rewardType","rewardAmount","requiredQuantity","requiredSpend","spendBasis","allowsWalgreensCash","allowsWalmartCash","lineIds","wholeReceipt");return new ShoppingPlan.ScenarioPromotion(ReceiptInput.uuid(r,"id"),required(r,"description"),required(r,"rewardType"),ReceiptInput.decimal(r,"rewardAmount",false),Math.toIntExact(number(r.get("requiredQuantity"))),ReceiptInput.decimal(r,"requiredSpend",false),required(r,"spendBasis"),ReceiptInput.flag(r,"allowsWalgreensCash"),ReceiptInput.ids(r,"lineIds"),r.containsKey("wholeReceipt")&&ReceiptInput.flag(r,"wholeReceipt"),!r.containsKey("allowsWalmartCash")||ReceiptInput.flag(r,"allowsWalmartCash"));}).toList();
-        return new ShoppingPlan.Scenario(items,coupons,promotions,ReceiptInput.decimal(f,"tax",false),ReceiptInput.decimal(f,"walgreensCashUsed",false),ReceiptInput.decimal(f,"registerRewardsUsed",false),ReceiptInput.decimal(f,"giftCardUsed",false),ReceiptInput.decimal(f,"manualOop",true),required(f,"paymentMethod"),optional(f,"fundingNotes"),ReceiptInput.decimal(f,"taxRate",true),!f.containsKey("payments")||f.get("payments")==null?null:ReceiptInput.rows(f,"payments",100).stream().map(r->{known(r,"id","type","amount","notes");return new ShoppingPlan.ScenarioPayment(ReceiptInput.uuid(r,"id"),required(r,"type"),ReceiptInput.decimal(r,"amount",false),optional(r,"notes"));}).toList());
+        return new ShoppingPlan.Scenario(items,coupons,promotions,ReceiptInput.decimal(f,"tax",false),ReceiptInput.decimal(f,"walgreensCashUsed",false),ReceiptInput.decimal(f,"registerRewardsUsed",false),ReceiptInput.decimal(f,"giftCardUsed",false),ReceiptInput.decimal(f,"manualOop",true),required(f,"paymentMethod"),optional(f,"fundingNotes"),ReceiptInput.decimal(f,"taxRate",true),!f.containsKey("payments")||f.get("payments")==null?null:ReceiptInput.rows(f,"payments",100).stream().map(r->{known(r,"id","type","amount","notes");return new ShoppingPlan.ScenarioPayment(ReceiptInput.uuid(r,"id"),required(r,"type"),ReceiptInput.decimal(r,"amount",false),optional(r,"notes"));}).toList(),planningSource(f.get("source")));
+    }
+
+    private ShoppingPlan.Organization planningOrganization(Object raw) {
+        if(raw==null)return null;
+        if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Invalid trip details.");
+        @SuppressWarnings("unchecked") var f=(Map<String,Object>)raw;
+        known(f,"stage","alternativeOf","checkoutOrder","rewardSources");
+        var sources=ReceiptInput.ids(f,"rewardSources");
+        for(var source:sources)plans.findById(source).orElseThrow(()->new IllegalArgumentException("Reward source plan no longer exists."));
+        return new ShoppingPlan.Organization(required(f,"stage"),optional(f,"alternativeOf")==null?null:UUID.fromString(optional(f,"alternativeOf")),f.get("checkoutOrder")==null?null:Math.toIntExact(number(f.get("checkoutOrder"))),sources);
+    }
+    private static ShoppingPlan.PriceRule planningPriceRule(Object raw) {
+        if(raw==null)return null;
+        if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Invalid sale rule.");
+        @SuppressWarnings("unchecked") var f=(Map<String,Object>)raw;
+        known(f,"type","bundlePrice","lineIds");return new ShoppingPlan.PriceRule(required(f,"type"),ReceiptInput.decimal(f,"bundlePrice",true),ReceiptInput.ids(f,"lineIds"));
+    }
+    private static ShoppingPlan.PlanningSource planningSource(Object raw) { return planningSource(raw,0); }
+    private static ShoppingPlan.PlanningSource planningSource(Object raw,int depth) {
+        if(depth>1)throw new IllegalArgumentException("Invalid nested planning source.");
+        if(raw==null)return null;
+        if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Invalid planning source.");
+        @SuppressWarnings("unchecked") var f=(Map<String,Object>)raw;
+        known(f,"text","mediaType","contentBase64","earlier");return new ShoppingPlan.PlanningSource(optional(f,"text"),optional(f,"mediaType"),optional(f,"contentBase64"),ReceiptInput.rows(f,"earlier",20).stream().map(row->planningSource(row,depth+1)).toList());
     }
 
     private String authorize(HttpExchange e, boolean write) {

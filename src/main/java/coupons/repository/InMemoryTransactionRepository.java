@@ -421,6 +421,9 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
     }
 
     private void validateRewardOrigin(State current, ReceiptRevSnap spending, RegisterReward reward) {
+        var aliases=new java.util.HashSet<UUID>();aliases.add(reward.getRewardId());current.receipts().values().stream().flatMap(r->r.contents().observations().earnings().stream()).filter(e->reward.getRewardId().equals(e.instrumentId())).forEach(e->aliases.add(e.earningId()));
+        var day=spending.contents().observations().purchaseDate();
+        if(current.balances().adjustments().stream().anyMatch(a->a.unavailable()&&aliases.contains(a.unavailableSource())&&(day==null||!a.date().isAfter(day))))throw new IllegalArgumentException("This reward was recorded as unavailable before this purchase.");
         UUID sourceId = reward.getEarnedReceiptId();
         if (sourceId == null) return; // An explicitly recorded pre-existing physical coupon.
         var source = sourceId.equals(spending.transactionId()) ? spending : current.receipts().get(sourceId);
@@ -581,6 +584,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
         }
         if (face.compareTo(link.amount()) != 0) throw new IllegalArgumentException("Coupon face value must match the recorded deduction exactly.");
         var spentDate = spent.contents().observations().purchaseDate();
+        if(current.balances().adjustments().stream().anyMatch(a->a.unavailable()&&link.sourceId().equals(a.unavailableSource())&&(spentDate==null||!a.date().isAfter(spentDate))))throw new IllegalArgumentException("This RR was marked unavailable before the purchase.");
         if (earnedDate != null && spentDate != null && earnedDate.isAfter(spentDate)) throw new IllegalArgumentException("RR cannot be used before it was earned.");
     }
     public RRUsageLink linkRRUsage(RRUsageLink link) {

@@ -51,7 +51,7 @@ public final class PostgresShoppingPlanRepository implements ShoppingPlanReposit
         try(var p=c.prepareStatement("SELECT payload FROM shopping_plan_current WHERE plan_id=? FOR UPDATE")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new IllegalArgumentException("Shopping plan no longer exists.");old=PostgresRepositorySupport.deserialize(r.getBytes(1),ShoppingPlan.class);}}
         if(old.purchasedReceiptId()!=null)throw new ConcurrentModificationException("This plan is already purchased. Open its linked receipt.");
         if(old.revision()!=expected)throw new ConcurrentModificationException("Plan changed since this draft was opened. Review the current plan before saving.");
-        var next=new ShoppingPlan(old.planId(),old.name(),old.retailer(),old.shoppingDate(),old.plannedPurchaseIds(),Math.addExact(expected,1),old.scenario(),receiptId);
+        var next=new ShoppingPlan(old.planId(),old.name(),old.retailer(),old.shoppingDate(),old.plannedPurchaseIds(),Math.addExact(expected,1),old.scenario(),receiptId,old.organization());
         try(var p=c.prepareStatement("UPDATE shopping_plan_current SET revision=?,payload=? WHERE plan_id=?")){p.setLong(1,next.revision());p.setBytes(2,PostgresRepositorySupport.serialize(next));p.setObject(3,id);p.executeUpdate();}
         history(c,next,actor,"Purchased on receipt "+receiptId);
     }

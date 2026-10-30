@@ -1,6 +1,7 @@
+import { FormActions } from './components/ui'
 import type { ReceiptDraftState } from './features/receipts/ReceiptCreate'
 import { useCallback, useEffect, useState } from 'react'
-import { ClipboardList, Coins, Download, LayoutDashboard, Leaf, LogOut, Menu, Package, ReceiptText, RefreshCw, ShieldCheck, ShoppingBag, Ticket, Wallet, X } from 'lucide-react'
+import { ClipboardList, Download, LayoutDashboard, Leaf, LogOut, Menu, Package, ReceiptText, RefreshCw, ShieldCheck, ShoppingBag, Ticket, Wallet, X } from 'lucide-react'
 import type { FormEvent } from 'react'
 import { ApiClient } from './api/client'
 import { Loading, Modal, Notice } from './components/ui'
@@ -16,16 +17,31 @@ import type { Plan, PlanReceiptDraft } from './types/platform'
 import { CheckoutForm } from './features/shopping/CheckoutForm'
 
 const navigation = [
-  { id: 'dashboard', name: 'Overview', icon: LayoutDashboard }, { id: 'shopping', name: 'Shopping plans', icon: ClipboardList },
+  { id: 'dashboard', name: 'Overview', icon: LayoutDashboard }, { id: 'shopping', name: 'Shopping & Deals', icon: ClipboardList },
   { id: 'receipts', name: 'Receipts', icon: ReceiptText }, { id: 'coupons', name: 'Coupons', icon: Ticket },
-  { id: 'deals', name: 'Deals & promotions', icon: ShoppingBag }, { id: 'rewards', name: 'Rewards & Accounts', icon: Wallet },
-  { id: 'inventory', name: 'Inventory', icon: Package }, { id: 'rebates', name: 'Rebates', icon: Coins },
+  { id: 'deals', name: 'Promotions & Rebates', icon: ShoppingBag }, { id: 'rewards', name: 'Rewards & Accounts', icon: Wallet },
+  { id: 'inventory', name: 'Inventory', icon: Package },
 ] as const
 interface InstallEvent extends Event { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> }
 function Brand() { return <div className="brand"><span className="brand-icon"><Leaf size={24} /></span><span>grocery<span>intelligence</span></span></div> }
-function currentPage(): Page { const page = location.hash.slice(1); return navigation.some(n => n.id === page) ? page as Page : 'dashboard' }
+function currentPage(): Page { const raw = location.hash.slice(1); const page = raw==='rebates'?'deals':raw; return navigation.some(n => n.id === page) ? page as Page : 'dashboard' }
 
 export default function App() {
+  useEffect(()=>{
+    // Preserve accessible labels while showing them visually only as placeholders.
+    const apply=()=>document.querySelectorAll<HTMLLabelElement>('label').forEach(label=>{
+      if(label.closest('.connect-page,.shopping-week-controls,[data-original-shopping="true"]')){label.removeAttribute('data-placeholder-field');if(label.closest('.connect-page'))label.querySelector('input')?.setAttribute('placeholder','Enter your access token');return}
+      const control=Array.from(label.children).find(n=>n.matches('input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),textarea,select')) as HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement|undefined
+      if(!control)return
+      const text=Array.from(label.childNodes).filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent??'').join(' ').trim()||control.getAttribute('aria-label')||''
+      if(!text)return
+      if(label.dataset.placeholderField!=='true')label.dataset.placeholderField='true'
+      if(control.tagName!=='SELECT'&&control.getAttribute('placeholder')!==text)control.setAttribute('placeholder',text)
+    })
+    apply();const observer=new MutationObserver(apply);observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['data-original-shopping']})
+    return()=>observer.disconnect()
+  },[])
+
   const [api, setApi] = useState<ApiClient | null>(null)
   const [data, setData] = useState<Workspace | null>(null)
   const [token, setToken] = useState('')
@@ -64,7 +80,7 @@ export default function App() {
     setRefreshing(true); setError('')
     try { setData(await api.workspace()) } catch (e) { setError((e as Error).message) } finally { setRefreshing(false) }
   }, [api])
-  function navigate(p: Page) { setPage(p); window.history.pushState(null, '', `#${p}`); setMobileMenu(false) }
+  function navigate(requested: Page) { const p=requested==='rebates'?'deals':requested; setPage(p); window.history.pushState(null, '', `#${p}`); setMobileMenu(false) }
   const closeEdit = useCallback(() => setEdit(null), [])
   function openNestedEditor(next: Edit) {
     if (edit?.kind === 'plan' && edit.plan) {
@@ -89,7 +105,7 @@ export default function App() {
   async function installApp() { if (install) { await install.prompt(); await install.userChoice; setInstall(null) } }
   if (!api || !data) return <main className="connect-page"><section className="connect-story"><Brand /><div><span className="eyebrow">Shop thoughtfully. Keep more.</span><h1>A clearer picture<br />of every grocery trip.</h1><p>Your shopping plans, receipts, coupons, and rewards — together in one personal workspace.</p><div className="story-icons"><span><ClipboardList />Plan your trip</span><span><ReceiptText />Know your spending</span><span><Wallet />Track your rewards</span></div></div><small>One workspace. Every little saving.</small></section><section className="connect-form"><span className="icon-tile mint"><ShieldCheck size={26} /></span><h2>Welcome to your workspace</h2><p>Connect to your Grocery Intelligence API to get started.</p>{!online && <Notice>You’re offline. Reconnect to load your records. Financial data is not stored for offline use.</Notice>}{error && <div className="error" role="alert">{error}</div>}<form onSubmit={connect}><label>API access token<input type="password" autoComplete="off" required value={token} onChange={e => setToken(e.target.value)} disabled={connecting} placeholder="Enter your access token" /></label><button className="primary full-width" disabled={connecting || !online}>{connecting ? 'Connecting…' : 'Open my workspace'}</button></form><p className="security-note"><ShieldCheck size={15} />Your token stays in memory. It is not saved on this device.</p><details><summary>Connection & installation help</summary><p>Start the Java API and use its configured access token. In development, Vite forwards API requests to the local backend.</p><p>To install on iPhone, use Share → Add to Home Screen. Installation requires HTTPS, or localhost for desktop development.</p></details></section></main>
   const writable = data.canWrite && online && !refreshing
-  return <div className="app-shell">
+  return <div className="app-shell" data-original-shopping={page==='shopping'&&!creating&&!receipt?'true':undefined}>
     <a className="skip-link" href="#main-content" onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus() }}>Skip to content</a>
     <aside className={`sidebar ${mobileMenu ? 'is-open' : ''}`}><Brand /><button className="mobile-close icon-button" aria-label="Close navigation" onClick={() => setMobileMenu(false)}><X /></button><span className="nav-label">WORKSPACE</span><nav aria-label="Main navigation">{navigation.map(n => <a key={n.id} href={`#${n.id}`} aria-current={page === n.id ? 'page' : undefined} className={page === n.id ? 'selected' : ''} onClick={e => { e.preventDefault(); navigate(n.id) }}><n.icon size={19} /><span>{n.name}</span>{n.id === 'shopping' && data.plans.length > 0 && <span className="nav-count">{data.plans.length}</span>}</a>)}</nav><div className="sidebar-bottom"><div className="sidebar-note"><Leaf size={20} /><strong>Small savings add up.</strong><p>Keep your plans and recorded benefits in perspective.</p></div><button className="workspace-settings" onClick={() => setSettings(true)}><span className="owner-avatar">G</span><span><strong>Owner workspace</strong><small>{data.canWrite ? 'Owner access' : 'Read-only access'}</small></span><ShieldCheck size={17} /></button><button className="text-button logout" onClick={logout}><LogOut size={16} />Disconnect</button></div></aside>
     {mobileMenu && <button className="menu-shade" aria-label="Close navigation" onClick={() => setMobileMenu(false)} />}
@@ -136,6 +152,6 @@ export default function App() {
     )}
     {creating && <ReceiptCreate workspace={data??undefined} onOpenExisting={id=>{setCreating(false);setSavedReceiptDraft(null);setPlanReceipt(null);setReceipt(id)}} savedDraft={savedReceiptDraft??undefined} onDraftSaved={()=>void refresh()} planning={planReceipt??undefined} coupons={data?.coupons} products={data?.productLookup} offers={data?.rewardOffers} api={api} enabled={writable} onClose={closeCreate} onReview={reviewSaved} onSaved={id => { setCreating(false);setSavedReceiptDraft(null);setPlanReceipt(null); setReceipt(id); setMessage('Receipt saved.'); void refresh() }} />}
     {receipt && <ReceiptDetail offers={data?.rewardOffers} id={receipt} api={api} onClose={closeReceipt} writable={writable} onChanged={() => void refresh()} />}
-    {settings && <Modal title="Your workspace" onClose={closeSettings}><p>This connection serves one owner’s database. The web app does not read or migrate local receipt files.</p><div className="key-values"><div><span>Access</span><strong>{data.canWrite ? 'Owner / write' : 'Read only'}</strong></div><div><span>Data storage</span><strong>Backend database</strong></div><div><span>Offline financial storage</span><strong>Disabled</strong></div></div>{install ? <button className="primary" onClick={() => void installApp()}><Download size={18} />Install application</button> : <p className="muted">Install using your browser’s app menu. On iPhone: Share → Add to Home Screen. HTTPS is required outside localhost.</p>}<div className="form-actions"><button className="secondary" onClick={logout}><LogOut size={17} />Disconnect and clear screen</button></div></Modal>}
+    {settings && <Modal title="Your workspace" onClose={closeSettings}><p>This connection serves one owner’s database. The web app does not read or migrate local receipt files.</p><div className="key-values"><div><span>Access</span><strong>{data.canWrite ? 'Owner / write' : 'Read only'}</strong></div><div><span>Data storage</span><strong>Backend database</strong></div><div><span>Offline financial storage</span><strong>Disabled</strong></div></div>{install ? <button className="primary" onClick={() => void installApp()}><Download size={18} />Install application</button> : <p className="muted">Install using your browser’s app menu. On iPhone: Share → Add to Home Screen. HTTPS is required outside localhost.</p>}<FormActions><button className="secondary" onClick={logout}><LogOut size={17} />Disconnect and clear screen</button></FormActions></Modal>}
   </div>
 }

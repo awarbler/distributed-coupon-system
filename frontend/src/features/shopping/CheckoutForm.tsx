@@ -1,3 +1,4 @@
+import { FormActions } from '../../components/ui'
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiClient, ApiError } from '../../api/client'
@@ -258,7 +259,7 @@ export function CheckoutForm({
           </p>
 
 
-          <div className="form-actions">
+          <FormActions>
             <button type="button" className="secondary" onClick={onClose}>
               Cancel
             </button>
@@ -269,7 +270,7 @@ export function CheckoutForm({
             >
               {saving ? 'Saving…' : pendingKey ? 'Retry save' : 'Save checkout'}
             </button>
-          </div>
+          </FormActions>
         </form>
       )}
     </Modal>

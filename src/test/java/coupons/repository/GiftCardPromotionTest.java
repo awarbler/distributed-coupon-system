@@ -34,6 +34,21 @@ class GiftCardPromotionTest {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
+
+    @Test void afterCouponReceiptLinksAreExactAndSubmissionDoesNotIssueFunds()throws Exception {
+        var repo=new InMemoryTransactionRepository();var id=save(repo,"20.0000");var receipt=repo.findById(id).orElseThrow();
+        var offer=offer(GiftCardPromotion.Basis.SALE_BEFORE_COUPONS);
+        var lines=receipt.transaction().getPurchaseItems().stream().map(PurchaseItem::getLineItemId).toList();
+        var link=new GiftCardPromotion.Contribution(id,1,lines,new BigDecimal("15.00125"),"After product coupons",true,true,LocalDate.of(2026,10,5),"claim-123");
+        assertEquals(new BigDecimal("15.00125"),offer.eligibleAmount(link,receipt).orElseThrow());assertTrue(link.submitted());
+        assertEquals(GiftCardPromotion.Status.TRACKING,offer.withContribution(link).status());
+        var changed=new ReceiptRecord(id,receipt.status(),2,receipt.transaction(),receipt.metadata(),receipt.evidenceIds());assertTrue(offer.eligibleAmount(link,changed).isEmpty());
+        var bytes=new java.io.ByteArrayOutputStream();try(var out=new java.io.ObjectOutputStream(bytes)){out.writeObject(offer.withContribution(link));}
+        GiftCardPromotion loaded;try(var in=new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray()))){loaded=(GiftCardPromotion)in.readObject();}
+        assertEquals(link,loaded.contributions().get(id));assertEquals(GiftCardPromotion.contributionToken(link),GiftCardPromotion.contributionToken(loaded.contributions().get(id)));
+        assertNotEquals(GiftCardPromotion.contributionToken(link),GiftCardPromotion.contributionToken(new GiftCardPromotion.Contribution(id,1,lines,new BigDecimal("15"),"Changed")));
+        assertTrue(new ProviderBalanceSummary().movements(List.of(receipt)).isEmpty());assertEquals(1,receipt.revision());
+    }
     @Test void multipleReceiptsRecomputeOnceAfterCorrectionAndRestart(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("receipts.bin");
         UUID first;

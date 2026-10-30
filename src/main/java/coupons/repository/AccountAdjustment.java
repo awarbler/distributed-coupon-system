@@ -14,6 +14,8 @@ public record AccountAdjustment(UUID eventId, LocalDate date, String provider, B
     public AccountAdjustment(UUID eventId, LocalDate date, String provider, BigDecimal unitChange, BigDecimal usdChange, String reason, String recordedBy, Instant recordedAt) {
         this(eventId,date,provider,unitChange,usdChange,reason,recordedBy,recordedAt,null);
     }
+    public boolean unavailable(){return reason.startsWith("Reward unavailable: ");}
+    public UUID unavailableSource(){if(!unavailable())return null;String[] parts=reason.split(" \\| ",3);return parts.length>1&&!parts[1].equals("ACCOUNT")?UUID.fromString(parts[1]):null;}
     public AccountAdjustment {
         if(expirationDate!=null && expirationDate.isBefore(date))throw new IllegalArgumentException("Expiration must be on or after the reward date.");
         Objects.requireNonNull(eventId); Objects.requireNonNull(date); Objects.requireNonNull(provider);

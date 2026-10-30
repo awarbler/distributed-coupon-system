@@ -190,12 +190,66 @@ class CouponApiServiceTest {
         assertEquals(payout.originalUnitsUsed(), payouts.get(id).originalUnitsUsed());
     }
 
+
+    @Test void printedCashIsPreviewedAndSavedOnceOnIdempotentReceiptCreation()throws Exception {
+        UUID id=UUID.randomUUID();var fields=ReceiptInputTest.draft(id);fields.put("retailer","Walgreens");fields.put("earnings",List.of());fields.put("printedFooter",Map.of("status","PRINTED","wcEarned","0.69"));
+        var preview=call("POST","/receipts/preview","owner",Json.object(fields),"printed-cash-preview",null);
+        assertEquals(200,preview.statusCode(),preview.body());assertTrue(receipts.findById(id).isEmpty());
+        fields.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));fields.put("acknowledgeDifference",true);
+        var first=call("POST","/receipts","owner",Json.object(fields),"printed-cash-save",null);assertEquals(201,first.statusCode(),first.body());
+        var retry=call("POST","/receipts","owner",Json.object(fields),"printed-cash-save",null);assertEquals(first.body(),retry.body());
+        var saved=receipts.findById(id).orElseThrow();assertEquals(1,saved.revision());
+        var earned=saved.transaction().getObservations().earnings().stream().filter(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH).toList();assertEquals(1,earned.size());assertEquals(new BigDecimal("0.69"),earned.getFirst().confirmed().amount());
+    }
+
+    @Test void receiptViewShowsSaleSubtotalBeforeCouponsWithoutChangingCheckout(){
+        var fields=ReceiptInputTest.draft(UUID.randomUUID());UUID line=UUID.randomUUID();
+        fields.put("items",List.of(Map.of("lineItemId",line,"description","Receipt merchandise","regularUnitPrice","30.53","unitPrice","30.53","quantity",1)));
+        fields.put("discounts",List.of(Map.of("applicationId",UUID.randomUUID(),"label","Sale reductions","amount","10.88","kind","SALE_PROMOTION","lineItemIds",List.of(line),"wholeReceipt",false)));
+        fields.put("rrUsed","10.00");fields.put("tax","0.47");fields.put("reportedTotal","9.62");
+        var record=ReceiptInput.read(Json.parseObject(Json.object(fields))).record();
+        var totals=ReceiptViews.totals(record);
+        assertEquals(new BigDecimal("19.65"),totals.get("merchandiseBeforeCoupons"));
+        assertEquals(new BigDecimal("30.53"),totals.get("saleMerchandise"));
+        assertEquals(new BigDecimal("10.12"),totals.get("calculatedDue"));
+        assertEquals(new BigDecimal("9.62"),totals.get("reportedDue"));
+    }
+
     @Test void receiptViewsCalculateWithoutStorageAndPreserveKnownDiscrepancy() {
         var input = ReceiptInput.read(Json.parseObject(Json.object(ReceiptInputTest.draft(UUID.randomUUID()))));
         var totals = ReceiptViews.totals(input.record());
         assertEquals(0, new BigDecimal("7.27").compareTo((BigDecimal) totals.get("calculatedDue")));
         assertEquals(0, new BigDecimal("7.28").compareTo((BigDecimal) totals.get("reportedDue")));
         assertEquals(0, new BigDecimal("0.01").compareTo((BigDecimal) totals.get("difference")));
+    }
+
+    @Test void shoppingNotebookPreviewAndSourceSaveAreIsolatedFromReceipts() throws Exception {
+        String text="Colgate 6 x2\n5 off 2\nearn 5 RR\nCheck my offer";
+        assertEquals(403,call("POST","/shopping-plans/import-preview","reader",Json.object(Map.of("text",text)),null,null).statusCode());
+        var imported=call("POST","/shopping-plans/import-preview","owner",Json.object(Map.of("text",text)),null,null);
+        assertEquals(200,imported.statusCode(),imported.body());
+        var fields=Json.parseObject(imported.body());
+        var scenario=new LinkedHashMap<String,Object>();
+        for(String key:List.of("items","coupons","promotions","source"))scenario.put(key,fields.get(key));
+        scenario.putAll(Map.of("tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH","fundingNotes",""));
+        for(String collection:List.of("items","coupons","promotions"))for(var row:ReceiptInput.rows(scenario,collection,100))for(String amount:List.of("regular","sale","amount","rewardAmount","requiredSpend"))if(row.get(amount) instanceof BigDecimal decimal)row.put(amount,decimal.toPlainString());
+        var preview=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",scenario)),null,null);
+        assertEquals(200,preview.statusCode(),preview.body());
+        assertEquals(new BigDecimal("7"),Json.parseObject(preview.body()).get("calculatedOop"));
+        assertNull(Json.parseObject(preview.body()).get("regularTotal"));
+        UUID id=UUID.randomUUID();var body=Json.object(Map.of("planId",id,"name","Synthetic notebook","shoppingDate","2026-10-27","scenario",scenario,"organization",Map.of("stage","IDEA","rewardSources",List.of())));
+        var created=call("POST","/shopping-plans","owner",body,"notebook-create",null);
+        assertEquals(201,created.statusCode(),created.body());assertEquals(created.body(),call("POST","/shopping-plans","owner",body,"notebook-create",null).body());
+        assertEquals(text,plans.findById(id).orElseThrow().scenario().source().text());
+        assertEquals("IDEA",plans.findById(id).orElseThrow().organization().stage());
+        assertTrue(receipts.findById(id).isEmpty());
+        var comparison=call("POST","/shopping-plans/compare","reader",Json.object(Map.of("a",scenario,"b",scenario)),null,null);
+        assertEquals(200,comparison.statusCode(),comparison.body());assertEquals(BigDecimal.ZERO,Json.parseObject(comparison.body()).get("cashDifference"));
+        var cycle=call("PUT","/shopping-plans/"+id,"owner",Json.object(Map.of("name","Synthetic notebook","organization",Map.of("stage","TRIP","checkoutOrder",0,"rewardSources",List.of(id)))),"notebook-self","1");
+        assertEquals(400,cycle.statusCode(),cycle.body());assertEquals(1,plans.findById(id).orElseThrow().revision());
+        ReceiptInput.rows(scenario,"items",100).getFirst().put("priceRule",Map.of("type","BOGO_FREE","lineIds",List.of(UUID.randomUUID())));
+        var badGroup=call("PUT","/shopping-plans/"+id,"owner",Json.object(Map.of("name","Synthetic notebook","scenario",scenario)),"notebook-invalid-group","1");
+        assertEquals(400,badGroup.statusCode(),badGroup.body());assertEquals(1,plans.findById(id).orElseThrow().revision());
     }
 
     @Test void linkedReceiptCreationDispatchesThroughInjectedInterface() throws Exception {
@@ -362,7 +416,7 @@ class CouponApiServiceTest {
         for(String body:List.of("{", "{\"name\":\"a\",\"name\":\"b\"}", "{\"name\":\"a\",}", "{} trailing"))
             assertEquals(400,call("POST","/shopping-plans","owner",body,UUID.randomUUID().toString(),null).statusCode());
         assertEquals(400,call("POST","/shopping-plans","owner",planBody(UUID.randomUUID(),"x"),null,null).statusCode());
-        assertEquals(413,call("POST","/shopping-plans","owner"," ".repeat(65537),"large",null).statusCode());
+        assertEquals(413,call("POST","/shopping-plans","owner"," ".repeat(8*1024*1024+1),"large",null).statusCode());
         assertEquals(0,plans.writes);
     }
     @Test void internalErrorsDoNotExposeStorageDetails() throws Exception {

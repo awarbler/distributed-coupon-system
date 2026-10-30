@@ -54,6 +54,7 @@ import coupons.SavingsReport;
 import coupons.ShoppingPlan;
 import coupons.SourceArtifact;
 import coupons.TransactionCalculator;
+import coupons.repository.GiftCardPromotion;
 import coupons.repository.PostgresClippedCouponRepository;
 import coupons.repository.PostgresConnectionFactory;
 import coupons.repository.PostgresDealRepository;
@@ -135,6 +136,146 @@ class PostgresApiIntegrationTest {
         if (admin != null && schema != null)try (Connection c = PostgresTestDatabase.targetForSchema(schema).open(admin)) {
             c.createStatement().execute("DROP SCHEMA " + schema + " CASCADE");
         }
+    }
+
+
+    @Test void unavailableRewardsReduceBalancesWithoutCountingAsSpentAndRetainNativePoints()throws Exception{
+        for(String provider:List.of("ECB","Fetch","Target Gift Card")){
+            boolean points=provider.equals("Fetch");var accounts=new coupons.repository.PostgresProviderAccountRepository(db);
+            accounts.saveOpening(new coupons.repository.AccountOpening(UUID.randomUUID(),LocalDate.of(2026,10,1),provider,points?BigDecimal.ZERO:null,BigDecimal.ZERO,true,"Recorded test value","test opening",Instant.now()));
+            UUID source=UUID.randomUUID();accounts.saveAdjustment(new coupons.repository.AccountAdjustment(source,LocalDate.of(2026,10,5),provider,points?new BigDecimal("1000"):null,new BigDecimal("10.0000"),"Member reward: synthetic earning","test",Instant.now()));
+            var body=new LinkedHashMap<String,Object>();body.putAll(Map.of("eventId",UUID.randomUUID(),"provider",provider,"date","2026-10-10","amount","3.0000","category","EXPIRED","reason","Expired without purchase","sourceId",source));if(points)body.put("points","300");
+            var result=call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-"+provider,null);assertEquals(201,result.statusCode(),result.body());
+            assertEquals(result.body(),call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-"+provider,null).body());
+            var report=new PostgresPlatformRepository(db).account(provider,LocalDate.of(2026,10,1),LocalDate.of(2026,10,31));
+            assertEquals(new BigDecimal("10.0000"),report.get("earned"));assertEquals(0,((BigDecimal)report.get("spent")).signum());assertEquals(new BigDecimal("3.0000"),report.get("unavailable"));
+            var end=(coupons.ProviderBalanceSummary.Balance)report.get("ending");assertEquals(0,end.endUsd().compareTo(new BigDecimal("7")));
+            if(points){assertEquals(0,end.endPoints().compareTo(new BigDecimal("700")));assertEquals(new BigDecimal("300"),report.get("unavailablePoints"));assertEquals(0,((BigDecimal)report.get("spentPoints")).signum());}
+            assertEquals(new BigDecimal("10.0000"),accounts.findAdjustment(source).orElseThrow().usdChange());
+            body.put("eventId",UUID.randomUUID());assertEquals(400,call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-duplicate-"+provider,null).statusCode());
+            var removal=accounts.findAdjustments(provider).stream().filter(a->a.unavailable()).findFirst().orElseThrow();assertEquals(source,removal.unavailableSource());assertEquals("Expired without purchase",removal.reason().split(" \\| ",3)[2]);
+        }
+    }
+
+    @Test void unavailablePrintedRRCannotBeMatchedAndItsOriginalReceiptIsUnchanged()throws Exception{
+        UUID origin=UUID.randomUUID(),earning=UUID.randomUUID(),spent=UUID.randomUUID(),use=UUID.randomUUID();
+        var benefit=new RebateBenefit(BenefitKind.STORE_COUPON,new BigDecimal("5"),Currency.getInstance("USD"),null);
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ZERO));
+        tx.setObservations(new ReceiptObservations(LocalDate.of(2026,10,5),"10:00",List.of(new ReceiptObservations.Earning(earning,ReceiptObservations.EarningKind.REGISTER_REWARD,"Walgreens","Printed RR",ReceiptObservations.Scope.RECEIPT,List.of(),benefit,benefit,RebateStatus.PAID,null,null,null,List.of())),List.of(),null,List.of(),Map.of()));
+        receipts.save(origin,tx,new ReceiptMeta("Walgreens","RR-ORIGIN",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        var purchase=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ZERO));purchase.setObservations(new ReceiptObservations(LocalDate.of(2026,10,11),"12:00",List.of(),List.of(new ReceiptObservations.UnidentifiedRR(use,new BigDecimal("5"),"RR used")),null,List.of(),Map.of()));
+        receipts.save(spent,purchase,new ReceiptMeta("Walgreens","RR-SPEND",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        var platform=new PostgresPlatformRepository(db);assertTrue(Json.encode(platform.rrOptions(spent)).contains(earning.toString()));
+        platform.recordUnavailableReward(UUID.randomUUID(),"Register Rewards",LocalDate.of(2026,10,10),new BigDecimal("5"),null,earning,"EXPIRED","Printed coupon expired","test");
+        assertFalse(Json.encode(platform.rrOptions(spent)).contains(earning.toString()));
+        assertThrows(IllegalArgumentException.class,()->platform.matchRR(spent,1,use,earning,true,"Cannot use an expired coupon","test",false));
+        assertEquals(1,receipts.findById(origin).orElseThrow().revision());assertEquals(tx.getObservations(),receipts.findById(origin).orElseThrow().transaction().getObservations());
+        var report=platform.account("Register Rewards",LocalDate.of(2026,10,1),LocalDate.of(2026,10,31));assertEquals(new BigDecimal("5"),report.get("unavailable"));
+        assertEquals(new BigDecimal("5"),report.get("spent")); // Existing unmatched receipt deduction is retained, not manufactured by the loss.
+    }
+
+    @Test void standaloneUnavailableRRAndFailedAdjustmentKeepAuditableOriginals()throws Exception{
+        var accounts=new coupons.repository.PostgresProviderAccountRepository(db);var platform=new PostgresPlatformRepository(db);
+        accounts.saveOpening(new coupons.repository.AccountOpening(UUID.randomUUID(),LocalDate.of(2026,10,1),"Register Rewards",null,new BigDecimal("5"),true,"USD","Test RR opening",Instant.now()));
+        UUID coupon=UUID.randomUUID(),event=UUID.randomUUID();platform.addStandaloneReward(new coupons.RegisterReward(coupon,"Existing paper RR",new BigDecimal("5"),LocalDate.of(2026,10,1),null,null));
+        try(var c=db.open();var statement=c.createStatement()){statement.execute("CREATE FUNCTION reject_loss() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$");statement.execute("CREATE TRIGGER reject_loss BEFORE INSERT ON provider_account_adjustments FOR EACH ROW EXECUTE FUNCTION reject_loss()");}
+        assertThrows(IllegalStateException.class,()->platform.recordUnavailableReward(event,"Register Rewards",LocalDate.of(2026,10,10),new BigDecimal("5"),null,coupon,"LOST","Paper coupon lost","test"));
+        assertTrue(accounts.findAdjustments("Register Rewards").isEmpty());assertEquals("UNUSED",platform.standaloneRewards().getFirst().get("status"));
+        try(var c=db.open();var statement=c.createStatement()){statement.execute("DROP TRIGGER reject_loss ON provider_account_adjustments");statement.execute("DROP FUNCTION reject_loss()");}
+        platform.recordUnavailableReward(event,"Register Rewards",LocalDate.of(2026,10,10),new BigDecimal("5"),null,coupon,"LOST","Paper coupon lost","test");
+        assertEquals("UNAVAILABLE",platform.standaloneRewards().getFirst().get("status"));assertEquals(1,accounts.findAdjustments("Register Rewards").size());
+        assertThrows(java.util.ConcurrentModificationException.class,()->platform.recordUnavailableReward(event,"Register Rewards",LocalDate.of(2026,10,10),new BigDecimal("4"),null,coupon,"LOST","Different amount","test"));
+    }
+
+    @Test void unavailableRewardValidationDoesNotWriteInvalidOrUnauthorizedDeductions()throws Exception{
+        var body=new LinkedHashMap<String,Object>();body.putAll(Map.of("eventId",UUID.randomUUID(),"provider","Fetch","date","2026-10-10","amount","1","category","LOST","reason","Lost points"));
+        assertEquals(400,call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-missing-points",null).statusCode());
+        body.put("points","-1");assertEquals(400,call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-negative",null).statusCode());
+        body.put("points","100");body.put("category","SPENT");assertEquals(400,call("POST","/accounts/unavailable-rewards",Json.object(body),"loss-invalid-category",null).statusCode());
+        var request=HttpRequest.newBuilder(URI.create(base+"/accounts/unavailable-rewards")).header("Authorization","Bearer reader").header("Content-Type","application/json").header("Idempotency-Key","read-only-loss").POST(HttpRequest.BodyPublishers.ofString(Json.object(body))).build();assertEquals(403,client.send(request,HttpResponse.BodyHandlers.ofString()).statusCode());
+        assertTrue(new coupons.repository.PostgresProviderAccountRepository(db).findAdjustments("Fetch").isEmpty());
+    }
+
+    @Test void rebateReceiptLinksPersistNetAmountsAndIndividualSubmissionWithoutChangingReceipts()throws Exception {
+        UUID id=UUID.randomUUID(),line=UUID.randomUUID(),program=UUID.randomUUID();
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,new BigDecimal("15.00")));
+        tx.addPurchaseItem(new PurchaseItem(line,"P&G eligible item",null,new BigDecimal("20.00"),new BigDecimal("20.00"),1));
+        tx.addAppliedCoupon(new CouponApplied(UUID.randomUUID(),"Product coupon",new BigDecimal("5.00"),List.of(line),null,false));
+        tx.setObservations(new ReceiptObservations(LocalDate.of(2026,10,25),"12:00",List.of(),List.of(),null,List.of(),Map.of()));
+        receipts.save(id,tx,new ReceiptMeta("Walgreens","REBATE-TEST",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        var supplement=new coupons.repository.PostgresReceiptSupplementRepository(db);
+        supplement.saveGiftCardPromotion(new coupons.repository.GiftCardPromotion(program,"P&G rebate",new BigDecimal("75"),new BigDecimal("15"),LocalDate.of(2026,10,1),LocalDate.of(2026,10,31),GiftCardPromotion.Basis.SALE_BEFORE_COUPONS,"Selected products after coupons",GiftCardPromotion.Status.TRACKING,Map.of()));
+        UUID other=UUID.randomUUID(),otherLine=UUID.randomUUID();
+        var otherTx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.TEN));
+        otherTx.addPurchaseItem(new PurchaseItem(otherLine,"Another qualifying item",null,BigDecimal.TEN,BigDecimal.TEN,1));
+        otherTx.setObservations(new ReceiptObservations(LocalDate.of(2026,10,25),null,List.of(),List.of(),null,List.of(),Map.of()));
+        receipts.save(other,otherTx,new ReceiptMeta("Walgreens","OTHER-REBATE-TEST",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        supplement.saveRebateReceipt(program,other,1,List.of(otherLine),BigDecimal.TEN,null,false,null,null,"new");
+        byte[] snapshot;try(var c=db.open();var p=c.prepareStatement("SELECT contents FROM receipt_current WHERE transaction_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){r.next();snapshot=r.getBytes(1);}}
+        var body=new LinkedHashMap<String,Object>();body.putAll(Map.of("lineIds",List.of(line),"netAmount","15.0000","note","Coupon deducted once","submitted",true,"submittedOn","2026-10-26","submissionReference","PG-123","expectedContribution","new"));
+        String path="/rebate-programs/"+program+"/receipts/"+id;
+        var saved=call("PUT",path,Json.object(body),"rebate-link","1");assertEquals(200,saved.statusCode(),saved.body());
+        assertEquals(saved.body(),call("PUT",path,Json.object(body),"rebate-link","1").body());
+        var linked=new coupons.repository.PostgresReceiptSupplementRepository(db).giftCardPromotions().getFirst();assertEquals(2,linked.contributions().size());assertFalse(linked.contributions().get(other).submitted());
+        var contribution=linked.contributions().get(id);assertEquals(new BigDecimal("15.0000"),contribution.reviewedAmount());assertTrue(contribution.afterCoupons());assertTrue(contribution.submitted());assertEquals("PG-123",contribution.submissionReference());
+        assertEquals(409,call("PUT",path,Json.object(body),"stale-rebate-link","1").statusCode());
+        body.put("expectedContribution",GiftCardPromotion.contributionToken(contribution));body.put("netAmount","14.00125");body.put("submitted",false);body.put("submittedOn",null);body.put("submissionReference",null);
+        var updated=call("PUT",path,Json.object(body),"rebate-adjust","1");assertEquals(200,updated.statusCode(),updated.body());
+        var latest=supplement.giftCardPromotions().getFirst().contributions().get(id);assertEquals(new BigDecimal("14.00125"),latest.reviewedAmount());assertFalse(latest.submitted());
+        body.put("expectedContribution",GiftCardPromotion.contributionToken(latest));body.put("lineIds",List.of(UUID.randomUUID()));
+        assertEquals(400,call("PUT",path,Json.object(body),"invalid-rebate-lines","1").statusCode());assertEquals(latest,supplement.giftCardPromotions().getFirst().contributions().get(id));
+        assertEquals(409,call("PUT",path,Json.object(body),"stale-rebate-receipt","2").statusCode());
+        body.put("lineIds",List.of(line));body.put("netAmount","21");
+        assertEquals(400,call("PUT",path,Json.object(body),"rebate-too-large","1").statusCode());
+        body.put("netAmount","14.00125");body.put("submitted",true);body.put("submittedOn","2026-10-24");
+        assertEquals(400,call("PUT",path,Json.object(body),"rebate-before-purchase","1").statusCode());
+        body.put("submitted",false);body.put("submittedOn",null);
+        var reader=HttpRequest.newBuilder(URI.create(base+path)).header("Authorization","Bearer reader").header("Content-Type","application/json").header("Idempotency-Key","reader-rebate").header("If-Match-Revision","1").PUT(HttpRequest.BodyPublishers.ofString(Json.object(body))).build();
+        assertEquals(403,client.send(reader,HttpResponse.BodyHandlers.ofString()).statusCode());
+        try(var c=db.open();var statement=c.createStatement()){statement.execute("CREATE FUNCTION reject_rebate_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic failure'; END $$");statement.execute("CREATE TRIGGER reject_rebate_update BEFORE UPDATE ON gift_card_promotions FOR EACH ROW EXECUTE FUNCTION reject_rebate_update()");}
+        assertThrows(IllegalStateException.class,()->supplement.unlinkRebateReceipt(program,id,GiftCardPromotion.contributionToken(latest)));
+        assertThrows(IllegalStateException.class,()->supplement.saveRebateReceipt(program,id,1,List.of(line),BigDecimal.ONE,null,false,null,null,GiftCardPromotion.contributionToken(latest)));
+        try(var c=db.open();var statement=c.createStatement()){statement.execute("DROP TRIGGER reject_rebate_update ON gift_card_promotions");statement.execute("DROP FUNCTION reject_rebate_update()");}
+        assertEquals(latest,supplement.giftCardPromotions().getFirst().contributions().get(id));
+        var workspaceResponse=call("GET","/workspace",null,null,null);assertEquals(200,workspaceResponse.statusCode());assertTrue(workspaceResponse.body().contains("14.00125"));assertTrue(workspaceResponse.body().contains("afterCoupons"));
+        assertEquals(409,call("DELETE",path,Json.object(Map.of("expectedContribution","stale")),"unlink-stale",null).statusCode());
+        String unlinkBody=Json.object(Map.of("expectedContribution",GiftCardPromotion.contributionToken(latest)));
+        var unlinked=call("DELETE",path,unlinkBody,"unlink-rebate",null);assertEquals(200,unlinked.statusCode(),unlinked.body());
+        assertEquals(unlinked.body(),call("DELETE",path,unlinkBody,"unlink-rebate",null).body());
+        var remaining=supplement.giftCardPromotions().getFirst().contributions();assertFalse(remaining.containsKey(id));assertTrue(remaining.containsKey(other));
+        body.put("expectedContribution","new");var relinked=call("PUT",path,Json.object(body),"relink-rebate","1");assertEquals(200,relinked.statusCode(),relinked.body());
+        try(var c=db.open();var p=c.prepareStatement("SELECT contents FROM receipt_current WHERE transaction_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){r.next();assertArrayEquals(snapshot,r.getBytes(1));}}
+        assertEquals(1,receipts.findById(id).orElseThrow().revision());assertEquals(1,receipts.findHistoryByReceiptId(id).size());
+        assertTrue(new ProviderBalanceSummary().movements(List.of(receipts.findById(id).orElseThrow())).isEmpty());
+        var corrected=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,new BigDecimal("40")));
+        corrected.addPurchaseItem(new PurchaseItem(line,"Corrected product",null,new BigDecimal("40"),new BigDecimal("40"),1));
+        corrected.setObservations(tx.getObservations());
+        receipts.update(id,1,corrected,new ReceiptMeta("Walgreens","REBATE-TEST",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptChangeContext("test","synthetic correction","test",Instant.now()));
+        var progress=(java.util.List<?>)new PostgresPlatformRepository(db).workspace(LocalDate.of(2026,10,31)).get("promotions");
+        var projected=(Map<?,?>)progress.getFirst();var links=(Map<?,?>)projected.get("contributions");var original=(Map<?,?>)links.get(id);
+        assertEquals(false,original.get("needsReview"));assertEquals(new BigDecimal("20.00"),original.get("saleTotal"));
+        assertEquals(new BigDecimal("24.00125"),projected.get("eligibleTotal"));assertEquals(true,projected.get("progressComplete"));
+        var retained=supplement.giftCardPromotions().getFirst().contributions().get(id);
+        supplement.saveRebateReceipt(program,id,1,List.of(line),new BigDecimal("13.00125"),null,true,LocalDate.of(2026,10,26),"same submitted receipt",GiftCardPromotion.contributionToken(retained));
+        assertEquals(1,supplement.giftCardPromotions().getFirst().contributions().get(id).reviewedRevision());assertEquals(2,receipts.findById(id).orElseThrow().revision());
+    }
+
+    @Test void notebookSourcesSaleRulesAndTripOrganizationSurviveRepositoryRestart() throws Exception {
+        UUID line=UUID.randomUUID(),id=UUID.randomUUID();
+        var item=new LinkedHashMap<String,Object>();item.putAll(Map.of("id",line,"name","Synthetic Colgate","sale","6.0000","quantity",2,"priceRule",Map.of("type","BOGO_FREE")));item.put("regular",null);
+        var scenario=new LinkedHashMap<String,Object>();scenario.putAll(Map.of("items",List.of(item),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH","fundingNotes",""));
+        scenario.put("source",Map.of("text","Original synthetic note","mediaType","image/png","contentBase64","AQID","earlier",List.of(Map.of("text","Earlier note"))));
+        var organization=Map.of("stage","TRIP","checkoutOrder",0,"rewardSources",List.of());
+        var created=call("POST","/shopping-plans",Json.object(Map.of("planId",id,"name","Notebook persistence","scenario",scenario,"organization",organization)),"notebook-persistence",null);
+        assertEquals(201,created.statusCode(),created.body());
+        var loaded=new PostgresShoppingPlanRepository(db).findById(id).orElseThrow();
+        assertEquals("TRIP",loaded.organization().stage());assertEquals("Original synthetic note",loaded.scenario().source().text());
+        assertEquals("Earlier note",loaded.scenario().source().earlier().getFirst().text());
+        assertEquals("BOGO_FREE",loaded.scenario().items().getFirst().priceRule().type());
+        assertNull(loaded.scenario().items().getFirst().regular());assertEquals(new BigDecimal("6.0000"),loaded.scenario().estimate().get("calculatedOop"));
+        var metadata=call("PUT","/shopping-plans/"+id,Json.object(Map.of("name","Renamed notebook")),"notebook-rename","1");
+        assertEquals(200,metadata.statusCode(),metadata.body());assertEquals(loaded.organization(),plans.findById(id).orElseThrow().organization());
+        assertTrue(receipts.findById(id).isEmpty());
     }
 
     HttpResponse<String> call(String method, String path, String body, String key, String revision) throws Exception {

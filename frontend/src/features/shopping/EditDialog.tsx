@@ -1,3 +1,4 @@
+import { FormActions } from '../../components/ui'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { ApiClient, ApiError } from '../../api/client'
@@ -247,7 +248,7 @@ value={sku}
       )}
     </fieldset>
 
-    <div className="form-actions">
+    <FormActions>
       <button
         type="button"
         className="secondary"
@@ -270,7 +271,7 @@ value={sku}
             ? 'Retry same request'
             : 'Save'}
       </button>
-    </div>
+    </FormActions>
   </form>}
   </Modal>
 }

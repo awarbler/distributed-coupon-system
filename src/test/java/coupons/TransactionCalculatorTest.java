@@ -321,6 +321,25 @@ class TransactionCalculatorTest {
         return new coupons.repository.ReceiptMeta("Walgreens", "test", null, null,
                 coupons.repository.ReceiptMeta.PurchaseChannel.IN_STORE, basis, entry);
     }
+    @Test void fullyGiftCardFundedReceiptShowsZeroCashWithoutZeroPaymentAndPreservesDiscrepancy(){
+        var tx=new CouponTransaction(new ReceiptTotals(new BigDecimal("0.62"),new BigDecimal("8.10")));
+        UUID line=UUID.randomUUID();tx.addPurchaseItem(new PurchaseItem(line,"Dove",null,new BigDecimal("8.99"),new BigDecimal("8.99"),2));
+        tx.addAppliedCoupon(new CouponApplied(UUID.randomUUID(),"Sale",new BigDecimal("4.49"),List.of(line),null,false));
+        tx.addAppliedCoupon(new CouponApplied(UUID.randomUUID(),"Mfg coupon",new BigDecimal("6.00"),List.of(line),null,false));
+        tx.addPayment(new Payment(UUID.randomUUID(),PaymentType.GIFT_CARD,new BigDecimal("8.10"),null,"Target Gift Card"));
+        var before=ReceiptSnapshot.from(tx);
+        var review=calculator.reconcilePayments(tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,ReceiptMeta.PaymentEntryStatus.UNKNOWN));
+        assertEquals(0,review.recordedCashCardPaid().signum());assertEquals(new BigDecimal("-0.01"),review.purchaseDifference());
+        assertEquals(new BigDecimal("8.10"),review.giftCardFunding());assertEquals(before,ReceiptSnapshot.from(tx));assertEquals(1,tx.getPayments().size());
+        var movements=new ProviderBalanceSummary().movements(List.of(new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,ReceiptMeta.PaymentEntryStatus.UNKNOWN),List.of())));
+        assertEquals(1,movements.size());assertEquals("Target Gift Card",movements.getFirst().provider());assertEquals(new BigDecimal("-8.10"),movements.getFirst().usd());
+        var view=ReceiptViews.totals(new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,ReceiptMeta.PaymentEntryStatus.UNKNOWN),List.of()));
+        assertEquals(Map.of("Target Gift Card",new BigDecimal("8.10")),view.get("giftCardPayments"));
+        assertNull(calculator.reconcilePayments(tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.UNKNOWN,ReceiptMeta.PaymentEntryStatus.UNKNOWN)).recordedCashCardPaid());
+        var partial=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,new BigDecimal("10")));
+        partial.addPayment(new Payment(PaymentType.GIFT_CARD,new BigDecimal("8.10")));
+        assertNull(calculator.reconcilePayments(partial,paymentMetadata(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,ReceiptMeta.PaymentEntryStatus.UNKNOWN)).recordedCashCardPaid());
+    }
     @Test void splitFundingBalancesWithoutChangingLegacyDifference() {
         var tx = splitPaymentReceipt();
         var review = calculator.reconcilePayments(tx, paymentMetadata(

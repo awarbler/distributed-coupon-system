@@ -427,7 +427,7 @@ public static final class AccountActivityView {
             }
             String valuationBasis=null;
             if(!matches.isEmpty()) description="Used "+matches.stream().map(RewardLink::promotion).distinct().reduce((a,b)->a+"; "+b).orElseThrow();
-            else if("Register Rewards".equals(m.provider()) && m.usd()!=null && m.usd().signum()<0) description="Source RR Not Yet Linked";
+            else if("Register Rewards".equals(m.provider()) && m.usd()!=null && m.usd().signum()<0 && !m.source().contains(" | Reward unavailable: ")) description="Source RR Not Yet Linked";
             if(receipt!=null) for(var e:receipt.transaction().getObservations().earnings()) if(e.earningId().equals(m.eventId())) { description=e.kind()==ReceiptObservations.EarningKind.REGISTER_REWARD?RegisterRewardLabel.offer(receipt.transaction(),e).replace(" — buy "," — Buy ").replace(", get $",", Get $"):Objects.toString(e.offerReference(),e.provider()+" Reward");
                 valuationBasis=SavingsReport.effectiveValuation(e)==null?null:SavingsReport.effectiveValuation(e).basis();
                 matches=links.stream().filter(l->l.sourceId().equals(e.earningId())).flatMap(l->links(records,links,l.usageEventId(),instruments).stream()).distinct().toList(); }

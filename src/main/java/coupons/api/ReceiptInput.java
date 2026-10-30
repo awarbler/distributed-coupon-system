@@ -83,9 +83,27 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
         ReceiptEarningRules.distinct(earnings);
         var evidence=evidence(fields,id);
         var footer = PrintedFooter.read(fields, new ReceiptObservations(null,null,List.of(),List.of(),null,List.of(),Map.of()));
+        earnings=printedCashEarnings(id,metadata,footer,earnings);
         tx.setObservations(new ReceiptObservations(day,time,earnings,uses,footer.walgreensCash(),footer.savings(),kinds,
                 footer.receiptSavingValuePercent(), List.of(), new ReceiptWorksheetData(Map.of(), paymentUses, null), footer.footerStatus()));
         var result=new ReceiptInput(id,tx,metadata,List.copyOf(evidence),digest(fields),optional(fields,"reviewToken"),flag(fields,"acknowledgeDifference"));validateRewardOnly(metadata,tx);ReceiptValidator.validate(result.record());return result;
+    }
+    static UUID printedCashId(UUID receiptId){return UUID.nameUUIDFromBytes((receiptId+":automatic-printed-walgreens-cash").getBytes(StandardCharsets.UTF_8));}
+    /** Recorded earned amount only; explicit reward entries override this default, as with Fetch. */
+    static List<Earning> printedCashEarnings(UUID receiptId,ReceiptMeta metadata,ReceiptObservations footer,List<Earning> original){
+        UUID automaticId=printedCashId(receiptId);
+        // A later explicit status correction must not be silently changed back to Received.
+        if(original.stream().anyMatch(e->e.earningId().equals(automaticId)&&e.status()!=RebateStatus.CREDITED))return new ArrayList<>(original);
+        var earnings=new ArrayList<>(original);earnings.removeIf(e->e.earningId().equals(automaticId));
+        boolean walgreens=metadata!=null&&metadata.retailer()!=null&&metadata.retailer().trim().matches("(?i)^walgreens(?:\\s|#|$).*");
+        var cash=footer.walgreensCash();
+        if(walgreens&&footer.footerStatus()!=FooterStatus.NOT_PRINTED&&cash!=null&&cash.earned()!=null&&cash.earned().signum()>0&&earnings.stream().noneMatch(e->e.kind()==EarningKind.WALGREENS_CASH)) {
+            earnings.add(EarningInput.read(new LinkedHashMap<>(Map.of(
+                "earningId",automaticId.toString(),"kind","WALGREENS_CASH","provider","Walgreens","form","STORE_REWARD",
+                "amount",cash.earned().toPlainString(),"status","CREDITED","confirmedAmount",cash.earned().toPlainString(),"unit","USD",
+                "confirmAmountAndUnit",true,"offer","Printed Walgreens Cash Earned This Visit — automatic"))));
+        }
+        return earnings;
     }
     static List<ReceiptEvidence> evidence(Map<String,Object> fields,UUID id) {
         var evidence=new ArrayList<ReceiptEvidence>();int bytes=0;
@@ -254,7 +272,8 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
         var footer = PrintedFooter.read(f,o);
         var savings=footer.savings().stream().map(category->new ReceiptObservations.SavingsCategory(category.categoryId(),category.printedLabel(),category.currency(),category.reportedAmount(),
             category.inclusions().stream().map(i->new ReceiptObservations.Inclusion(converted.getOrDefault(i.event(),i.event()),i.includedAmount(),i.confirmedBy(),i.confirmedAt())).toList(),category.explanationComplete())).toList();
-        var observations = new ReceiptObservations(day,time,o.earnings(),rrUses,footer.walgreensCash(),savings,kinds,footer.receiptSavingValuePercent(),o.promotionLinks(),worksheet,footer.footerStatus());
+        var correctedEarnings=f.containsKey("printedFooter")?ReceiptInput.printedCashEarnings(old.transactionId(),metadata,footer,o.earnings()):o.earnings();
+        var observations = new ReceiptObservations(day,time,correctedEarnings,rrUses,footer.walgreensCash(),savings,kinds,footer.receiptSavingValuePercent(),o.promotionLinks(),worksheet,footer.footerStatus());
         var totals = new ReceiptTotalsSnap(f.containsKey("tax") ? decimal(f,"tax",false) : s.receiptTotals().taxAmount(), f.containsKey("reportedTotal") ? decimal(f,"reportedTotal",false) : s.receiptTotals().finalTotal());
         var snapshot = new ReceiptSnapshot(items,s.coupons(),discounts,s.promotions(),payments,s.rewards(),s.registerRewardRedemptions(),totals,observations);
         var tx = snapshot.toTransaction();
@@ -314,11 +333,12 @@ final class ReceiptImport {
         if(text.length()>150000)throw new CouponApiService.ApiError(400,"Too much text for one receipt. Import fewer pages.");
         return parse(name,text,scanned);
     }
-    static String ocr(byte[] image)throws Exception {
+    static String ocr(byte[] image)throws Exception {return ocr(image,false);}
+    static String ocr(byte[] image,boolean sparse)throws Exception {
         try(var stream=javax.imageio.ImageIO.createImageInputStream(new java.io.ByteArrayInputStream(image))){var readers=javax.imageio.ImageIO.getImageReaders(stream);if(readers.hasNext()){var reader=readers.next();try{reader.setInput(stream);if((long)reader.getWidth(0)*reader.getHeight(0)>25_000_000)throw new CouponApiService.ApiError(400,"Image is too large to scan. Resize it below 25 megapixels.");}finally{reader.dispose();}}}
         String executable=java.nio.file.Files.isExecutable(java.nio.file.Path.of("/opt/homebrew/bin/tesseract"))?"/opt/homebrew/bin/tesseract":"tesseract";
         Process process;
-        try{process=new ProcessBuilder(executable,"stdin","stdout","-l","eng","--psm","6").redirectError(ProcessBuilder.Redirect.DISCARD).start();}
+        try{process=new ProcessBuilder(executable,"stdin","stdout","-l","eng","--psm",sparse?"11":"6").redirectError(ProcessBuilder.Redirect.DISCARD).start();}
         catch(java.io.IOException ex){throw new CouponApiService.ApiError(503,"Scanned receipts need local Tesseract OCR. Text PDFs can still be imported.");}
         var output=new java.util.concurrent.atomic.AtomicReference<byte[]>(new byte[0]);
         var reader=Thread.startVirtualThread(()->{try{output.set(process.getInputStream().readNBytes(200000));}catch(java.io.IOException ignored){}});

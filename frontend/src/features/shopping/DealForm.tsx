@@ -1,3 +1,4 @@
+import { FormActions } from '../../components/ui'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { EvidenceField } from '../../components/EvidenceField'
@@ -48,5 +49,5 @@ export function DealForm({ api, onSaved, onCancel }: { api: ApiClient; onSaved: 
     <div className="form-grid">{input('validFrom', 'Start date', false, 'date')}{input('validThrough', 'Expiration date', false, 'date')}{input('limit', 'Maximum qualifying bundles / rewards')}</div>
     {fields.type==='BUY_GET'&&<label className="check"><input type="checkbox" checked={cheapest} onChange={e=>setCheapest(e.target.checked)} />The offer states that the cheapest qualifying items receive the discount. Leave unchecked to retain manual prices and flag allocation for review.</label>}
     <label className="check"><input type="checkbox" checked={repeatable} onChange={e => setRepeatable(e.target.checked)} />Repeat for each qualifying group</label>
-  <EvidenceField onBusy={setFileBusy} onChange={setAttachment} /></fieldset><p className="muted">Select this deal on every qualifying planned item. Linked planned items count toward this deal by default. Recorded product qualifications still require review.</p><div className="form-actions"><button type="button" className="secondary" onClick={onCancel} disabled={busy || fileBusy}>Back to planned item</button><button className="primary" disabled={busy || fileBusy}>{busy ? 'Saving…' : request ? 'Retry same deal' : 'Save and link deal'}</button></div></form>
+  <EvidenceField onBusy={setFileBusy} onChange={setAttachment} /></fieldset><p className="muted">Select this deal on every qualifying planned item. Linked planned items count toward this deal by default. Recorded product qualifications still require review.</p><FormActions><button type="button" className="secondary" onClick={onCancel} disabled={busy || fileBusy}>Back to planned item</button><button className="primary" disabled={busy || fileBusy}>{busy ? 'Saving…' : request ? 'Retry same deal' : 'Save and link deal'}</button></FormActions></form>
 }

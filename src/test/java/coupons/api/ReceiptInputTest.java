@@ -8,6 +8,45 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReceiptInputTest {
+    private static Map<String,Object> printedCashDraft(String earned){
+        var fields=draft(UUID.randomUUID());fields.put("retailer","Walgreens");fields.put("earnings",List.of());
+        fields.put("printedFooter",Map.of("status","PRINTED","wcEarned",earned));return fields;
+    }
+    @Test void printedEarnedCashCreatesOneStableReceivedEarningAndAccountMovement(){
+        var fields=printedCashDraft("0.6900");var a=read(fields);var b=read(fields);
+        var cash=a.transaction().getObservations().earnings().stream().filter(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH).toList();
+        assertEquals(1,cash.size());assertEquals(new BigDecimal("0.6900"),cash.getFirst().confirmed().amount());assertEquals(RebateStatus.CREDITED,cash.getFirst().status());
+        assertEquals(cash.getFirst().earningId(),b.transaction().getObservations().earnings().stream().filter(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH).findFirst().orElseThrow().earningId());
+        var movements=new ProviderBalanceSummary().movements(List.of(a.record()));
+        var earned=movements.stream().filter(m->m.provider().equals("Walgreens Cash")).toList();assertEquals(1,earned.size());assertEquals(new BigDecimal("0.6900"),earned.getFirst().usd());
+        assertEquals(1,a.transaction().getObservations().earnings().stream().filter(e->e.provider().equals("Fetch")).count());
+    }
+    @Test void explicitCashRewardOverridesThePrintedDefaultIncludingItsStatus(){
+        var fields=printedCashDraft("2.66");UUID event=UUID.randomUUID();
+        fields.put("earnings",List.of(Map.of("earningId",event,"kind","WALGREENS_CASH","provider","Walgreens","form","STORE_REWARD","amount","2.66","status","EXPECTED","offer","My reward")));
+        var cash=read(fields).transaction().getObservations().earnings().stream().filter(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH).toList();
+        assertEquals(1,cash.size());assertEquals(event,cash.getFirst().earningId());assertEquals(RebateStatus.EXPECTED,cash.getFirst().status());assertNull(cash.getFirst().confirmed());
+    }
+    @Test void blankZeroAndOtherStoreFootersDoNotInventCash(){
+        for(String amount:List.of("0","0.000"))assertTrue(read(printedCashDraft(amount)).transaction().getObservations().earnings().stream().noneMatch(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH));
+        var fields=printedCashDraft("0.69");fields.put("retailer","Walmart");assertTrue(read(fields).transaction().getObservations().earnings().stream().noneMatch(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH));
+        fields.put("retailer","Walgreens");fields.put("printedFooter",Map.of("status","PRINTED","wcOpening","100","wcClosing","101"));assertTrue(read(fields).transaction().getObservations().earnings().stream().noneMatch(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH));
+    }
+    @Test void correctingPrintedEarnedCashUpdatesOnlyTheCurrentRevisionAndCanRemoveItsDefault(){
+        var created=read(printedCashDraft("0.69"));var old=created.record();
+        var corrected=ReceiptCorrection.read(old,Map.of("reason","Correct earned amount","printedFooter",Map.of("wcEarned","0.79"))).transaction();
+        var cash=corrected.getObservations().earnings().stream().filter(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH).findFirst().orElseThrow();assertEquals(new BigDecimal("0.79"),cash.confirmed().amount());
+        assertEquals(new BigDecimal("0.69"),old.transaction().getObservations().walgreensCash().earned());assertEquals(ReceiptInput.printedCashId(old.transactionId()),cash.earningId());
+        var cleared=ReceiptCorrection.read(old,Map.of("reason","Remove printed earned amount","printedFooter",Map.of("wcEarned","0"))).transaction();assertTrue(cleared.getObservations().earnings().stream().noneMatch(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH));
+    }
+    @Test void addingAnExplicitCashRewardReplacesTheAutomaticDefaultWithoutDoubleCounting(){
+        var old=read(printedCashDraft("0.69")).record();
+        var addition=ReceiptEarningAddition.read(old,Map.of("earning",Map.of("earningId",UUID.randomUUID().toString(),"kind","WALGREENS_CASH","provider","Walgreens","form","STORE_REWARD","amount","0.69","status","CREDITED","confirmedAmount","0.69","unit","USD","confirmAmountAndUnit",true,"offer","Member earnings")));
+        assertEquals(1,addition.transaction().getObservations().earnings().stream().filter(e->e.kind()==ReceiptObservations.EarningKind.WALGREENS_CASH).count());
+        assertTrue(addition.transaction().getObservations().earnings().stream().noneMatch(e->e.earningId().equals(ReceiptInput.printedCashId(old.transactionId()))));
+        assertEquals(new BigDecimal("0.69"),new ProviderBalanceSummary().movements(List.of(new ReceiptRecord(old.transactionId(),old.status(),2,addition.transaction(),old.metadata(),old.evidenceIds()))).stream().filter(m->m.provider().equals("Walgreens Cash")).map(ProviderBalanceSummary.Movement::usd).reduce(BigDecimal.ZERO,BigDecimal::add));
+    }
+
     @Test void manufacturerPurchaseRequirementDoesNotMultiplyDeduction() {
         var fields=draft(UUID.randomUUID());
         fields.put("discounts",List.of(Map.of("applicationId",UUID.randomUUID(),"label","Buy 2 manufacturer coupon","amount","4","kind","MANUFACTURER","lineItemIds",List.of(),"wholeReceipt",true,"requiredQuantity",2)));

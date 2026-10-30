@@ -538,3 +538,205 @@
 .shopping-card-actions { display:grid; grid-template-columns:repeat(2,minmax(84px,1fr)); gap:8px; flex-shrink:0; }
 .shopping-card-actions > button { margin:0; min-height:40px; }
 @media(max-width:600px){ .shopping-plan-entry .panel-head { flex-wrap:wrap; } .shopping-card-actions { width:100%; } }
+
+/* Shopping notebook: existing controls remain available below the weekly view. */
+.shopping-week { display:grid; gap:18px; margin:20px 0; }
+.weekly-deal { padding:16px 0; border-bottom:1px solid #e4e9e5; }
+.weekly-deal:last-child { border-bottom:0; }
+.weekly-deal h3 { margin:0 0 8px; }
+.checkout-order { padding-left:24px; }
+.checkout-order li { padding:12px 4px; }
+.quick-deal-tools { margin:12px 0 22px; }
+.quick-note-entry { padding:16px 0; }
+.quick-note-entry textarea { width:100%; }
+.source-note { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; max-height:240px; overflow:auto; }
+.deal-source-image { max-width:100%; max-height:420px; object-fit:contain; }
+.sale-buttons { margin:12px 0; }
+.sale-buttons small { display:block; margin:8px 0; }
+.live-deal-summary { position:sticky; bottom:0; z-index:2; background:#f1f8f3; border:1px solid #c4d9cb; border-radius:12px; padding:14px; margin:16px 0; box-shadow:0 -3px 12px #18382b10; }
+.live-deal-summary > div { display:flex; justify-content:space-between; gap:12px; margin:5px 0; }
+.live-deal-summary > small { display:block; }
+.live-deal-summary .oop-highlight { border-top:1px solid #c4d9cb; padding-top:8px; font-size:1.1rem; }
+.store-shopping-list { display:grid; gap:18px; font-size:1.1rem; margin:20px 0; }
+button[aria-pressed="true"] { outline:2px solid #33735a; outline-offset:1px; }
+@media(max-width:600px) { .live-deal-summary { position:static; } .shopping-week .product-entry-actions { gap:8px; } .shopping-week button { min-height:44px; } }
+.cost-comparison-table { width:100%; table-layout:fixed; white-space:normal; }
+.cost-comparison-table th, .cost-comparison-table td { padding:10px 8px; overflow-wrap:anywhere; vertical-align:top; }
+.cost-comparison-table th:first-child { width:44%; }
+.cost-comparison-table th:not(:first-child) { width:28%; }
+
+/* Match weekly panel content to its header inset, including tables and actions. */
+.weekly-panel-body { padding:0 var(--panel-content-inset) var(--panel-content-inset); display:flow-root; }
+.weekly-panel-body > h3 { margin:22px 0 12px; }
+.weekly-panel-body > p { margin:12px 0; line-height:1.65; }
+.weekly-panel-body > small { display:block; margin:10px 0; line-height:1.65; }
+.weekly-panel-body > .table-wrap { margin-block:16px; }
+.weekly-panel-body > .text-button { display:flex; width:fit-content; max-width:100%; margin-block:14px; white-space:normal; text-align:left; }
+.weekly-panel-body .product-entry-actions { gap:10px; margin-block:12px; }
+.weekly-panel-body .checkout-order { margin:0; padding-inline-start:24px; }
+
+.checkout-order > li { padding:16px 4px; }
+.checkout-order > li + li { border-top:1px solid #e4e9e5; }
+.checkout-order > li > strong { display:block; line-height:1.5; }
+.checkout-order > li > p { margin:10px 0 14px; line-height:1.65; }
+.weekly-panel-body .trip-actions { margin:14px 0 0; gap:12px; }
+
+/* Keep the original field layout; center only the native date value. */
+.shopping-week-date {
+  height:43px;
+  min-height:43px;
+  padding:0 12px;
+  text-align:center;
+}
+.shopping-week-date::-webkit-date-and-time-value { width:100%; text-align:center; }
+.shopping-week-date::-webkit-datetime-edit { display:inline-flex; align-items:center; justify-content:center; padding:0; }
+.shopping-week-date::-webkit-datetime-edit-fields-wrapper { padding:0; }
+
+.screenshot-drop-zone { border:2px dashed #b5cbb1; border-radius:9px; padding:18px; background:#f7faf6; }
+.screenshot-drop-zone.dragging { border-color:#28674e; background:#eaf2e8; }
+.screenshot-drop-zone > p { margin:0 0 12px; }
+.screenshot-drop-zone > label { margin-bottom:0; }
+
+.receipt-blocking-error { border:2px solid #b42318; background:#fff0ee; color:#8f1d14; padding:16px 18px; border-radius:9px; margin-block:16px; }
+.receipt-blocking-error > strong { display:block; font-size:16px; margin-bottom:6px; }
+.receipt-blocking-error > p { margin:0; color:inherit; line-height:1.6; }
+.import-deduction-needs-review { border:2px solid #b42318; background:#fff0ee; color:#8f1d14; padding:16px; border-radius:9px; scroll-margin-block:24px; }
+.import-deduction-needs-review > strong { color:#8f1d14; }
+.import-deduction-needs-review > select { border:2px solid #b42318; background:#fff; }
+
+/* Keep checkbox descriptions beside their controls across all forms. */
+label:has(> input[type="checkbox"]),
+label.check:has(> input[type="checkbox"]) {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+}
+label > input[type="checkbox"] {
+  flex: 0 0 17px;
+  margin: 2px 0 0;
+}
+
+.rebate-receipt-summary { display:flex; flex-wrap:wrap; align-items:baseline; column-gap:14px; row-gap:6px; }
+.rebate-receipt-summary + .form-actions { margin-top:12px; }
+
+.rebate-receipt-form > .form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: #fff;
+  padding: 12px 0;
+  border-top: 1px solid #e5e9e0;
+}
+
+/* Persistent labels sit inside the field outline, including filled fields. */
+label:has(> :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]))),
+label:has(> select), label:has(> textarea) {
+ border:1px solid var(--color-border-control,#cfd9ce); border-radius:8px;
+ padding:6px 10px; gap:2px; background:var(--color-surface,#fff);
+ font-size:11px; min-width:0; transition:border-color .15s,box-shadow .15s;
+}
+label:has(> input):focus-within, label:has(> select):focus-within, label:has(> textarea):focus-within {
+ border-color:#25684e; box-shadow:0 0 0 2px #25684e25;
+}
+label:has(> [aria-invalid="true"]) { border-color:#b42318; }
+label > input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),
+label > select, label > textarea.autosize-input {
+ border:0; box-shadow:none; outline:none; background:transparent;
+ padding:3px 0; min-height:28px; height:auto; border-radius:0;
+}
+.inline-help { display:inline-block; margin:4px 0 10px; }
+.inline-help > summary { display:inline-flex; cursor:pointer; font-size:18px; color:#25684e; padding:3px 7px; list-style:none; }
+.inline-help > summary::-webkit-details-marker { display:none; }
+.inline-help > div { padding:10px 12px; border:1px solid #dce5d9; border-radius:8px; background:#f6faf3; font-size:12px; line-height:1.6; }
+.form-actions-top { padding:10px 0 14px; margin:0 0 14px; border-bottom:1px solid #e5e9e0; }
+.item-discount-fields .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+@media(max-width:480px) { .item-discount-fields .form-grid { grid-template-columns:1fr; } }
+
+.modal .receipt-input-row .item-discount-fields .form-grid {
+  grid-template-columns:repeat(2,minmax(0,1fr));
+}
+@media(max-width:480px) {
+ .modal .receipt-input-row .item-discount-fields .form-grid { grid-template-columns:1fr; }
+}
+
+.receipt-product > summary, .receipt-products > summary { list-style:none; cursor:pointer; }
+.receipt-product > summary::-webkit-details-marker, .receipt-products > summary::-webkit-details-marker { display:none; }
+.receipt-disclosure-arrow { display:inline-block; margin-right:8px; font-size:18px; transition:transform .15s; }
+.receipt-product:not([open]) > summary .receipt-disclosure-arrow,
+.receipt-products:not([open]) > summary .receipt-disclosure-arrow { transform:rotate(-90deg); }
+.product-disclosure-actions { display:flex; flex-wrap:wrap; gap:16px; margin:8px 0 14px; }
+.receipt-channel-basis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+
+/* Empty inputs show their field description; entered values replace it. */
+label[data-placeholder-field="true"] {
+ font-size:0; gap:0; padding:7px 10px;
+}
+label[data-placeholder-field="true"] > :is(input,select,textarea) {
+ font-size:var(--form-control-font-size,14px);
+}
+label[data-placeholder-field="true"] > input::placeholder,
+label[data-placeholder-field="true"] > textarea::placeholder { color:#647467; opacity:1; }
+
+.modal label[data-placeholder-field="true"], .receipt-filters label[data-placeholder-field="true"], .shopping-plan-filters label[data-placeholder-field="true"] { font-size:0; }
+.app-shell label[data-placeholder-field="true"],
+.connect-form label[data-placeholder-field="true"] { font-size:0; }
+
+/* Keep the shopping-week toolbar's original visible labels and controls. */
+.shopping-week-controls > label, .connect-form label {
+ border:0; padding:0; background:transparent; box-shadow:none;
+ font-size:var(--form-label-font-size,13px); gap:var(--space-label,8px);
+}
+.shopping-week-controls > label > :is(input,select), .connect-form label > input {
+ border:1px solid var(--color-border-control,#dce3dc);
+ border-radius:var(--form-control-radius,9px);
+ padding:0 var(--form-control-padding-x,12px);
+ height:var(--form-control-height,44px); min-height:var(--form-control-height,44px);
+ background:var(--color-surface,#fff); font-size:var(--form-control-font-size,14px);
+}
+
+/* Shopping & Deals retains its original form presentation. */
+[data-original-shopping="true"] label {
+ border:0; padding:0; background:transparent; box-shadow:none;
+ font-size:var(--form-label-font-size,13px); gap:var(--space-label,8px);
+}
+[data-original-shopping="true"] label > :is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]),select) {
+ border:1px solid var(--color-border-control,#dce3dc);
+ border-radius:var(--form-control-radius,9px); padding:0 var(--form-control-padding-x,12px);
+ height:var(--form-control-height,44px); min-height:var(--form-control-height,44px);
+ background:var(--color-surface,#fff); font-size:var(--form-control-font-size,14px);
+}
+[data-original-shopping="true"] label > textarea {
+ border:1px solid var(--color-border-control,#dce3dc); border-radius:var(--form-control-radius,9px);
+ padding:10px var(--form-control-padding-x,12px); background:var(--color-surface,#fff);
+}
+
+/* Equal outer boxes for every receipt More Filters control and action. */
+.receipt-extra-filters > :is(label,button) {
+  box-sizing:border-box;
+  width:100%;
+  height:var(--form-control-height,44px);
+  min-height:var(--form-control-height,44px);
+  margin:0;
+}
+.receipt-extra-filters > label { justify-content:center; }
+#main-content .receipt-extra-filters > label > :is(input,select) {
+  box-sizing:border-box;
+  width:100%;
+  height:100%;
+  min-height:0;
+  margin:0;
+}
+
+.panel-actions { display:flex; align-items:center; gap:8px; }
+.section-help-content { display:grid; gap:12px; font-size:14px; line-height:1.65; margin-bottom:18px; }
+
+.shopping-week-overview { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; align-items:start; }
+.shopping-week-overview > .panel { margin-bottom:0; }
+@media(max-width:1100px) { .shopping-week-overview { grid-template-columns:minmax(0,1fr); } }
+
+.help-tooltip { position:fixed; z-index:250; box-sizing:border-box; max-height:calc(100dvh - 24px); overflow:auto; padding:16px 18px; border:1px solid #ceddca; border-radius:12px; background:#fff; color:#263c31; box-shadow:0 8px 30px #18332130; font-size:13px; line-height:1.65; }
+.help-tooltip > strong { display:block; margin-bottom:8px; font-size:14px; }
+.help-tooltip > div { display:grid; gap:10px; }
+.reward-unavailable-panel { padding-bottom:var(--panel-content-inset,22px); }
+.reward-unavailable-panel > .secondary { margin:4px var(--panel-content-inset,22px) 0; max-width:calc(100% - 44px); white-space:normal; }

@@ -64,6 +64,13 @@ function timeKey(row: ReceiptRow): string | null {
   const normalized = twelve ? hour % 12 + (twelve[3].toLowerCase() === 'p' ? 12 : 0) : hour
   return `${String(normalized).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
+export function transactionTime(value: string | null | undefined): string {
+  if (!value?.trim()) return 'Not recorded'
+  const match=/^([01]?[0-9]|2[0-3]):([0-5][0-9])(?::[0-5][0-9](?:[.][0-9]+)?)?$/.exec(value.trim())
+  if (!match) return value
+  const hour=Number(match[1])
+  return `${hour % 12 || 12}:${match[2]} ${hour >= 12 ? 'PM' : 'AM'}`
+}
 export function receiptTime(row: ReceiptRow): string {
   const time = timeKey(row)
   if (!time) return row.time || 'Time not recorded'

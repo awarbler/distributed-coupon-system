@@ -13,7 +13,9 @@ record ReceiptEarningAddition(CouponTransaction transaction,List<ReceiptEvidence
         known(f,"earning","evidence");if(!(f.get("earning") instanceof Map<?,?>))throw new IllegalArgumentException("Earning is required.");
         @SuppressWarnings("unchecked") var fields=(Map<String,Object>)f.get("earning");
         var added=EarningInput.read(fields);var tx=record.transaction();var obs=tx.getObservations();
-        ReceiptEarningRules.additional(obs.earnings(),added);var earnings=new ArrayList<>(obs.earnings());earnings.add(added);
+        var earnings=new ArrayList<>(obs.earnings());
+        if(added.kind()==EarningKind.WALGREENS_CASH)earnings.removeIf(e->e.earningId().equals(ReceiptInput.printedCashId(record.transactionId())));
+        ReceiptEarningRules.additional(earnings,added);earnings.add(added);
         tx.setObservations(new ReceiptObservations(obs.purchaseDate(),obs.printedTime(),earnings,obs.unidentifiedRR(),obs.walgreensCash(),obs.savings(),obs.discountKinds(),obs.receiptSavingValuePercent(),obs.promotionLinks(),obs.worksheet(),obs.footerStatus()));
         var evidence=ReceiptInput.evidence(f,record.transactionId());var ids=new ArrayList<>(record.evidenceIds());evidence.forEach(e->ids.add(e.getEvidenceId()));
         ReceiptValidator.validate(new ReceiptRecord(record.transactionId(),record.status(),record.revision(),tx,record.metadata(),ids));

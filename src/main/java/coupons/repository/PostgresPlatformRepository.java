@@ -44,6 +44,31 @@ public final class PostgresPlatformRepository implements PlatformRepository {
 
     private final PostgresConnectionFactory db;
 
+    public void unlinkRebateReceipt(UUID rebate,UUID receipt,String expectedContribution){new PostgresReceiptSupplementRepository(db).unlinkRebateReceipt(rebate,receipt,expectedContribution);}
+
+    public Map<String,Object> saveRebateReceipt(UUID rebate,UUID receipt,long receiptRevision,List<UUID> lines,BigDecimal netAmount,
+            String note,boolean submitted,LocalDate submittedOn,String reference,String expectedContribution){
+        return new PostgresReceiptSupplementRepository(db).saveRebateReceipt(rebate,receipt,receiptRevision,lines,netAmount,note,submitted,submittedOn,reference,expectedContribution);
+    }
+    private static Map<String,Object> rebateProgress(GiftCardPromotion rebate,Collection<ReceiptHistoryEntry> history){
+        var contributions=new LinkedHashMap<UUID,Object>();java.math.BigDecimal total=BigDecimal.ZERO;boolean complete=true;
+        for(var entry:rebate.contributions().entrySet()){
+            var c=entry.getValue();
+            var captured=history.stream().map(ReceiptHistoryEntry::after).filter(r->r.transactionId().equals(c.receiptId())&&r.revision()==c.reviewedRevision()).findFirst().orElse(null);
+            var receipt=captured==null?null:new ReceiptRecord(captured.transactionId(),captured.status(),captured.revision(),captured.contents().toTransaction(),captured.metadata(),captured.evidenceIds());
+            boolean stale=receipt==null;
+            var eligible=c.reviewedAmount()!=null?Optional.of(c.reviewedAmount()):receipt==null?Optional.<BigDecimal>empty():rebate.eligibleAmount(c,receipt);
+            if(eligible.isPresent())total=total.add(eligible.get());else complete=false;
+            var selected=receipt==null?List.<coupons.PurchaseItem>of():receipt.transaction().getPurchaseItems().stream().filter(l->c.lineIds().contains(l.getLineItemId())).toList();
+            int quantity=selected.stream().mapToInt(coupons.PurchaseItem::getQuantity).sum();
+            BigDecimal saleTotal=selected.stream().map(coupons.PurchaseItem::calculateLineTotal).reduce(BigDecimal.ZERO,BigDecimal::add);
+            var discounts=receipt==null?List.<coupons.CouponApplied>of():receipt.transaction().getAppliedCoupons().stream().filter(a->a.isWholeReceipt()||a.getLineItemIds().stream().anyMatch(c.lineIds()::contains)).toList();
+            boolean allocated=discounts.stream().allMatch(a->!a.isWholeReceipt()&&c.lineIds().containsAll(a.getLineItemIds()));
+            BigDecimal couponTotal=allocated?discounts.stream().map(coupons.CouponApplied::getAppliedAmount).reduce(BigDecimal.ZERO,BigDecimal::add):null;
+            contributions.put(entry.getKey(),fields("quantity",quantity,"saleTotal",saleTotal,"couponTotal",couponTotal,"receiptDate",receipt==null?null:receipt.transaction().getObservations().purchaseDate(),"receiptId",c.receiptId(),"reviewedRevision",c.reviewedRevision(),"lineIds",c.lineIds(),"reviewedAmount",c.reviewedAmount(),"note",c.note(),"afterCoupons",c.afterCoupons(),"submitted",c.submitted(),"submittedOn",c.submittedOn(),"submissionReference",c.submissionReference(),"token",GiftCardPromotion.contributionToken(c),"needsReview",stale||eligible.isEmpty(),"eligibleAmount",eligible.orElse(null)));
+        }
+        return fields("id",rebate.id(),"name",rebate.name(),"threshold",rebate.threshold(),"giftCardValue",rebate.giftCardValue(),"start",rebate.start(),"end",rebate.end(),"basis",rebate.basis(),"terms",rebate.terms(),"status",rebate.status(),"contributions",contributions,"eligibleTotal",total,"progressComplete",complete);
+    }
     public PostgresPlatformRepository(PostgresConnectionFactory db) {
         this.db = Objects.requireNonNull(db);
     }
@@ -77,7 +102,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
     public void addStandaloneReward(coupons.RegisterReward reward) {new PostgresReceiptSupplementRepository(db).addStandaloneReward(reward);}
     public List<Map<String,Object>> standaloneRewards() {
         return transaction(db,c->{c.setReadOnly(true);var state=PostgresReceiptState.read(c);
-            return state.rewards().values().stream().filter(r->r.getEarnedReceiptId()==null && !state.rewardVoids().containsKey(r.getRewardId())).sorted(Comparator.comparing(coupons.RegisterReward::getSourceDescription).thenComparing(coupons.RegisterReward::getRewardId)).map(r->fields("rewardId",r.getRewardId(),"description",r.getSourceDescription(),"amount",r.getFaceValue(),"earnedDate",r.getEarnedDate(),"expirationDate",r.getExpirationDate(),"status",state.rrUsageLinks().containsKey(r.getRewardId())?"MATCHED":state.redemptions().values().stream().anyMatch(use->use.getRewardId().equals(r.getRewardId()))?"REDEEMED":"UNUSED")).toList();});
+            return state.rewards().values().stream().filter(r->r.getEarnedReceiptId()==null && !state.rewardVoids().containsKey(r.getRewardId())).sorted(Comparator.comparing(coupons.RegisterReward::getSourceDescription).thenComparing(coupons.RegisterReward::getRewardId)).map(r->fields("rewardId",r.getRewardId(),"description",r.getSourceDescription(),"amount",r.getFaceValue(),"earnedDate",r.getEarnedDate(),"expirationDate",r.getExpirationDate(),"status",state.rrUsageLinks().containsKey(r.getRewardId())?"MATCHED":state.redemptions().values().stream().anyMatch(use->use.getRewardId().equals(r.getRewardId()))?"REDEEMED":state.balances().adjustments().stream().anyMatch(a->a.unavailable()&&r.getRewardId().equals(a.unavailableSource())&&!a.date().isAfter(LocalDate.now()))?"UNAVAILABLE":"UNUSED")).toList();});
     }
     public RRUsageLink addStandaloneMatch(UUID receipt,long revision,UUID use,UUID reward,String description,LocalDate earned,LocalDate expires,String reason,String actor) {
         return new PostgresReceiptSupplementRepository(db).addStandaloneMatch(receipt,revision,use,reward,description,earned,expires,reason,actor);
@@ -92,6 +117,36 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         var repo=new PostgresProviderAccountRepository(db);var old=repo.findRedemption(id).orElseThrow();
         if(old.status()!=ProviderRedemption.Status.REQUESTED||status==ProviderRedemption.Status.REQUESTED)throw new IllegalArgumentException("Only a requested payout can be completed or cancelled.");
         repo.updateRedemption(id,revision,old.complete(status,date,null));
+    }
+    public void recordUnavailableReward(UUID event,String provider,LocalDate day,BigDecimal amount,BigDecimal points,UUID source,String category,String reason,String actor){
+        if(!Set.of("EXPIRED","LOST","OTHER").contains(category)||reason==null||reason.isBlank()||reason.length()>2000)throw new IllegalArgumentException("Select a reason and explain the unavailable reward.");
+        if(amount!=null&&amount.signum()<0||points!=null&&points.signum()<0||(amount==null||amount.signum()==0)&&(points==null||points.signum()==0))throw new IllegalArgumentException("Enter a positive amount or points, not a payment.");
+        String name=ProviderBalanceSummary.accountName(provider);
+        transaction(db,c->{PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);
+            String detail="Reward unavailable: "+category+" | "+(source==null?"ACCOUNT":source)+" | "+reason;
+            var prior=state.balances().adjustments().stream().filter(a->a.eventId().equals(event)).findFirst();
+            if(prior.isPresent()){var old=prior.get();if(!old.provider().equals(name)||!old.date().equals(day)||!old.reason().equals(detail)||!Objects.equals(old.usdChange(),amount==null?null:amount.negate())||!Objects.equals(old.unitChange(),points==null?null:points.negate()))throw new ConcurrentModificationException("This adjustment identity has different data.");return null;}
+            var records=state.receipts().values().stream().map(r->new ReceiptRecord(r.transactionId(),r.status(),r.revision(),r.contents().toTransaction(),r.metadata(),r.evidenceIds())).toList();
+            var summary=new ProviderBalanceSummary(PostgresReceiptState.rules(state));
+            if(source!=null){
+                if(state.balances().adjustments().stream().anyMatch(a->a.unavailable()&&source.equals(a.unavailableSource())))throw new IllegalArgumentException("This reward is already marked unavailable.");
+                if(state.rrUsageLinks().containsKey(source)||state.redemptions().values().stream().anyMatch(r->r.getRewardId().equals(source)))throw new IllegalArgumentException("This reward is already used; it cannot also be removed.");
+                var earned=summary.movements(records).stream().filter(m->source.equals(m.eventId())&&m.provider().equals(name)&&(m.usd()!=null&&m.usd().signum()>0||m.points()!=null&&m.points().signum()>0)).findFirst().orElse(null);
+                if(earned==null&&name.equals("Register Rewards")){var coupon=state.rewards().get(source);if(coupon!=null&&coupon.getEarnedReceiptId()==null&&!state.rewardVoids().containsKey(source))earned=new ProviderBalanceSummary.Movement(coupon.getEarnedDate(),name,null,coupon.getFaceValue(),"Recorded standalone RR");}
+                if(earned==null)throw new IllegalArgumentException("Select a recorded received reward in this account.");
+                if(records.stream().flatMap(r->r.transaction().getObservations().earnings().stream()).filter(e->source.equals(e.earningId())&&e.instrumentId()!=null).anyMatch(e->state.redemptions().values().stream().anyMatch(r->r.getRewardId().equals(e.instrumentId()))||state.rrUsageLinks().containsKey(e.instrumentId())))throw new IllegalArgumentException("This reward instrument is already used.");
+                if(earned.points()!=null&&points==null)throw new IllegalArgumentException("Preserve this reward's native points when marking them unavailable.");
+                if(earned.date()!=null&&day.isBefore(earned.date()))throw new IllegalArgumentException("Unavailable date cannot precede earning.");
+                if(amount!=null&&(earned.usd()==null||amount.compareTo(earned.usd())>0)||points!=null&&(earned.points()==null||points.compareTo(earned.points())>0))throw new IllegalArgumentException("Unavailable amount exceeds the selected reward.");
+                if(name.equals("Register Rewards")&&(amount==null||amount.compareTo(earned.usd())!=0))throw new IllegalArgumentException("Mark the entire RR coupon unavailable.");
+            }
+            var available=summary.balance(day,name,records);
+            if(name.equals("Register Rewards")&&source==null)throw new IllegalArgumentException("Select the unused RR coupon being removed.");
+            if((available.endPoints()!=null||Set.of("Fetch","P&G Brand","Swagbucks","MyPoints","Merryfield").contains(name))&&(points==null||points.signum()<=0))throw new IllegalArgumentException("Enter the original points removed; a dollar valuation alone must not leave the points available.");
+            if(amount!=null&&available.endUsd()!=null&&amount.compareTo(available.endUsd())>0||points!=null&&available.endPoints()!=null&&points.compareTo(available.endPoints())>0)throw new IllegalArgumentException("Unavailable amount exceeds the recorded available balance.");
+            var value=new AccountAdjustment(event,day,name,points==null?null:points.negate(),amount==null?null:amount.negate(),detail,actor,Instant.now());
+            try(var p=c.prepareStatement("INSERT INTO provider_account_adjustments(event_id,provider,event_date,unit_change,usd_change,reason,recorded_by,recorded_at,payload) VALUES (?,?,?,?,?,?,?,?,?)")){p.setObject(1,event);p.setString(2,name);p.setObject(3,day);p.setBigDecimal(4,value.unitChange());p.setBigDecimal(5,value.usdChange());p.setString(6,detail);p.setString(7,actor);p.setTimestamp(8,java.sql.Timestamp.from(value.recordedAt()));p.setBytes(9,PostgresRepositorySupport.serialize(value));p.executeUpdate();}return null;
+        });
     }
     public void saveMemberReward(AccountAdjustment reward) { new PostgresProviderAccountRepository(db).saveAdjustment(reward); }
     public void saveOpening(AccountOpening opening) { new PostgresProviderAccountRepository(db).saveOpening(opening); }
@@ -115,13 +170,13 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             String name=ProviderBalanceSummary.accountName(provider);
             var activity=AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards()).stream().filter(a->a.movement().provider().equals(name) && (a.movement().date()==null || !a.movement().date().isBefore(from) && !a.movement().date().isAfter(to))).toList();
             var start=summary.balance(from,name,records); var end=summary.balance(to,name,records);
-            BigDecimal earned=BigDecimal.ZERO,spent=BigDecimal.ZERO,pe=BigDecimal.ZERO,ps=BigDecimal.ZERO;
-            boolean complete=true;
-            for(var a:activity) { var m=a.movement(); if(m.date()==null)complete=false; if(m.usd()==null)complete=false; else if(m.usd().signum()<0)spent=spent.subtract(m.usd());else earned=earned.add(m.usd());
+            BigDecimal earned=BigDecimal.ZERO,spent=BigDecimal.ZERO,pe=BigDecimal.ZERO,ps=BigDecimal.ZERO,unavailable=BigDecimal.ZERO,unavailablePoints=BigDecimal.ZERO;
+            boolean complete=true,unavailableUsdComplete=true;
+            for(var a:activity) { var m=a.movement(); if(m.source().contains(" | Reward unavailable: ")){if(m.usd()==null){complete=false;unavailableUsdComplete=false;}else unavailable=unavailable.subtract(m.usd());if(m.points()!=null)unavailablePoints=unavailablePoints.subtract(m.points());continue;} if(m.date()==null)complete=false; if(m.usd()==null)complete=false; else if(m.usd().signum()<0)spent=spent.subtract(m.usd());else earned=earned.add(m.usd());
                 if(m.points()!=null) {if(m.points().signum()<0)ps=ps.subtract(m.points());else pe=pe.add(m.points());} }
             var conversions=new LinkedHashMap<UUID,ProviderRedemption>();
             state.balances().redemptionHistory().forEach(r->conversions.put(r.redemptionId(),r));
-            return fields("conversions",conversions.values().stream().filter(r->ProviderBalanceSummary.accountName(r.provider()).equals(name) && !r.requestedDate().isBefore(from) && !r.requestedDate().isAfter(to)).toList(),"provider",name,"from",from,"to",to,"beginning",start,"ending",end,"earned",earned,"spent",spent,"earnedPoints",pe,"spentPoints",ps,"usdActivityComplete",complete,"activity",activity);
+            return fields("conversions",conversions.values().stream().filter(r->ProviderBalanceSummary.accountName(r.provider()).equals(name) && !r.requestedDate().isBefore(from) && !r.requestedDate().isAfter(to)).toList(),"provider",name,"from",from,"to",to,"beginning",start,"ending",end,"earned",earned,"spent",spent,"unavailable",unavailableUsdComplete?unavailable:null,"unavailablePoints",unavailablePoints,"earnedPoints",pe,"spentPoints",ps,"usdActivityComplete",complete,"activity",activity);
         });
     }
 
@@ -222,7 +277,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             }
             return fields("rewardsOverview", rewardsOverview(summary,records,day,balanceProviders),"productLookup", productLookup(records), "accountActivity", AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards()), "receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", historicalRewardOffers(records), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "sortTime", ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).map(LocalTime::toString).orElse(null), "totals", totals(r))).toList(),
                     "receiptPeriods", receiptPeriods(records), "summaries", fields("all", savings(records), "day", savings(SavingsReport.day(records, day)), "week", savings(ReceiptWorksheetReport.week(records, day)), "month", savings(SavingsReport.month(records, YearMonth.from(day)))), "plans", planRows, "coupons", coupons, "deals", deals, "rebates", rebates, "inventory", inventory, "balances", balances, "reportedBalances", reported,
-                    "accountHistory", state.balances(), "movements", summary.movements(records), "promotions", state.giftCardPromotions().values(), "rrMatches", state.rrUsageLinks().values(), "rewardRemovals", state.rewardVoids().values());
+                    "unavailableRewardSources",state.balances().adjustments().stream().filter(AccountAdjustment::unavailable).filter(a->a.unavailableSource()!=null).map(a->fields("sourceId",a.unavailableSource(),"date",a.date(),"reason",a.reason())).toList(),"accountHistory", state.balances(), "movements", summary.movements(records), "promotions", state.giftCardPromotions().values().stream().map(p->rebateProgress(p,state.history().values())).toList(), "rrMatches", state.rrUsageLinks().values(), "rewardRemovals", state.rewardVoids().values());
         });
     }
 
@@ -516,7 +571,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
 
     private static ShoppingEstimate scenarioPricing(ShoppingPlan.Scenario scenario,String retailer){
         var result=scenario.estimate(retailer);var regular=(BigDecimal)result.get("regularTotal");var sale=(BigDecimal)result.get("saleTotal");var coupons=(BigDecimal)result.get("couponTotal");var rewards=(BigDecimal)result.get("potentialRewards");var register=(BigDecimal)result.get("merchandiseAfterCoupons");
-        return new ShoppingEstimate(regular,sale,regular.subtract(sale),coupons,rewards,register,register.subtract(rewards),List.of("Scenario qualifications use owner-entered terms; possible rewards are not earned."));
+        return new ShoppingEstimate(regular,sale,regular==null?null:regular.subtract(sale),coupons,rewards,register,register.subtract(rewards),List.of("Scenario qualifications use owner-entered terms; possible rewards are not earned."));
     }
 
     public Map<String, Object> checkout(UUID planId) {
@@ -617,6 +672,7 @@ public static final class ReceiptRRMatching {
     }
     private static boolean eligible(InMemoryStore.State state,ReceiptRevSnap spent,ReceiptObservations.UnidentifiedRR use,Option option) {
         var day=spent.contents().observations().purchaseDate();
+        if(state.balances().adjustments().stream().anyMatch(a->a.unavailable()&&option.sourceId().equals(a.unavailableSource())&&(day==null||!a.date().isAfter(day))))return false;
         if(day==null || option.earnedDate()==null && !option.historyUnknown() || option.earnedDate()!=null && option.earnedDate().isAfter(day) || option.expires()!=null && option.expires().isBefore(day))return false;
         var origin=option.sourceReceiptId()==null?null:state.receipts().get(option.sourceReceiptId());
         if(day.equals(option.earnedDate()) && !option.historyUnknown()) {

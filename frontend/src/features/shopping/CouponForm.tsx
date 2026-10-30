@@ -1,3 +1,4 @@
+import { FormActions } from '../../components/ui'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { EvidenceField } from '../../components/EvidenceField'
@@ -31,5 +32,5 @@ export function CouponForm({ api, onSaved, onCancel, initialValues={} }: { initi
     {input('productOrBrand', 'Product or brand')}{input('skus', 'Qualifying SKU / UPC (comma separated)')}{input('sizeOrVariety', 'Required size or variety')}{input('storeRestriction', 'Restricted to store (optional)')}{input('accountRestriction', 'Account requirement (optional)')}
     <div className="form-grid">{input('startsOn', 'Valid from', false, 'date')}{input('expirationDate', 'Expiration date', false, 'date')}{input('clippedOn', 'Saved / clipped date', true, 'date')}</div>
     <label>Initial status<select value={f.status} onChange={e => setF({ ...f, status: e.target.value })}><option value="CLIPPED">Saved / clipped</option><option value="AVAILABLE">Available, not yet saved</option></select></label>{input('conditions', 'Additional requirements or exclusions')}
-  <EvidenceField onBusy={setFileBusy} onChange={setAttachment} /></fieldset><p className="muted">Paper coupons do not require a digital account. Ordinary register-printed coupons are separate from Register Reward instruments.</p><div className="form-actions"><button type="button" className="secondary" disabled={busy || fileBusy} onClick={onCancel}>Cancel coupon</button><button className="primary" disabled={busy || fileBusy}>{busy ? 'Saving…' : pending ? 'Retry same coupon' : 'Save coupon'}</button></div></form>
+  <EvidenceField onBusy={setFileBusy} onChange={setAttachment} /></fieldset><p className="muted">Paper coupons do not require a digital account. Ordinary register-printed coupons are separate from Register Reward instruments.</p><FormActions><button type="button" className="secondary" disabled={busy || fileBusy} onClick={onCancel}>Cancel coupon</button><button className="primary" disabled={busy || fileBusy}>{busy ? 'Saving…' : pending ? 'Retry same coupon' : 'Save coupon'}</button></FormActions></form>
 }

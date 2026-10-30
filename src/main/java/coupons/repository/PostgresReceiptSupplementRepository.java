@@ -10,6 +10,39 @@ import static coupons.repository.PostgresRepositorySupport.*;
 public final class PostgresReceiptSupplementRepository {
     private final PostgresConnectionFactory connections;
     public PostgresReceiptSupplementRepository(PostgresConnectionFactory connections) {this.connections=Objects.requireNonNull(connections);}
+    public void unlinkRebateReceipt(UUID rebateId,UUID receiptId,String expectedContribution){
+        transaction(connections,c->{
+            PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);
+            var rebate=Optional.ofNullable(state.giftCardPromotions().get(rebateId)).orElseThrow(()->new NoSuchElementException("Rebate not found."));
+            var existing=rebate.contributions().get(receiptId);
+            if(existing==null||!GiftCardPromotion.contributionToken(existing).equals(expectedContribution))throw new ConcurrentModificationException("Rebate receipt link changed; refresh before unlinking.");
+            var links=new HashMap<>(rebate.contributions());links.remove(receiptId);
+            var updated=new GiftCardPromotion(rebate.id(),rebate.name(),rebate.threshold(),rebate.giftCardValue(),rebate.start(),rebate.end(),rebate.basis(),rebate.terms(),rebate.status(),links);
+            PostgresReceiptState.promotions(c,Map.of(rebateId,updated));return null;
+        });
+    }
+    public Map<String,Object> saveRebateReceipt(UUID rebateId,UUID receiptId,long receiptRevision,List<UUID> lines,java.math.BigDecimal netAmount,
+            String note,boolean submitted,java.time.LocalDate submittedOn,String reference,String expectedContribution){
+        return transaction(connections,c->{
+            PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);
+            var rebate=Optional.ofNullable(state.giftCardPromotions().get(rebateId)).orElseThrow(()->new NoSuchElementException("Rebate not found."));
+            var stored=Optional.ofNullable(state.receipts().get(receiptId)).orElseThrow(()->new NoSuchElementException("Receipt not found."));
+            var savedLink=rebate.contributions().get(receiptId);
+            if(savedLink!=null&&savedLink.reviewedRevision()!=receiptRevision||savedLink==null&&stored.revision()!=receiptRevision)throw new ConcurrentModificationException("Reload the linked receipt before editing.");
+            var captured=savedLink==null?stored:state.history().values().stream().map(ReceiptHistoryEntry::after).filter(r->r.transactionId().equals(receiptId)&&r.revision()==savedLink.reviewedRevision()).findFirst().orElseThrow(()->new IllegalArgumentException("Linked receipt revision is unavailable."));
+            var receipt=new ReceiptRecord(captured.transactionId(),captured.status(),captured.revision(),captured.contents().toTransaction(),captured.metadata(),captured.evidenceIds());
+            if(receipt.status()!=ReceiptStatus.ACTIVE)throw new IllegalArgumentException("Only active receipts can be linked.");
+            if(submittedOn!=null&&receipt.transaction().getObservations().purchaseDate()!=null&&submittedOn.isBefore(receipt.transaction().getObservations().purchaseDate()))throw new IllegalArgumentException("Submission date cannot be before the purchase date.");
+            var existing=rebate.contributions().get(receiptId);
+            if(!GiftCardPromotion.contributionToken(existing).equals(expectedContribution))throw new ConcurrentModificationException("Rebate receipt link changed; refresh before editing.");
+            if(netAmount==null)throw new IllegalArgumentException("Enter the eligible amount after coupons.");
+            var contribution=new GiftCardPromotion.Contribution(receiptId,receiptRevision,lines,netAmount,note==null?"":note,true,submitted,submittedOn,reference);
+            if(rebate.eligibleAmount(contribution,receipt).isEmpty())throw new IllegalArgumentException("Check receipt date, eligible products and rebate dates.");
+            // Validate against the pinned audit revision above, not today's receipt.
+            PostgresReceiptState.promotions(c,Map.of(rebateId,rebate.withContribution(contribution)));
+            return Map.of("receiptId",receiptId,"token",GiftCardPromotion.contributionToken(contribution));
+        });
+    }
     public List<GiftCardPromotion> giftCardPromotions() {
         return transaction(connections,c->PostgresReceiptState.rules(PostgresReceiptState.read(c)).giftCardPromotions());
     }

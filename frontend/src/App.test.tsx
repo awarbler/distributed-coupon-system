@@ -60,9 +60,15 @@ describe('workspace UI', () => {
   it('requires a connection and presents no demo values', () => { render(<App />); expect(screen.getByRole('heading', { name: 'Welcome to your workspace' })).toBeInTheDocument(); expect(screen.queryByText('Total saved')).not.toBeInTheDocument() })
   it('renders every grocery screen and approval limitations', async () => {
     const { user } = await connect()
-    for (const [link, heading] of [['Receipts', 'Your receipts'], ['Shopping plans', 'Shopping plans'], ['Coupons', 'Coupons'], ['Deals & promotions', 'Deals & promotions'], ['Rewards & Accounts', 'Rewards & Accounts'], ['Inventory', 'Household inventory'], ['Rebates', 'Rebate Submission & Follow-Up']]) { await user.click(screen.getByRole('link', { name: link })); expect(
+    for (const [link, heading] of [['Receipts', 'Your receipts'], ['Shopping & Deals', 'Shopping & Deals'], ['Coupons', 'Coupons'], ['Promotions & Rebates', 'Promotions & Rebates'], ['Rewards & Accounts', 'Rewards & Accounts'], ['Inventory', 'Household inventory']]) { await user.click(screen.getByRole('link', { name: link })); expect(
   screen.getByRole('heading', { name: heading, level: 1 })
 ).toBeInTheDocument() }
+    await user.click(screen.getByRole('link',{name:'Promotions & Rebates'}))
+    expect(screen.getByRole('heading',{name:'Rebates — Submission & Follow-Up'})).toBeInTheDocument()
+    expect(screen.getByLabelText('Submission Filter')).toBeInTheDocument()
+    expect(screen.queryByRole('link',{name:/^Rebates$/})).not.toBeInTheDocument()
+    await user.click(screen.getByRole('link',{name:'Rewards & Accounts'}))
+    expect(screen.queryByLabelText('Submission Filter')).not.toBeInTheDocument()
     await user.click(screen.getByRole('link', { name: 'Inventory' })); expect(screen.getByRole('button', { name: 'Import / sync receipts' })).toBeInTheDocument()
   })
   it('disables read-only writes and clears the workspace on disconnect', async () => {
@@ -153,4 +159,20 @@ it('shows the available total across all accounts without changing the four-acco
  const total=screen.getByText('Total Available — All Accounts').parentElement!
  expect(within(total).getByText('$459.03')).toBeInTheDocument();expect(within(total).queryByText('$463.03')).not.toBeInTheDocument()
  expect(document.querySelectorAll('#dashboard-accounts .account-preview')).toHaveLength(Math.min(4,data.balances.length))
+})
+
+it('keeps the welcome screen original with one workspace button and its visible token label',()=>{
+ render(<App/>);expect(screen.getAllByRole('button',{name:'Open my workspace'})).toHaveLength(1)
+ expect(screen.queryByRole('group',{name:'Top form actions'})).not.toBeInTheDocument()
+ expect(screen.getByLabelText('API access token').closest('label')).not.toHaveAttribute('data-placeholder-field')
+})
+
+it('keeps Shopping & Deals and its plan form in their original label and action layout',async()=>{
+ const {user}=await connect();await user.click(screen.getByRole('link',{name:'Shopping & Deals'}))
+ expect(screen.getByRole('heading',{name:'Shopping & Deals'})).toBeVisible()
+ expect(screen.getByLabelText('Shopping week').closest('label')).not.toHaveAttribute('data-placeholder-field')
+ expect(screen.getByLabelText('Weekly store').closest('label')).not.toHaveAttribute('data-placeholder-field')
+ await user.click(screen.getByRole('button',{name:'New plan'}))
+ expect(screen.queryByRole('group',{name:'Top form actions'})).not.toBeInTheDocument()
+ expect(screen.getByLabelText('Plan name').closest('label')).not.toHaveAttribute('data-placeholder-field')
 })

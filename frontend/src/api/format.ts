@@ -123,3 +123,15 @@ export function productDiscountLabel(product: string, kind: string): string {
 }
 
 export function isWalgreensStore(value: string | null | undefined): boolean { return /^walgreens(?:\s|#|$)/i.test(value?.trim() ?? '') }
+
+// Exact recorded-value ordering shared by account tables and shopping presentation.
+export function compareRewardValues(left:string|null|undefined,right:string|null|undefined,numeric=false):number {
+ if(left==null||left==='')return right==null||right===''?0:1
+ if(right==null||right==='')return -1
+ if(numeric&&/^-?\d+(?:[.]\d+)?$/.test(left)&&/^-?\d+(?:[.]\d+)?$/.test(right)){
+  const places=Math.max(left.split('.')[1]?.length??0,right.split('.')[1]?.length??0)
+  const units=(value:string)=>{const [whole,fraction='']=value.replace('-','').split('.');return BigInt(whole+fraction.padEnd(places,'0'))*(value.startsWith('-')?-1n:1n)}
+  const a=units(left),b=units(right);return a<b?-1:a>b?1:0
+ }
+ return left.localeCompare(right,undefined,{sensitivity:'base'})
+}

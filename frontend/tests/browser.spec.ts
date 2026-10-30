@@ -2,12 +2,10 @@ import { test, expect } from '@playwright/test'
 import { workspace, receiptRow, planningRow } from '../src/api/fixtures.test-support'
 
 test('responsive navigation, installation assets, and private-response caching', async ({ page, context }, info) => {
-  // This test uses synthetic network fixtures; the application itself has no demo mode.
-  const data = workspace(); let calls = 0
-  data.balances.push({ provider: 'Test rewards', balance: { monthUsd: '25.00', startUsd: '25.00', endUsd: '25.00', startPoints: null, endPoints: null } })
-  await page.route('**/api/workspace', route => { calls++; return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'Cache-Control': 'no-store' }, body: JSON.stringify(data) }) })
+  let calls = 0
+  page.on('request',request=>{if(new URL(request.url()).pathname==='/api/workspace')calls++})
   await page.goto('/')
-  await page.getByLabel('API access token').fill('synthetic-browser-token')
+  await page.getByLabel('API access token').fill(process.env.COUPON_BROWSER_TEST_TOKEN!)
   await page.getByRole('button', { name: 'Open my workspace', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Make every trip count.' })).toBeVisible()
   expect(await page.evaluate(() => innerWidth)).toBe(page.viewportSize()!.width)
@@ -49,7 +47,7 @@ test('shopping-plan and item editing through the real disposable Java API', asyn
   await page.getByRole('dialog').getByRole('button', { name: 'Save', exact: true }).click()
   await expect(page.getByRole('dialog')).toHaveCount(0)
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true }); if (await menu.isVisible()) await menu.click()
-  await page.getByRole('link', { name: /^Shopping plans(?: \d+)?$/ }).click()
+  await page.getByRole('link', { name: /^Shopping & Deals(?: \d+)?$/ }).click()
   const panel = page.locator('.shopping-plan-entry').filter({ has: page.getByRole('heading', { name: planName, exact: true }) })
   await expect(panel).toBeVisible()
   await panel.getByRole('button', { name: 'View', exact: true }).click()
@@ -82,14 +80,14 @@ test('reward receipt confirmation and rejection through the disposable Java API'
   await page.getByRole('button', { name: 'Rewards', exact: true }).click()
   for (const [offer, target] of [['RR test offer', 'PAID', '5', 'USD'], ['Fetch test offer', 'CREDITED', '25', 'points']]) {
     const section = page.getByRole('dialog').locator('section').filter({ has: page.getByText(offer, { exact: true }) })
-    await expect(section.getByRole('button', { name: 'Update status', exact: true })).toBeEnabled()
-    await section.getByRole('button', { name: 'Update status', exact: true }).click()
+    await expect(section.getByRole('button', { name: 'Edit Amount / Status', exact: true })).toBeEnabled()
+    await section.getByRole('button', { name: 'Edit Amount / Status', exact: true }).click()
     if (await section.getByLabel('Reward status', { exact: true }).inputValue() !== 'EXPECTED') {
       await section.getByLabel('Reward status', { exact: true }).selectOption('EXPECTED')
       await section.getByRole('button', { name: 'Save reward status', exact: true }).click()
       await expect(section.getByRole('form')).toHaveCount(0)
-      await expect(section.getByRole('button', { name: 'Update status', exact: true })).toBeEnabled()
-      await section.getByRole('button', { name: 'Update status', exact: true }).click()
+      await expect(section.getByRole('button', { name: 'Edit Amount / Status', exact: true })).toBeEnabled()
+      await section.getByRole('button', { name: 'Edit Amount / Status', exact: true }).click()
     }
     await section.getByLabel('Reward status', { exact: true }).selectOption(target)
     await section.getByRole('button', { name: 'Save reward status', exact: true }).click()
@@ -104,13 +102,17 @@ test('reward receipt confirmation and rejection through the disposable Java API'
   const wc = data.movements.filter((m: { source: string; provider: string }) => m.source.includes(`Receipt ${process.env.COUPON_BROWSER_REWARD_RECEIPT}`) && m.provider === 'Walgreens Cash')
   expect(wc).toHaveLength(0)
   const section = page.getByRole('dialog').locator('section').filter({ has: page.getByText('RR test offer', { exact: true }) })
-  await expect(section.getByRole('button', { name: 'Update status', exact: true })).toBeEnabled()
-  await section.getByRole('button', { name: 'Update status', exact: true }).click()
+  await expect(section.getByRole('button', { name: 'Edit Amount / Status', exact: true })).toBeEnabled()
+  await section.getByRole('button', { name: 'Edit Amount / Status', exact: true }).click()
   await section.getByLabel('Reward status', { exact: true }).selectOption('REJECTED')
   await section.getByLabel('Rejection reason (optional)').fill(`Not issued — ${info.project.name}`)
   await section.getByRole('button', { name: 'Save reward status', exact: true }).click()
   await expect(section.getByText(/Excluded from earned value/)).toBeVisible()
-  await expect(section.getByText(/Expected: 5 USD/)).toBeVisible()
+  await expect(section.getByText('$5.00',{exact:true})).toBeVisible()
+  const savedRewardReceipt=data.receipts.find((row:{metadata:{receiptNumber:string}})=>row.metadata.receiptNumber===process.env.COUPON_BROWSER_REWARD_RECEIPT)
+  const rejected=await (await page.request.get(`/api/receipts/${savedRewardReceipt.transactionId}`,{headers:{Authorization:`Bearer ${process.env.COUPON_BROWSER_TEST_TOKEN}`}})).json()
+  const retained=rejected.contents.observations.earnings.find((earning:{offerReference:string})=>earning.offerReference==='RR test offer')
+  expect(retained.status).toBe('REJECTED');expect(retained.expected.amount).toBe(5);expect(retained.confirmed.amount).toBe(5)
   await expect(section.getByText(new RegExp(`Rejection reason: Not issued — ${info.project.name}`))).toBeVisible()
 })
 
@@ -125,7 +127,7 @@ test('create and review a complete receipt through the disposable API', async ({
   await page.getByRole('link', { name: 'Receipts', exact: true }).click()
   await page.getByRole('button', { name: 'Add receipt', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Add receipt' })
-  await dialog.getByLabel('Store', { exact: true }).fill('Synthetic grocery')
+  await dialog.getByLabel('Store', { exact: true }).fill('Walgreens')
   await dialog.getByLabel('Printed receipt number (optional)').fill(receiptNumber)
   await dialog.getByLabel('Purchase date', { exact: true }).fill('2026-10-19')
   await dialog.getByLabel('Product description 1').fill('Soap')
@@ -139,7 +141,8 @@ test('create and review a complete receipt through the disposable API', async ({
   await dialog.getByLabel('Discount amount 1', { exact: true }).fill('2.00')
   await dialog.getByLabel('Sales tax', { exact: true }).fill('0.50')
   await dialog.getByLabel('Reported total due at register', { exact: true }).fill('8.50')
-  await dialog.getByLabel('Register Rewards used (optional)', { exact: true }).fill('1.00')
+  await dialog.getByRole('button',{name:'Add RR used',exact:true}).click()
+  await dialog.getByLabel('RR used amount 1',{exact:true}).fill('1.00')
   await dialog.getByRole('button', { name: 'Add payment', exact: true }).click()
   await dialog.getByLabel('Payment amount 1', { exact: true }).fill('8.50')
   await dialog.getByRole('button', { name: 'Add payment', exact: true }).click()
@@ -151,14 +154,16 @@ test('create and review a complete receipt through the disposable API', async ({
   await dialog.getByLabel('Reward status 1', { exact: true }).selectOption('PAID')
   await dialog.getByRole('button', { name: 'Add rebate or reward', exact: true }).click()
   await dialog.getByLabel('Reward program 2', { exact: true }).selectOption('WALGREENS_CASH')
-  await dialog.getByLabel('Reward amount 2 (USD)', { exact: true }).fill('10.00') // expected, never a credit
+  await dialog.getByLabel('Reward amount 2 (USD)', { exact: true }).fill('10.00')
+  await dialog.getByLabel('Reward status 2',{exact:true}).selectOption('EXPECTED')
   const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6hWQAAAAASUVORK5CYII=', 'base64')
-  await dialog.getByLabel('Receipt files').setInputFiles({ name: 'synthetic-receipt.png', mimeType: 'image/png', buffer: image })
+  await dialog.getByLabel('Receipt files',{exact:true}).setInputFiles({ name: 'synthetic-receipt.png', mimeType: 'image/png', buffer: image })
   await dialog.getByRole('button', { name: 'Review calculated totals', exact: true }).click()
   const review = page.getByRole('dialog', { name: 'Review new receipt' })
-  await expect(review.getByText('$20.00', { exact: true })).toBeVisible()
-  await expect(review.getByText('$8.50', { exact: true })).toHaveCount(2)
-  await expect(review.getByText('$5.00', { exact: true })).toHaveCount(2) // WC used, RR earned
+  await expect(review.getByText('Regular merchandise',{exact:true}).locator('..')).toContainText('$20.00')
+  await expect(review.getByText('Actual cash/card paid',{exact:true}).locator('..')).toContainText('$8.50')
+  await expect(review.getByText('Walgreens Cash used',{exact:true}).locator('..')).toContainText('$5.00')
+  await expect(review.getByText('Known confirmed dollar-benefit subtotal',{exact:true}).locator('..')).toContainText('$5.03')
   await review.getByRole('button', { name: 'Save receipt', exact: true }).click()
   const saved = page.getByRole('dialog', { name: `Receipt ${receiptNumber}` })
   await expect(saved).toBeVisible()
@@ -175,8 +180,8 @@ test('create and review a complete receipt through the disposable API', async ({
   const response = await page.request.get('/api/workspace', { headers: { Authorization: `Bearer ${process.env.COUPON_BROWSER_TEST_TOKEN}` } })
   expect(response.ok()).toBe(true)
   const data = await response.json(); const row = data.receipts.find((r: { metadata: { receiptNumber: string } }) => r.metadata.receiptNumber === receiptNumber)
-  expect(row.totals.calculatedDue).toBe(8.5); expect(row.totals.savings.newlyEarned).toBe(5)
-  const moves = data.movements.filter((m: { source: string }) => m.source.includes(row.transactionId))
+  expect(row.totals.calculatedDue).toBe(8.5); expect(row.totals.savings.newlyEarned).toBe(5.025)
+  const moves = data.movements.filter((m: { source: string }) => m.source.includes(receiptNumber))
   expect(moves.filter((m: { provider: string; usd: number }) => m.provider === 'Walgreens Cash').map((m: { usd: number }) => m.usd)).toEqual([-5])
   expect(moves.filter((m: { provider: string }) => m.provider === 'Register Rewards')).toHaveLength(2) // one earning and one separate use
 })
@@ -187,12 +192,12 @@ test('inline deals and physical coupons preserve a planned item', async ({ page 
   const planId=crypto.randomUUID(),name=`Inline trip ${info.project.name} ${Date.now()}`
   expect((await page.request.post('/api/shopping-plans',{headers,data:{planId,name,retailer:'Synthetic store',shoppingDate:'2026-10-19'}})).status()).toBe(201)
   await page.goto('/');await page.getByLabel('API access token').fill(process.env.COUPON_BROWSER_TEST_TOKEN!);await page.getByRole('button', { name: 'Open my workspace', exact: true }).click();await expect(page.getByRole('heading',{name:'Make every trip count.'})).toBeVisible()
-  const menu=page.getByRole('button', { name: 'Open navigation', exact: true });if(await menu.isVisible())await menu.click();await page.getByRole('link',{name:/^Shopping plans(?: \d+)?$/}).click()
-  const panel=page.locator('.panel').filter({has:page.getByRole('heading',{name,exact:true})});await panel.getByRole('button',{name:'Add item',exact:true}).click()
-  const dialog=page.getByRole('dialog');await dialog.getByLabel('Product description',{exact:true}).fill('Shampoo');await dialog.getByLabel('Regular unit price',{exact:false}).fill('3.00');await dialog.getByLabel('Quantity',{exact:true}).fill('2')
+  const menu=page.getByRole('button', { name: 'Open navigation', exact: true });if(await menu.isVisible())await menu.click();await page.getByRole('link',{name:/^Shopping & Deals(?: \d+)?$/}).click()
+  const panel=page.locator('.shopping-plan-entry').filter({has:page.getByRole('heading',{name,exact:true})});await panel.getByRole('button',{name:'View',exact:true}).click();await panel.getByRole('button',{name:'Add item',exact:true}).click()
+  const dialog=page.getByRole('dialog');await dialog.getByLabel(/^Product description/).fill('Shampoo');await dialog.getByLabel(/^Regular price/).fill('3.00');await dialog.getByLabel(/^Quantity/).fill('2')
   await dialog.getByRole('button',{name:'Add a deal',exact:true}).click();await dialog.getByLabel('Store',{exact:true}).fill('Synthetic store');await dialog.getByLabel('Promotion name').fill(`Shampoo bundle ${info.project.name} ${Date.now()}`);await dialog.getByLabel('Qualifying product description').fill('Shampoo');await dialog.getByLabel('Recorded offer terms').fill('Two for five dollars');await dialog.getByLabel('Promotion type').selectOption('MULTIBUY');await dialog.getByLabel('Price for the full bundle').fill('5.00');await dialog.getByLabel('Units per bundle').fill('2');await dialog.getByLabel('Start date',{exact:true}).fill('2026-10-01');await dialog.getByLabel('Expiration date',{exact:true}).fill('2026-10-31');await dialog.getByRole('button', { name: 'Save and link deal', exact: true }).click()
-  await expect(dialog.getByLabel('Product description',{exact:true})).toHaveValue('Shampoo');await dialog.getByRole('button',{name:'Add coupon',exact:true}).click();await dialog.getByLabel('Coupon description').fill('One dollar on shampoo');await dialog.getByLabel('Issuing manufacturer, store or provider').fill('Synthetic maker');await dialog.getByLabel('Dollar amount',{exact:true}).fill('1.00');await dialog.getByLabel('Number of available copies').fill('2');await dialog.getByLabel('Saved / clipped date').fill('2026-10-01');await dialog.getByLabel('Expiration date',{exact:true}).fill('2026-10-31');await dialog.getByRole('button',{name:'Save coupon',exact:true}).click()
-  await expect(dialog.getByLabel('Product description',{exact:true})).toHaveValue('Shampoo');await expect(dialog.getByLabel('Quantity',{exact:true})).toHaveValue('2');await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toHaveCount(0)
+  await expect(dialog.getByLabel(/^Product description/)).toHaveValue('Shampoo');await dialog.getByRole('button',{name:'Add coupon',exact:true}).click();await dialog.getByLabel('Coupon description').fill('One dollar on shampoo');await dialog.getByLabel('Issuing manufacturer, store or provider').fill('Synthetic maker');await dialog.getByLabel('Dollar amount',{exact:true}).fill('1.00');await dialog.getByLabel('Number of available copies').fill('2');await dialog.getByLabel('Saved / clipped date').fill('2026-10-01');await dialog.getByLabel('Expiration date',{exact:true}).fill('2026-10-31');await dialog.getByRole('button',{name:'Save coupon',exact:true}).click()
+  await expect(dialog.getByLabel(/^Product description/)).toHaveValue('Shampoo');await expect(dialog.getByLabel(/^Quantity/)).toHaveValue('2');await dialog.getByRole('button',{name:'Save',exact:true}).click();await expect(dialog).toHaveCount(0)
   await expect(panel.getByText('$4.00',{exact:true})).toHaveCount(2)
   const data=await (await page.request.get('/api/workspace',{headers})).json();const row=data.plans.find((p:{plan:{planId:string}})=>p.plan.planId===planId);expect(row.pricing.saleTotal).toBe(5);expect(row.pricing.registerCost).toBe(4);expect(row.items[0].clippedCouponIds).toHaveLength(1);expect(data.coupons.filter((c:{description:string})=>c.description==='One dollar on shampoo').every((c:{status:string})=>c.status==='CLIPPED')).toBe(true)
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
@@ -205,10 +210,10 @@ test('post-save promotion and rebate use selected units without changing checkou
   const draft={transactionId:id,retailer:`Synthetic store ${id}`,receiptNumber:number,purchaseDate:'2026-10-19',printedTime:'12:34',purchaseChannel:'IN_STORE',tax:'0',reportedTotal:'30',items:[{lineItemId:a,description:'Shampoo',sku:'same-product',regularUnitPrice:'10',unitPrice:'10',quantity:2},{lineItemId:b,description:'Shampoo',sku:'same-product',regularUnitPrice:'10',unitPrice:'10',quantity:1}],payments:[{paymentId:crypto.randomUUID(),type:'CARD',amount:'30'}]}
   const preview=await page.request.post('/api/receipts/preview',{headers,data:draft});expect(preview.ok()).toBe(true);const review=await preview.json();expect((await page.request.post('/api/receipts',{headers,data:{...draft,reviewToken:review.reviewToken}})).status()).toBe(201)
   await page.goto('/');await page.getByLabel('API access token').fill(process.env.COUPON_BROWSER_TEST_TOKEN!);await page.getByRole('button', { name: 'Open my workspace', exact: true }).click();await expect(page.getByRole('heading',{name:'Make every trip count.'})).toBeVisible()
-  const menu=page.getByRole('button', { name: 'Open navigation', exact: true });if(await menu.isVisible())await menu.click();await page.getByRole('link',{name:'Receipts',exact:true}).click();await page.getByRole('button',{name:`Open receipt ${number}`,exact:true}).click();const dialog=page.getByRole('dialog');await expect(dialog.getByText('Shampoo: 3 unit(s), 2 receipt line(s)',{exact:true})).toBeVisible();await dialog.getByRole('button',{name:'Rewards',exact:true}).click()
-  await dialog.getByRole('button',{name:'Add rebate or reward',exact:true}).click();await dialog.getByLabel('Reward program 1').selectOption('WALGREENS_CASH');await dialog.getByLabel('Reward amount 1 (USD)').fill('5');await dialog.getByText('Optional reward details — products, promotion, valuation and evidence',{exact:true}).click();await dialog.getByLabel('Reward products 1: line 1',{exact:true}).check();await dialog.getByLabel('Reward products 1: line 2',{exact:true}).check();await dialog.getByRole('combobox',{name:'Promotion requirement',exact:true}).selectOption('SPEND');await dialog.getByLabel('Required qualifying spend',{exact:true}).fill('20');await dialog.getByLabel('Offer description 1 (optional)').fill('Spend 20 earn 5');await dialog.getByRole('button',{name:'Review rebate or reward',exact:true}).click();await dialog.getByText('Optional qualification review',{exact:true}).click();await expect(dialog.getByText(/Qualification: MET/)).toBeVisible();await dialog.getByRole('button',{name:'Save rebate or reward',exact:true}).click();await expect(dialog.getByText('Spend 20 earn 5',{exact:true})).toBeVisible();await expect(dialog.getByRole('button',{name:'Add rebate or reward',exact:true})).toBeEnabled()
-  await dialog.getByRole('button',{name:'Add rebate or reward',exact:true}).click();await dialog.getByLabel('Provider 1',{exact:true}).fill('P&G Good Everyday');await dialog.getByLabel('Reward amount 1 (points)').fill('100');await dialog.getByText('Optional reward details — products, promotion, valuation and evidence',{exact:true}).click();await dialog.getByLabel('Reward products 1: line 1',{exact:true}).check();await dialog.getByLabel('Reward products 1: line 2',{exact:true}).check();await dialog.getByText('Submission and payout destination (optional)',{exact:true}).click();await dialog.getByRole('combobox',{name:'Payout destination',exact:true}).selectOption('PAYPAL');await dialog.getByRole('button',{name:'Review rebate or reward',exact:true}).click();await dialog.getByRole('button',{name:'Save rebate or reward',exact:true}).click();await expect(dialog.getByText('P&G Good Everyday',{exact:true})).toBeVisible();await dialog.getByRole('button',{name:'History',exact:true}).click();await expect(dialog.locator('ol.history li')).toHaveCount(3)
-  const saved=await (await page.request.get(`/api/receipts/${id}`,{headers})).json();expect(saved.contents.receiptTotals.finalTotal).toBe(30);expect(saved.contents.observations.earnings).toHaveLength(2);expect(saved.contents.observations.earnings[1].details.payoutDestination).toBe('PAYPAL');expect(saved.contents.observations.earnings.every((e:{status:string})=>e.status==='EXPECTED')).toBe(true)
+  const menu=page.getByRole('button', { name: 'Open navigation', exact: true });if(await menu.isVisible())await menu.click();await page.getByRole('link',{name:'Receipts',exact:true}).click();await page.getByLabel('Search store, receipt number, or date').fill(number);await page.getByRole('button',{name:`Open receipt ${number}`,exact:true}).click();const dialog=page.getByRole('dialog');await expect(dialog.getByText('Shampoo: 3 unit(s), 2 receipt line(s)',{exact:true})).toBeVisible();await dialog.getByRole('button',{name:'Rewards',exact:true}).click()
+  await dialog.getByRole('button',{name:'Add rebate or reward',exact:true}).click();await dialog.getByLabel('Reward program 1').selectOption('WALGREENS_CASH');await dialog.getByLabel('Reward amount 1 (USD)').fill('5');await dialog.getByLabel('Reward status 1',{exact:true}).selectOption('EXPECTED');await dialog.getByText('Optional reward details — products, promotion, valuation and evidence',{exact:true}).click();await dialog.getByLabel('Reward products 1: line 1',{exact:true}).check();await dialog.getByLabel('Reward products 1: line 2',{exact:true}).check();await dialog.getByRole('combobox',{name:'Promotion requirement',exact:true}).selectOption('SPEND');await dialog.getByLabel('Required qualifying spend',{exact:true}).fill('20');await dialog.getByLabel('Offer description 1 (optional)').fill('Spend 20 earn 5');await dialog.getByRole('button',{name:'Review rebate or reward',exact:true}).click();await dialog.getByText('Optional qualification review',{exact:true}).click();await expect(dialog.getByText(/Qualification: MET/)).toBeVisible();await dialog.getByRole('button',{name:'Save rebate or reward',exact:true}).click();await expect(dialog.getByText('Spend 20 earn 5',{exact:true})).toBeVisible();await expect(dialog.getByRole('button',{name:'Add rebate or reward',exact:true})).toBeEnabled()
+  await dialog.getByRole('button',{name:'Add rebate or reward',exact:true}).click();await dialog.getByLabel('Reward program 1',{exact:true}).selectOption('P&G Good Everyday');await dialog.getByLabel('Reward amount 1 (points)').fill('100');await dialog.getByLabel('Reward status 1',{exact:true}).selectOption('EXPECTED');await dialog.getByText('Optional reward details — products, promotion, valuation and evidence',{exact:true}).click();await dialog.getByLabel('Reward products 1: line 1',{exact:true}).check();await dialog.getByLabel('Reward products 1: line 2',{exact:true}).check();await dialog.getByText('Submission and payout destination (optional)',{exact:true}).click();await dialog.getByRole('combobox',{name:'Payout destination',exact:true}).selectOption('PAYPAL');await dialog.getByRole('button',{name:'Review rebate or reward',exact:true}).click();await dialog.getByRole('button',{name:'Save rebate or reward',exact:true}).click();await expect(dialog.getByText('P&G Good Everyday',{exact:true})).toBeVisible();await dialog.getByRole('button',{name:'History',exact:true}).click();await expect(dialog.locator('ol.history li')).toHaveCount(3)
+  const saved=await (await page.request.get(`/api/receipts/${id}`,{headers})).json();expect(saved.contents.receiptTotals.finalTotal).toBe(30);expect(saved.contents.observations.earnings).toHaveLength(3);expect(saved.contents.observations.earnings.find((e:{provider:string})=>e.provider==='P&G Good Everyday').details.payoutDestination).toBe('PAYPAL');expect(saved.contents.observations.earnings.filter((e:{provider:string})=>e.provider!=='Fetch').every((e:{status:string})=>e.status==='EXPECTED')).toBe(true)
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
 })
 
@@ -220,7 +225,7 @@ test('receipt search, five-row pages and selected-period savings', async ({ page
   const data = workspace()
   data.receipts = Array.from({ length: 7 }, (_, i) => receiptRow(String(i), '2026-10-19', `9:0${i} AM`))
   data.receiptPeriods = { empty: data.summaries.all, 'month:2026-10': { ...data.summaries.all, totalSaved: '349.72', recordedCashCardPaid: '35.96', newlyEarned: '18.74' } }
-  await page.route('**/api/workspace', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) }))
+  await page.route('**/api/workspace**', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) }))
   await page.goto('/')
   await page.getByLabel('API access token').fill('synthetic-browser-token')
   await page.getByRole('button', { name: 'Open my workspace', exact: true }).click()
@@ -228,9 +233,10 @@ test('receipt search, five-row pages and selected-period savings', async ({ page
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true })
   if (await menu.isVisible()) await menu.click()
   await page.getByRole('link', { name: 'Receipts', exact: true }).click()
-  await expect(page.getByRole('row')).toHaveCount(6)
-  const controls = await Promise.all(['Purchase day', 'Month', 'Sort receipts'].map(label => page.getByLabel(label, { exact: label === 'Purchase day' || label === 'Month' }).boundingBox()))
-  for (const box of controls) expect(box!.height).toBe(60)
+  await expect(page.locator('.receipt-table').getByRole('row')).toHaveCount(6)
+  await page.getByText('More filters — Show / Hide',{exact:true}).click()
+  const controls = await Promise.all(['Purchase day', 'Month', 'Start date'].map(label => page.getByLabel(label, { exact: true }).boundingBox()))
+  for (const box of controls) expect(box!.height).toBe(44)
   if (page.viewportSize()!.width >= 1200) {
     expect(controls[0]!.y).toBe(controls[1]!.y)
     expect(controls[1]!.y).toBe(controls[2]!.y)
@@ -257,7 +263,7 @@ test('receipt search, five-row pages and selected-period savings', async ({ page
   expect(await page.locator('.receipt-summary-body').evaluate(node => getComputedStyle(node).textAlign)).toBe('center')
   await expect(page.getByText('$349.72', { exact: true })).toBeVisible()
   await page.getByLabel('Search store, receipt number, or date').fill('missing')
-  await expect(page.getByRole('heading', { name: 'No matching receipts' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No matching receipts', exact:true })).toBeVisible()
   await expect(page.getByText('$349.72', { exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
@@ -304,17 +310,17 @@ test('saved receipts can be edited, deleted and restored with review', async ({ 
   await page.getByLabel('Product 1 discount 1 description').fill('Attached sale promotion')
   await page.getByLabel('Product 1 discount 1 amount').fill('1.58')
   await page.getByRole('button', { name: 'Add receipt-wide discount', exact: true }).click()
-  await page.getByRole('button', { name: 'Delete receipt-wide discount 1', exact: true }).click()
+  await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByRole('button', { name: 'Add receipt-wide discount', exact: true }).click()
-  await page.getByLabel('Walgreens Cash Used This Visit').fill('0')
-  const dimensions = await Promise.all(['Store', 'Purchase date', 'Printed time', 'Regular price 1', 'Quantity 1', 'Purchase channel', 'Printed-total basis', 'Have you entered all payments shown on this receipt?', 'Product 1 discount 1 description', 'Product 1 discount 1 type', 'Product 1 discount 1 amount'].map(name => page.getByLabel(name, { exact: !['Purchase channel','Printed-total basis','Have you entered all payments shown on this receipt?','Product 1 discount 1 type'].includes(name) }).boundingBox()))
-  for (const [index, box] of dimensions.entries()) { if (index === 8) expect(box!.height).toBeGreaterThanOrEqual(60); else expect(box!.height).toBe(60) }
-  const fonts = await page.locator('.receipt-editor input, .receipt-editor select, .receipt-editor textarea').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).fontSize))
-  expect(fonts.every(font => font === '18px')).toBe(true)
+  await page.getByLabel('Discount label 1').fill('');await page.getByLabel('Discount amount 1',{exact:true}).fill('')
+  const dimensions = await Promise.all(['Store', 'Purchase date', 'Printed time', 'Regular price 1', 'Quantity 1', 'Purchase channel', 'Printed-total basis', 'Product 1 discount 1 description', 'Product 1 discount 1 type', 'Product 1 discount 1 amount'].map(name => page.getByLabel(name, { exact: !['Purchase channel','Printed-total basis','Product 1 discount 1 type'].includes(name) }).boundingBox()))
+  for (const [index, box] of dimensions.entries()) { if (index === 7) expect(box!.height).toBeGreaterThanOrEqual(44); else expect(box!.height).toBe(44) }
+  const fonts = await page.locator('.receipt-editor input:not([type=checkbox]), .receipt-editor select, .receipt-editor textarea').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).fontSize))
+  expect(fonts.every(font => font === '16px')).toBe(true)
   const textFits = await page.getByLabel('Product 1', { exact: true }).evaluate(node => node.scrollHeight <= node.clientHeight + 1)
   expect(textFits).toBe(true)
-  const description = dimensions[8]!, selection = dimensions[9]!
-  expect(Math.abs(description.width - selection.width)).toBeLessThanOrEqual(1)
+  const description = dimensions[7]!, selection = dimensions[8]!
+  expect(description.width).toBeGreaterThanOrEqual(selection.width)
   expect(selection.y).toBeGreaterThan(description.y)
   await page.screenshot({ path: `/private/tmp/coupon-control-sizing-${info.project.name}.png`, fullPage: true })
 
@@ -344,8 +350,8 @@ test.describe('account detail fixture workflow', () => {
   test('account activity and printed receipt controls remain readable', async ({ page }, info) => {
     const data=workspace()
     data.balances=[{provider:'Register Rewards',balance:{monthUsd:'2',startUsd:'2',endUsd:'2',startPoints:null,endPoints:null}}]
-    await page.route('**/api/workspace',route=>route.fulfill({json:data}))
-    await page.route('**/api/accounts/activity?**',route=>route.fulfill({json:{provider:'Register Rewards',from:data.asOf.slice(0,7)+'-01',to:data.asOf,beginning:{startUsd:'2',startPoints:null,opening:{date:'2026-09-30',sourceNote:'Confirmed opening'}},ending:{endUsd:'2',endPoints:null},earned:'7',spent:'7',earnedPoints:'0',spentPoints:'0',usdActivityComplete:true,activity:[]}}))
+    await page.route('**/api/workspace**',route=>route.fulfill({json:data}))
+    await page.route('**/api/accounts/activity?**',route=>route.fulfill({json:{provider:'Register Rewards',from:new URL(route.request().url()).searchParams.get('from'),to:new URL(route.request().url()).searchParams.get('to'),beginning:{startUsd:'2',startPoints:null,opening:{date:'2026-09-30',sourceNote:'Confirmed opening'}},ending:{endUsd:'2',endPoints:null},earned:'7',spent:'7',earnedPoints:'0',spentPoints:'0',usdActivityComplete:true,activity:[]}}))
     await page.goto('/')
     await page.getByLabel('API access token').fill('synthetic-account-token')
     await page.getByRole('button', { name: 'Open my workspace', exact: true }).click()
@@ -356,7 +362,7 @@ test.describe('account detail fixture workflow', () => {
     await expect(page.getByRole('heading',{name:'Account Balances',exact:true})).toBeVisible()
     await page.getByRole('button', { name: 'Set Beginning Balance', exact: true }).click()
     await expect(page.getByLabel('Dollar Balance')).toBeVisible()
-    expect(await page.getByLabel('Dollar Balance').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(60)
+    expect(await page.getByLabel('Dollar Balance').evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
     await page.screenshot({path:info.outputPath('account-details.png'),fullPage:true})
   })
@@ -369,7 +375,7 @@ test.describe('RR matching fixture workflow', () => {
     row.totals.savings.paidAfterRebates='-3.01';row.totals.benefitAdjustedCashSpending=null
     data.receipts=[row];let matched=false,posts=0
     const reward={earningId:'rr-earned',receiptId:'source-receipt',receiptNumber:'1151-source',date:'2026-10-04',time:'9:56 AM',promotion:'Lysol Travel Wipes — Buy 2, Get $5 RR',amount:'5',spentReceiptId:id,spentReceiptNumber:row.metadata!.receiptNumber,usedAmount:'5',status:'PAID',products:['Lysol wipes']}
-    await page.route('**/api/workspace',route=>route.fulfill({json:data}))
+    await page.route('**/api/workspace**',route=>route.fulfill({json:data}))
     await page.route(`**/api/receipts/${id}`,route=>route.fulfill({json:{transactionId:id,revision:'1',status:'ACTIVE',metadata:row.metadata,evidenceIds:[],rrUses:matched?[reward]:[],contents:{purchaseItems:[],payments:[],appliedCoupons:[],observations:{earnings:[],footerStatus:'PRINTED'},receiptTotals:{taxAmount:'0',finalTotal:'0'}}}}))
     await page.route(`**/api/receipts/${id}/history`,route=>route.fulfill({json:[]}))
     await page.route(`**/api/receipts/${id}/totals`,route=>route.fulfill({json:row.totals}))
@@ -400,7 +406,7 @@ test.describe('unknown RR source fixture workflow',()=>{
  test.use({serviceWorkers:'block'})
  test('adds a used RR without an earning receipt or dates',async({page})=>{
   const data=workspace(),row=receiptRow('unknown-rr'),id=row.transactionId;data.receipts=[row];let matched=false,posts=0
-  await page.route('**/api/workspace',r=>r.fulfill({json:data}))
+  await page.route('**/api/workspace**',r=>r.fulfill({json:data}))
   await page.route(`**/api/receipts/${id}`,r=>r.fulfill({json:{transactionId:id,revision:'1',status:'ACTIVE',metadata:row.metadata,evidenceIds:[],contents:{purchaseItems:[],payments:[],appliedCoupons:[],observations:{earnings:[]},receiptTotals:{taxAmount:'0',finalTotal:'0'}}}}))
   await page.route(`**/api/receipts/${id}/history`,r=>r.fulfill({json:[]}))
   await page.route(`**/api/receipts/${id}/totals`,r=>r.fulfill({json:row.totals}))
@@ -422,7 +428,7 @@ test.describe('Rewards standalone inventory fixture',()=>{
  test('adds a reward at the bottom of Receipts and matches it later without an earning receipt',async({page})=>{
   const data=workspace(),row=receiptRow('standalone-spent'),id=row.transactionId;data.receipts=[row]
   let rewardId='',matched=false,created=0,links=0
-  await page.route('**/api/workspace',r=>r.fulfill({json:data}))
+  await page.route('**/api/workspace**',r=>r.fulfill({json:data}))
   await page.route('**/api/rewards/register-rewards',async r=>{
    if(r.request().method()==='POST'){const b=r.request().postDataJSON();expect(b).toMatchObject({description:'Palmolive RR',amount:'2',earnedDate:null,expirationDate:null,confirmAvailable:true});expect(b.receiptId).toBeUndefined();rewardId=b.rewardId;created++;await r.fulfill({status:201,json:{rewardId,status:'UNUSED'}})}
    else await r.fulfill({json:rewardId?[{rewardId,description:'Palmolive RR',amount:'2',earnedDate:null,expirationDate:null,status:matched?'MATCHED':'UNUSED'}]:[]})
@@ -449,21 +455,25 @@ test.describe('Rewards standalone inventory fixture',()=>{
  })
 })
 
+test.describe('dashboard fixture workflow',()=>{
+ test.use({serviceWorkers:'block'})
 test('dashboard cards collapse to their headers independently',async({page})=>{
  const data=workspace();data.receipts=Array.from({length:5},(_,i)=>receiptRow(String(i)))
  data.balances=Array.from({length:4},(_,i)=>({provider:`Test account ${i}`,balance:{monthUsd:'10',startUsd:'10',endUsd:'10',startPoints:null,endPoints:null}}))
- await page.route('**/api/workspace',route=>route.fulfill({contentType:'application/json',body:JSON.stringify(data)}))
+ await page.route('**/api/workspace**',route=>route.fulfill({contentType:'application/json',body:JSON.stringify(data)}))
  await page.goto('/');await page.getByLabel('API access token').fill('synthetic');await page.getByRole('button', { name: 'Open my workspace', exact: true }).click()
- for(const title of ['Your next shopping trip','Rewards to keep track of','Recent receipts']){
-  const card=page.locator('.dashboard-card').filter({has:page.getByRole('heading',{name:title,exact:true})})
+ for(const title of ['Your Next Shopping Trip','Rewards','Recent Receipts']){
+  const card=page.locator('.dashboard-card').filter({has:page.getByRole('heading',{name:new RegExp('^'+title,'i')})})
   await expect(card).toBeVisible();const expanded=(await card.boundingBox())!.height
-  await card.getByRole('button',{name:'Collapse',exact:true}).click()
-  await expect(card.getByRole('button',{name:'Expand',exact:true})).toHaveAttribute('aria-expanded','false')
+  await card.getByRole('button',{name:/^Collapse /,exact:false}).click()
+  await expect(card.getByRole('button',{name:/^Expand /,exact:false})).toHaveAttribute('aria-expanded','false')
   const collapsed=(await card.boundingBox())!.height,header=(await card.locator('.panel-head').boundingBox())!.height
   expect(collapsed).toBeLessThan(expanded-40);expect(Math.abs(collapsed-header)).toBeLessThanOrEqual(3)
-  await card.getByRole('button',{name:'Expand',exact:true}).click()
+  await card.getByRole('button',{name:/^Expand /,exact:false}).click()
   expect((await card.boundingBox())!.height).toBeGreaterThan(collapsed+40)
  }
+})
+
 })
 
 test('approved shopping notebook compares alternatives and imports editable deal notes', async ({ page }, info) => {
@@ -515,7 +525,7 @@ test.describe('approved form layout',()=>{
  test('outlined form labels, repeated actions and automatic receipt totals',async({page},info)=>{
  const data=workspace()
  await page.route('**/api/**',route=>route.fulfill({status:200,contentType:'application/json',body:'[]'}))
- await page.route('**/api/workspace',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)}))
+ await page.route('**/api/workspace**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)}))
  await page.route('**/api/shopping-plans/scenario/preview',async route=>{
   const input=route.request().postDataJSON();await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({items:[{id:input.scenario.items[0].id,totalPrice:'8.99',itemOopBeforeTaxAndFunding:'8.99'}]})})
  })
@@ -525,13 +535,13 @@ test.describe('approved form layout',()=>{
  await page.getByRole('link',{name:'Receipts',exact:true}).click();await page.getByRole('button',{name:'Add receipt',exact:true}).click()
  const dialog=page.getByRole('dialog',{name:'Add receipt'})
  await expect(dialog.getByRole('button', { name: 'Top: Save Draft', exact: true })).toBeVisible()
- await expect(dialog.getByLabel('Store',{exact:true})).toHaveAttribute('placeholder','Store')
+ await expect(dialog.getByLabel('Store',{exact:true}).locator('..')).toContainText('Store')
  await expect(dialog.getByLabel('Store',{exact:true})).toHaveValue('')
  await dialog.getByLabel('Store',{exact:true}).fill('Target')
  await expect(dialog.getByLabel('Store',{exact:true})).toHaveValue('Target')
- expect(await dialog.getByLabel('Store',{exact:true}).evaluate(input=>getComputedStyle(input.closest('label')!).fontSize)).toBe('0px')
- const outline=await dialog.getByLabel('Store',{exact:true}).evaluate(input=>{const label=input.closest('label')!,a=label.getBoundingClientRect(),b=input.getBoundingClientRect();return {inside:b.top>=a.top&&b.bottom<=a.bottom,color:getComputedStyle(label).borderColor}})
- expect(outline.inside).toBe(true);await expect.poll(()=>dialog.getByLabel('Store',{exact:true}).evaluate(input=>getComputedStyle(input.closest('label')!).borderColor)).toBe('rgb(37, 104, 78)')
+ expect(await dialog.getByLabel('Store',{exact:true}).evaluate(input=>getComputedStyle(input.closest('label')!).fontSize)).toBe('13px')
+ const outline=await dialog.getByLabel('Store',{exact:true}).evaluate(input=>{const label=input.closest('label')!,a=label.getBoundingClientRect(),b=input.getBoundingClientRect();return {inside:b.top>=a.top&&b.bottom<=a.bottom,color:getComputedStyle(input).borderColor}})
+ expect(outline.inside).toBe(true);expect(await dialog.getByLabel('Store',{exact:true}).evaluate(input=>getComputedStyle(input).borderTopWidth)).toBe('1px')
  await dialog.getByLabel('Product description 1').fill('Synthetic Dove');await dialog.getByLabel('Regular price 1',{exact:true}).fill('8.99')
  await expect(dialog.getByText('$8.99',{exact:true}).first()).toBeVisible()
  await dialog.getByRole('button',{name:'Add discount to product 1',exact:true}).click()

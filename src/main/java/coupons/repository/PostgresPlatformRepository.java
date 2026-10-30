@@ -44,6 +44,24 @@ public final class PostgresPlatformRepository implements PlatformRepository {
 
     private final PostgresConnectionFactory db;
 
+    @Override public void savePromotion(UUID id,String name,BigDecimal threshold,BigDecimal value,LocalDate start,LocalDate end,String terms,String status,String expectedToken) {
+        transaction(db,c->{
+            PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);var old=state.giftCardPromotions().get(id);
+            if(!(old==null?"new":old.token()).equals(expectedToken))throw new java.util.ConcurrentModificationException("Promotion changed; refresh before editing.");
+            var updated=new GiftCardPromotion(id,name,threshold,value,start,end,old==null?GiftCardPromotion.Basis.REVIEWED_ELIGIBLE_AMOUNT:old.basis(),terms,GiftCardPromotion.Status.valueOf(status),old==null?Map.of():old.contributions());
+            PostgresReceiptState.promotions(c,Map.of(id,updated));return null;
+        });
+    }
+    @Override public void deletePromotion(UUID id,String expectedToken) {
+        transaction(db,c->{
+            PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);var old=state.giftCardPromotions().get(id);
+            if(old==null)throw new NoSuchElementException("Promotion not found.");
+            if(!old.token().equals(expectedToken))throw new java.util.ConcurrentModificationException("Promotion changed; refresh before deleting.");
+            if(state.receipts().values().stream().anyMatch(receipt->receipt.contents().observations().promotionLinks().stream().anyMatch(link->link.promotionId().equals(id))))throw new IllegalArgumentException("Remove this promotion from its linked receipts before deleting it.");
+            try(var p=c.prepareStatement("DELETE FROM gift_card_promotions WHERE promotion_id=?")){p.setObject(1,id);p.executeUpdate();}return null;
+        });
+    }
+
     public void unlinkRebateReceipt(UUID rebate,UUID receipt,String expectedContribution){new PostgresReceiptSupplementRepository(db).unlinkRebateReceipt(rebate,receipt,expectedContribution);}
 
     public Map<String,Object> saveRebateReceipt(UUID rebate,UUID receipt,long receiptRevision,List<UUID> lines,BigDecimal netAmount,
@@ -67,7 +85,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             BigDecimal couponTotal=allocated?discounts.stream().map(coupons.CouponApplied::getAppliedAmount).reduce(BigDecimal.ZERO,BigDecimal::add):null;
             contributions.put(entry.getKey(),fields("quantity",quantity,"saleTotal",saleTotal,"couponTotal",couponTotal,"receiptDate",receipt==null?null:receipt.transaction().getObservations().purchaseDate(),"receiptId",c.receiptId(),"reviewedRevision",c.reviewedRevision(),"lineIds",c.lineIds(),"reviewedAmount",c.reviewedAmount(),"note",c.note(),"afterCoupons",c.afterCoupons(),"submitted",c.submitted(),"submittedOn",c.submittedOn(),"submissionReference",c.submissionReference(),"token",GiftCardPromotion.contributionToken(c),"needsReview",stale||eligible.isEmpty(),"eligibleAmount",eligible.orElse(null)));
         }
-        return fields("id",rebate.id(),"name",rebate.name(),"threshold",rebate.threshold(),"giftCardValue",rebate.giftCardValue(),"start",rebate.start(),"end",rebate.end(),"basis",rebate.basis(),"terms",rebate.terms(),"status",rebate.status(),"contributions",contributions,"eligibleTotal",total,"progressComplete",complete);
+        return fields("token",rebate.token(),"id",rebate.id(),"name",rebate.name(),"threshold",rebate.threshold(),"giftCardValue",rebate.giftCardValue(),"start",rebate.start(),"end",rebate.end(),"basis",rebate.basis(),"terms",rebate.terms(),"status",rebate.status(),"contributions",contributions,"eligibleTotal",total,"progressComplete",complete);
     }
     public PostgresPlatformRepository(PostgresConnectionFactory db) {
         this.db = Objects.requireNonNull(db);

@@ -278,6 +278,29 @@ class PostgresApiIntegrationTest {
         assertTrue(receipts.findById(id).isEmpty());
     }
 
+    @Test void promotionManagementRetainsReceiptLinksAndRejectsStaleEdits() throws Exception {
+        UUID id=UUID.randomUUID();String path="/rebate-programs/"+id;
+        var body=new LinkedHashMap<String,Object>(Map.of("name","New promotion","threshold","75.00","giftCardValue","15.00","start","2026-10-01","end","2026-10-31","terms","Eligible products after coupons","status","TRACKING","expectedToken","new"));
+        var created=call("PUT",path,Json.object(body),"create-promotion",null);assertEquals(200,created.statusCode(),created.body());
+        assertEquals(created.body(),call("PUT",path,Json.object(body),"create-promotion",null).body());
+        var supplement=new coupons.repository.PostgresReceiptSupplementRepository(db);
+        UUID receiptId=UUID.randomUUID(),lineId=UUID.randomUUID();
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.TEN));
+        tx.addPurchaseItem(new PurchaseItem(lineId,"Qualifying product",null,BigDecimal.TEN,BigDecimal.TEN,1));
+        tx.setObservations(new ReceiptObservations(LocalDate.of(2026,10,25),null,List.of(),List.of(),null,List.of(),Map.of()));
+        receipts.save(receiptId,tx,new ReceiptMeta("Walgreens","PROMO-TEST",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        supplement.saveRebateReceipt(id,receiptId,1,List.of(lineId),BigDecimal.TEN,null,false,null,null,"new");
+        var original=supplement.giftCardPromotions().getFirst();
+        assertEquals(1,original.contributions().size());
+        body.put("name","Changed promotion");body.put("expectedToken",original.token());
+        var changed=call("PUT",path,Json.object(body),"edit-promotion",null);assertEquals(200,changed.statusCode(),changed.body());
+        var updated=supplement.giftCardPromotions().getFirst();assertEquals(original.contributions(),updated.contributions());assertEquals("Changed promotion",updated.name());
+        assertEquals(409,call("PUT",path,Json.object(body),"stale-promotion",null).statusCode());
+        assertEquals(409,call("DELETE",path,Json.object(Map.of("expectedToken",original.token())),"stale-delete-promotion",null).statusCode());
+        var removed=call("DELETE",path,Json.object(Map.of("expectedToken",updated.token())),"delete-promotion",null);assertEquals(200,removed.statusCode(),removed.body());
+        assertTrue(supplement.giftCardPromotions().isEmpty());
+    }
+
     HttpResponse<String> call(String method, String path, String body, String key, String revision) throws Exception {
         var b = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(20)).header("Authorization", "Bearer owner").header("Content-Type", "application/json");
         if (key != null) {

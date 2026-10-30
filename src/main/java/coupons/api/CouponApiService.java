@@ -571,6 +571,15 @@ public final class CouponApiService implements HttpHandler {
             requireMethod(method,"POST");var f=Json.parseObject(body(e,1024*1024));known(f,"a","b","storeA","storeB");
             return json(200,ShoppingReview.compare(parseScenario(f.get("a")),optional(f,"storeA"),parseScenario(f.get("b")),optional(f,"storeB")));
         }
+        if(parts.length==3&&parts[1].equals("rebate-programs")) {
+            requirePlatform();
+            if(method.equals("DELETE"))return write(e,principal,request->{var f=Json.parseObject(request);known(f,"expectedToken");platform.deletePromotion(UUID.fromString(parts[2]),required(f,"expectedToken"));return json(200,fields("deleted",true));});
+            requireMethod(method,"PUT");
+            return write(e,principal,request->{var f=Json.parseObject(request);known(f,"name","threshold","giftCardValue","start","end","terms","status","expectedToken");
+                if(required(f,"name").length()>200||required(f,"terms").length()>4000)throw new ApiError(400,"Promotion name or terms are too long.");
+                platform.savePromotion(UUID.fromString(parts[2]),required(f,"name"),ReceiptInput.decimal(f,"threshold",false),ReceiptInput.decimal(f,"giftCardValue",false),LocalDate.parse(required(f,"start")),LocalDate.parse(required(f,"end")),required(f,"terms"),required(f,"status"),required(f,"expectedToken"));return json(200,fields("saved",true));
+            });
+        }
         if(parts.length==5&&parts[1].equals("rebate-programs")&&parts[3].equals("receipts")){
             requirePlatform();
             if(method.equals("DELETE"))return write(e,principal,request->{var f=Json.parseObject(request);known(f,"expectedContribution");platform.unlinkRebateReceipt(UUID.fromString(parts[2]),UUID.fromString(parts[4]),required(f,"expectedContribution"));return json(200,Map.of("unlinked",true));});

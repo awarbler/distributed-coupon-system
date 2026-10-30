@@ -56,6 +56,11 @@ public record GiftCardPromotion(UUID id, String name, BigDecimal threshold, BigD
         return Optional.ofNullable(coupons.QualifyingSpend.calculate(tx, contribution.lineIds()).amount());
     }
 
+    public String token() {
+        try{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
+        catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
+    }
+
     public static String contributionToken(Contribution contribution) {
         if(contribution==null)return "new";
         try{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(contribution.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));}

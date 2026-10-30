@@ -1,0 +1,140 @@
+/* Shared workspace rhythm and explicit form rows. Loaded after legacy styles. */
+:root { --form-control-height:44px; --form-control-font-size:16px; --panel-content-inset:20px; }
+.page-heading { margin-bottom:24px; gap:16px; }
+.page-heading h1 { font-family:var(--font-family-ui); font-size:32px; line-height:1.2; }
+.page-heading p { margin-top:12px; line-height:1.5; }
+.panel { margin-bottom:24px; }
+.panel-head { padding:20px; gap:16px; }
+.panel-head h2 { font-size:18px; }
+.form-grid { gap:16px; align-items:end; }
+.form-grid > label { margin-bottom:0; }
+.form-actions { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+.form-actions > :is(button,a), button.primary, button.secondary { min-height:44px; }
+.information-box { padding:16px; margin:16px 0; border:1px solid #cbded0; border-radius:10px; background:#edf5ef; color:#335143; line-height:1.6; }
+.information-box p + p { margin-top:12px; }
+.modal .receipt-input-row { padding:20px; margin-block:16px; }
+.modal .receipt-input-row > .text-button + .text-button { margin-left:24px; }
+.modal .receipt-input-row > .form-grid { margin-bottom:16px; }
+.receipt-selection { grid-column:1 / -1; }
+.modal .item-discount-fields .form-grid,
+.modal .receipt-input-row .item-discount-fields .form-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.modal .item-discount-fields .form-grid > .field-full { grid-column:1 / -1; }
+.modal .payment-entry .payment-fields { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.modal .payment-fields > .field-full { grid-column:1 / -1; }
+.modal .receipt-edit-toolbar { display:flex; gap:16px; align-items:end; margin-bottom:20px; }
+.modal .receipt-edit-toolbar > label { flex:1; margin:0; }
+.modal .receipt-edit-toolbar .form-actions { margin:0; padding:0; }
+.receipt-editor:has(.receipt-edit-toolbar) .form-actions-top { display:none; }
+.receipt-entry-form > .secondary { margin-block:16px; }
+.receipt-entry-form > fieldset > .form-actions-top { justify-content:flex-start; padding-block:16px; }
+.rewards-account-filters { grid-template-columns:minmax(160px,1fr) minmax(160px,1fr) auto auto; gap:16px; margin-bottom:20px; }
+.rewards-account-filters > :is(label,button) { margin-bottom:0; }
+.rewards-account-filters > button { height:44px; }
+.filters.receipt-filters { padding:20px; gap:16px; }
+.receipt-filters details > .form-grid { gap:16px; }
+.shopping-week-controls .shopping-week-date { height:44px; min-height:44px; text-align:center; line-height:44px; }
+.shopping-week-date::-webkit-date-and-time-value { display:block; width:100%; text-align:center; margin:0; }
+.shopping-week-date::-webkit-datetime-edit { display:inline-flex; align-items:center; padding:0; height:100%; }
+.shopping-plan-columns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:24px; }
+.shopping-plan-columns > :last-child { grid-column:1 / -1; }
+.section-navigation { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:24px; }
+.section-navigation a { text-decoration:none; }
+.promotion-management { margin-bottom:24px; }
+.promotion-management > .form-grid { margin:20px; }
+.inventory-product-detail { display:grid; gap:20px; padding:20px; background:var(--color-surface); border:1px solid var(--color-border-control); border-radius:12px; }
+.inventory-product-detail > button { justify-self:start; }
+.inventory-product-detail details > :is(p,form) { margin-top:16px; }
+.inventory-product-detail .form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.inventory-product-detail .form-actions { margin-top:20px; }
+.reward-fields-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.reward-fields-grid > .reward-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; grid-column:1 / -1; align-items:end; }
+@media(max-width:900px) {
+ .rewards-account-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .modal .receipt-edit-toolbar { flex-wrap:wrap; }
+ .shopping-plan-columns { grid-template-columns:minmax(0,1fr); }
+}
+@media(max-width:600px) {
+ .page-heading h1 { font-size:28px; }
+ .panel-head,.modal .receipt-input-row,.filters.receipt-filters { padding:16px; }
+ .modal .item-discount-fields .form-grid,
+ .modal .receipt-input-row .item-discount-fields .form-grid,
+ .modal .payment-entry .payment-fields,
+ .rewards-account-filters,.inventory-product-detail .form-grid,
+ .reward-fields-grid > .reward-row { grid-template-columns:minmax(0,1fr); }
+ .modal .receipt-edit-toolbar > label { flex-basis:100%; }
+ .form-actions > button { white-space:normal; }
+}
+/* Keep field names visible after a value is entered. */
+.app-shell label[data-placeholder-field="true"],
+.modal label[data-placeholder-field="true"],
+.app-shell label:has(> select), .modal label:has(> select),
+.app-shell label:has(> textarea), .modal label:has(> textarea) {
+ font-size:13px; gap:8px; padding:0; border:0; background:transparent; box-shadow:none;
+}
+.app-shell label[data-placeholder-field="true"] > :is(input,select,textarea),
+.modal label[data-placeholder-field="true"] > :is(input,select,textarea),
+.app-shell label > select, .modal label > select {
+ border:1px solid var(--color-border-control); border-radius:9px; background-color:var(--color-surface);
+ padding:10px 12px; min-height:44px; height:44px; font-size:16px;
+}
+.app-shell label > select,.modal label > select { padding-right:36px; }
+.app-shell label > textarea,.modal label > textarea { height:auto; min-height:80px; }
+.modal .payment-entry .payment-fields { grid-template-columns:repeat(2,minmax(0,1fr)) auto; }
+.modal .payment-entry .payment-fields.payment-with-account { grid-template-columns:repeat(3,minmax(0,1fr)) auto; }
+.modal .payment-fields > button { min-height:44px; align-self:end; }
+.content { padding:24px 24px 0; }
+@media(max-width:600px) {
+ .content { padding:16px 16px 0; }
+ .modal .payment-entry .payment-fields,
+ .modal .payment-entry .payment-fields.payment-with-account { grid-template-columns:minmax(0,1fr); }
+}
+
+/* Override legacy borderless controls so every field has one visible input outline. */
+:is(.app-shell,.modal) label:has(> input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"])) {
+ border:0; padding:0; gap:8px; background:transparent; box-shadow:none; font-size:13px;
+}
+:is(.app-shell,.modal) label > input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]) {
+ border:1px solid var(--color-border-control); border-radius:9px; background:var(--color-surface);
+ padding:0 12px; height:44px; min-height:44px; font-size:16px; line-height:normal;
+}
+:is(.app-shell,.modal) label > input[aria-invalid="true"] { border:2px solid #b42318; background:#fff4f2; }
+:is(.app-shell,.modal) label > input:focus-visible { outline:3px solid var(--color-focus); outline-offset:3px; }
+:is(.app-shell,.modal) label > input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"])[aria-invalid="true"] {
+ border:2px solid #b42318; background:#fff4f2;
+}
+:is(.app-shell,.modal) label > input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]):focus-visible {
+ outline:3px solid var(--color-focus); outline-offset:3px;
+}
+:is(.app-shell,.modal) label > textarea.autosize-input,
+:is(.app-shell,.modal) label > textarea {
+ border:1px solid var(--color-border-control); border-radius:9px; padding:10px 12px;
+ background:var(--color-surface); min-height:44px; font-size:16px;
+}
+
+/* Shopping cards share a header baseline, card outline and action rhythm. */
+.shopping-week-overview { align-items:stretch; gap:24px; }
+.shopping-week-overview > .panel { height:100%; }
+.shopping-week-overview .product-entry-actions {
+ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px;
+}
+.shopping-week-overview .product-entry-actions > button {
+ width:100%; margin:0; white-space:normal;
+}
+.shopping-plan-columns { align-items:stretch; }
+.shopping-plan-columns > div:first-child { display:flex; min-width:0; }
+.shopping-plan-columns > div:first-child > .panel { flex:1; margin:0; }
+.shopping-plan-columns > .section-disclosure {
+ margin:0; border:1px solid #e1e6dc; border-radius:14px; background:var(--color-surface);
+}
+.shopping-plan-columns > .section-disclosure > summary {
+ padding:20px; min-height:65px; font-size:18px; font-weight:650; line-height:1.4;
+}
+.shopping-plan-columns > .section-disclosure > .disclosure-body { padding:0 20px 20px; }
+.shopping-plan-columns .shopping-plan-entry > .panel { margin-bottom:0; }
+.shopping-plans-active .shopping-plan-entry .panel-head { flex-direction:column; align-items:stretch; }
+.shopping-plans-active .shopping-plan-entry .panel-actions { justify-content:flex-start; }
+.shopping-plans-active .shopping-card-actions { width:100%; }
+@media(max-width:600px) {
+ .shopping-plan-columns > .section-disclosure > summary { padding:16px; min-height:57px; }
+ .shopping-plan-columns > .section-disclosure > .disclosure-body { padding:0 16px 16px; }
+}

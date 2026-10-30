@@ -12,6 +12,9 @@ import java.util.UUID;
  * Implementations retain ownership of their atomic persistence boundaries.
  */
 public interface PlatformRepository {
+    void savePromotion(UUID id,String name,BigDecimal threshold,BigDecimal value,LocalDate start,LocalDate end,String terms,String status,String expectedToken);
+    void deletePromotion(UUID id,String expectedToken);
+
     void unlinkRebateReceipt(UUID rebate,UUID receipt,String expectedContribution);
 
     Map<String,Object> saveRebateReceipt(UUID rebate,UUID receipt,long receiptRevision,List<UUID> lines,BigDecimal netAmount,

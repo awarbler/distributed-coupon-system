@@ -13,6 +13,7 @@ import { WorkspacePages } from './pages/WorkspacePages'
 import type { Page } from './pages/WorkspacePages'
 import type { Workspace } from './types/platform'
 import './App.css'
+import './workspace-layout.css'
 import type { Plan, PlanReceiptDraft } from './types/platform'
 import { CheckoutForm } from './features/shopping/CheckoutForm'
 
@@ -27,21 +28,6 @@ function Brand() { return <div className="brand"><span className="brand-icon"><L
 function currentPage(): Page { const raw = location.hash.slice(1); const page = raw==='rebates'?'deals':raw; return navigation.some(n => n.id === page) ? page as Page : 'dashboard' }
 
 export default function App() {
-  useEffect(()=>{
-    // Preserve accessible labels while showing them visually only as placeholders.
-    const apply=()=>document.querySelectorAll<HTMLLabelElement>('label').forEach(label=>{
-      if(label.closest('.connect-page,.shopping-week-controls,[data-original-shopping="true"]')){label.removeAttribute('data-placeholder-field');if(label.closest('.connect-page'))label.querySelector('input')?.setAttribute('placeholder','Enter your access token');return}
-      const control=Array.from(label.children).find(n=>n.matches('input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]),textarea,select')) as HTMLInputElement|HTMLTextAreaElement|HTMLSelectElement|undefined
-      if(!control)return
-      const text=Array.from(label.childNodes).filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent??'').join(' ').trim()||control.getAttribute('aria-label')||''
-      if(!text)return
-      if(label.dataset.placeholderField!=='true')label.dataset.placeholderField='true'
-      if(control.tagName!=='SELECT'&&control.getAttribute('placeholder')!==text)control.setAttribute('placeholder',text)
-    })
-    apply();const observer=new MutationObserver(apply);observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['data-original-shopping']})
-    return()=>observer.disconnect()
-  },[])
-
   const [api, setApi] = useState<ApiClient | null>(null)
   const [data, setData] = useState<Workspace | null>(null)
   const [token, setToken] = useState('')

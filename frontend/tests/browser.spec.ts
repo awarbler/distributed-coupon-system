@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { workspace, receiptRow } from '../src/api/fixtures.test-support'
+import { workspace, receiptRow, planningRow } from '../src/api/fixtures.test-support'
 
 test('responsive navigation, installation assets, and private-response caching', async ({ page, context }, info) => {
   // This test uses synthetic network fixtures; the application itself has no demo mode.
@@ -572,5 +572,72 @@ test.describe('approved form layout',()=>{
   const a=await panel.boundingBox(),b=await button.boundingBox();expect(b!.x-a!.x).toBeGreaterThanOrEqual(12);expect(a!.y+a!.height-b!.y-b!.height).toBeGreaterThanOrEqual(12)
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
  })
+
+})
+
+test.describe('workspace layout verification',()=>{
+ test.use({serviceWorkers:'block'})
+ test('workspace layouts align controls and group inventory purchase history',async({page},info)=>{
+ page.on('dialog',dialog=>dialog.accept())
+ const data=workspace()
+ const plan=planningRow();plan.plan.shoppingDate=data.asOf;plan.plan.name='Poise';data.plans=[plan]
+ data.rewardsOverview={asOf:data.asOf,available:'0.00',expected:'0.00',total:'0.00',knownAvailable:'0.00',knownExpected:'0.00',expectedCount:'0',missingBalances:[],missingValuations:[]}
+ data.inventory=[
+  {inventoryId:'a',productId:'a',revision:'1',productName:'WALG EVERYDAY PLATES',sku:'019560284600',totalPurchased:'2',quantityOnHand:'2',netCost:'4.00',sources:[{receiptId:'r1',lineItemId:'l1',revision:'1',quantity:'2',active:true,productName:'Plates',store:'Walgreens',receiptNumber:'R1',date:'2026-10-25',netCost:'4.00'}]},
+  {inventoryId:'b',productId:'b',revision:'1',productName:'WALG EVERYDAY PLATES 20S',sku:'00019560284600',totalPurchased:'1',quantityOnHand:'1',netCost:'1.50',sources:[{receiptId:'r2',lineItemId:'l2',revision:'1',quantity:'1',active:true,productName:'Plates 20S',store:'Walgreens',receiptNumber:'R2',date:'2026-10-26',netCost:'1.50'}]}
+ ]
+ await page.route('**/api/workspace**',route=>route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)}))
+ await page.route('**/api/rewards/register-rewards',route=>route.fulfill({status:200,contentType:'application/json',body:'[]'}))
+ await page.goto('/')
+ await page.getByLabel('API access token').fill('synthetic-layout-token')
+ await page.getByRole('button',{name:'Open my workspace',exact:true}).click()
+ await expect(page.getByRole('heading',{name:'Make every trip count.'})).toBeVisible()
+ async function navigate(name:string){const menu=page.getByRole('button',{name:'Open navigation',exact:true});if(await menu.isVisible())await menu.click();await page.getByRole('link',{name,exact:false}).click()}
+ await navigate('Shopping & Deals')
+ await expect(page.getByLabel('Weekly store')).toContainText('H-E-B')
+ await expect(page.getByLabel('Weekly store')).toContainText('Walmart')
+ await expect(page.getByLabel('Weekly store')).toContainText('Target')
+ expect(await page.getByLabel('Shopping week',{exact:true}).evaluate(node=>getComputedStyle(node).textAlign)).toBe('center')
+ if(info.project.name!=='mobile') {
+  const overview=await page.locator('.shopping-week-overview > .panel').evaluateAll(nodes=>nodes.map(node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom}}))
+  expect(Math.abs(overview[0].top-overview[1].top)).toBeLessThanOrEqual(1)
+  expect(Math.abs(overview[0].bottom-overview[1].bottom)).toBeLessThanOrEqual(1)
+  const headers=await page.locator('.shopping-plan-columns > div:first-child .panel-head, .shopping-plans-active > summary').evaluateAll(nodes=>nodes.map(node=>node.getBoundingClientRect().top))
+  expect(Math.max(...headers)-Math.min(...headers)).toBeLessThanOrEqual(1)
+ }
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+ await page.screenshot({path:info.outputPath('shopping-layout.png'),fullPage:true})
+ await navigate('Receipts')
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+ await page.getByText('More filters — Show / Hide',{exact:true}).click()
+ await page.screenshot({path:info.outputPath('receipt-search-layout.png'),fullPage:true})
+ await page.getByRole('button',{name:'Add receipt',exact:true}).click()
+ await expect(page.getByRole('dialog')).toBeVisible()
+ expect(await page.getByRole('dialog').getByLabel('Store',{exact:true}).evaluate(node=>getComputedStyle(node).borderTopWidth)).toBe('1px')
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+ await page.screenshot({path:info.outputPath('add-receipt-layout.png'),fullPage:true})
+ await page.getByRole('button',{name:'Cancel',exact:true}).click()
+ await navigate('Rewards & Accounts')
+ const controls=page.locator('.rewards-account-filters')
+ if(info.project.name!=='mobile') {
+  const positions=await controls.locator(':scope > *').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().bottom))
+  expect(Math.max(...positions)-Math.min(...positions)).toBeLessThanOrEqual(1)
+ }
+ await page.screenshot({path:info.outputPath('rewards-layout.png'),fullPage:true})
+ await navigate('Promotions & Rebates')
+ await expect(page.getByRole('navigation',{name:'Promotion sections'})).toBeVisible()
+ await page.getByRole('button',{name:'Add promotion',exact:true}).click()
+ await expect(page.getByRole('dialog',{name:'Add promotion'})).toBeVisible()
+ await page.getByRole('button',{name:'Cancel',exact:true}).click()
+ await navigate('Inventory')
+ await expect(page.getByRole('columnheader',{name:'Quantity on hand'})).toHaveCount(0)
+ await expect(page.getByRole('cell',{name:'3 package(s)',exact:true})).toBeVisible()
+ await expect(page.getByRole('cell',{name:'$5.50',exact:true})).toBeVisible()
+ await page.getByRole('button',{name:'View / update',exact:true}).click()
+ await expect(page.getByRole('button',{name:'R1',exact:true})).toBeVisible()
+ await expect(page.getByRole('button',{name:'R2',exact:true})).toBeVisible()
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+ await page.screenshot({path:info.outputPath('inventory-history.png'),fullPage:true})
+})
 
 })

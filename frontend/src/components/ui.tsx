@@ -8,9 +8,9 @@ export function InfoHelp({children}:{children:ReactNode}) {
 }
 
 /** The same live form commands are accessible at either end of a long form. */
-export function FormActions({children}:{children:ReactNode}) {
+export function FormActions({children,topLeading}:{children:ReactNode;topLeading?:ReactNode}) {
  const ref=useRef<HTMLDivElement>(null),[target,setTarget]=useState<HTMLDivElement|null>(null)
- useLayoutEffect(()=>{const node=ref.current,form=node?.closest('form');if(!node||!form||node.closest('[data-original-shopping="true"]'))return
+ useLayoutEffect(()=>{const node=ref.current,form=node?.closest('form');if(!node||!form||node.closest('[data-original-shopping="true"]')||form.querySelector('.receipt-edit-toolbar'))return
   const groups=Array.from(form.querySelectorAll('.form-actions:not(.form-actions-top)')).filter(n=>n.closest('form')===form)
   if(groups.at(-1)!==node)return
   const host=document.createElement('div');host.className='form-actions form-actions-top';host.setAttribute('role','group');host.setAttribute('aria-label','Top form actions')
@@ -21,7 +21,7 @@ export function FormActions({children}:{children:ReactNode}) {
   if(node.type==='button'){const text=Children.toArray(node.props.children).filter(c=>typeof c==='string'||typeof c==='number').join(' ').trim();return cloneElement(node,{'aria-label':`Top: ${node.props['aria-label']??text??'Form action'}`,id:undefined})}
   return node.props.children?cloneElement(node,{},top(node.props.children)):node
  })}
- return <>{target&&createPortal(top(children),target)}<div ref={ref} className="form-actions">{children}</div></>
+ return <>{target&&createPortal(<>{topLeading}{top(children)}</>,target)}<div ref={ref} className="form-actions">{children}</div></>
 }
 
 export function Empty({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {

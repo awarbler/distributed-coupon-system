@@ -287,7 +287,7 @@ it('deletes a blank accidental receipt-wide discount without browser validation 
   const mutate = vi.spyOn(api, 'mutate').mockResolvedValue({ reviewToken: 'reviewed', totals: receiptRow('test').totals })
   render(<ReceiptEdit receipt={receipt()} api={api} enabled onSaved={vi.fn()} onCancel={vi.fn()} />)
   await user.click(screen.getByRole('button', { name: 'Add receipt-wide discount' }))
-  await user.click(screen.getByRole('button', { name: 'Delete receipt-wide discount 1' }))
+  await user.click(screen.getByRole('button', { name: 'Delete' }))
   await user.type(screen.getByLabelText('Reason for correction'), 'Remove accidental discount')
   await user.click(screen.getByRole('button', { name: 'Review updated totals' }))
   expect(mutate.mock.calls[0][2]).toMatchObject({ discounts: [{ applicationId: 'old-price-reduction' }] })
@@ -973,7 +973,7 @@ it('imports receipt-backed inventory and saves confirmed stock with an optional 
  const data=workspace();data.inventory=[{inventoryId:'stock',productId:'product',revision:'2',productName:'Olay',sku:'00123',totalPurchased:'5',quantityOnHand:null,quantityConfirmed:false,location:null,sources:[{receiptId:'receipt',lineItemId:'line',revision:'1',quantity:'5',active:true,productName:'Olay',store:'Walgreens',receiptNumber:'R1',date:'2026-10-24'}]}]
  const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue({saved:true}),changed=vi.fn(),user=userEvent.setup()
  render(<WorkspacePages page="inventory" data={data} api={api} writable onChanged={changed} onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
- expect(screen.getByText('00123')).toBeInTheDocument();expect(screen.getByText('Needs confirmation')).toBeInTheDocument()
+ expect(screen.getByText('00123')).toBeInTheDocument();expect(screen.queryByRole('columnheader',{name:'Quantity on hand'})).not.toBeInTheDocument();expect(screen.getByText('Needs cost review')).toBeInTheDocument()
  await user.click(screen.getByRole('button',{name:'View / update'}));expect(screen.getByLabelText('Location (optional)')).not.toBeRequired();await user.selectOptions(screen.getByLabelText('Inventory action'),'SET');await user.type(screen.getByLabelText('Quantity on hand'),'3');await user.click(screen.getByRole('button',{name:'Save inventory'}))
  expect(mutate).toHaveBeenCalledWith('/inventory/stock','PUT',expect.objectContaining({action:'SET',quantity:3,location:null}),expect.any(String),'2');expect(changed).toHaveBeenCalled()
 })
@@ -985,7 +985,7 @@ it('collapses inventory sections without losing filters or stock form inputs',as
  await user.click(screen.getByRole('button',{name:'Collapse Inventory filters'}));expect(search).not.toBeVisible();await user.click(screen.getByRole('button',{name:'Expand Inventory filters'}));expect(search).toHaveValue('Olay')
  await user.click(screen.getByRole('button',{name:'View / update'}));await user.selectOptions(screen.getByLabelText('Inventory action'),'SET');const quantity=screen.getByLabelText('Quantity on hand');await user.type(quantity,'3')
  await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).not.toBeVisible();await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).toHaveValue('3')
- expect(screen.getByText('Product summary')).toBeInTheDocument();expect(screen.getByText('Purchase evidence')).toBeInTheDocument();expect(screen.getByText('Stock history')).toBeInTheDocument()
+ expect(screen.getByText('Product summary')).toBeInTheDocument();expect(screen.getByText('Purchase history')).toBeInTheDocument();expect(screen.getByText('Stock history')).toBeInTheDocument()
 })
 
 it('saves and restores an incomplete receipt draft without reviewing or posting a purchase',async()=>{
@@ -1012,15 +1012,16 @@ it('requires a new count when switching inventory from packs to individual items
 
 
 it('sorts inventory headings in both directions using numeric quantities',async()=>{
- const data=workspace();data.inventory=[{inventoryId:'a',productId:'a',revision:'1',productName:'Alpha',sku:'002',totalPurchased:'10',quantityOnHand:'2',location:'Pantry'},{inventoryId:'b',productId:'b',revision:'1',productName:'Beta',sku:'001',totalPurchased:'2',quantityOnHand:'10',location:'Bathroom'}];const user=userEvent.setup()
+ const data=workspace();data.inventory=[{inventoryId:'a',productId:'a',revision:'1',productName:'Alpha',sku:'002',totalPurchased:'10',quantityOnHand:'2',location:'Pantry',netCost:'10.00'},{inventoryId:'b',productId:'b',revision:'1',productName:'Beta',sku:'001',totalPurchased:'2',quantityOnHand:'10',location:'Bathroom',netCost:'2.00'}];const user=userEvent.setup()
  render(<WorkspacePages page="inventory" data={data} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
  const first=()=>screen.getAllByRole('row')[1].textContent
  await user.click(screen.getByRole('button',{name:'Quantity purchased'}));expect(first()).toContain('Beta')
  await user.click(screen.getByRole('button',{name:'Quantity purchased'}));expect(first()).toContain('Alpha')
  expect(screen.getByRole('columnheader',{name:/Quantity purchased/})).toHaveAttribute('aria-sort','descending')
  await user.click(screen.getByRole('button',{name:'SKU / UPC'}));expect(first()).toContain('Beta')
- await user.click(screen.getByRole('button',{name:'Quantity on hand'}));expect(first()).toContain('Alpha')
- await user.click(screen.getByRole('button',{name:'Location'}));expect(first()).toContain('Beta')
+ await user.click(screen.getByRole('button',{name:'Cost after discounts'}));expect(first()).toContain('Beta')
+ await user.click(screen.getByRole('button',{name:'Cost after discounts'}));expect(first()).toContain('Alpha')
+ expect(screen.queryByRole('columnheader',{name:'Location'})).not.toBeInTheDocument()
 })
 
 
@@ -1471,4 +1472,17 @@ it('moves account overview explanations into help and keeps unavailable actions 
  await user.unhover(screen.getByRole('button',{name:'About Rewards Overview'}));await waitFor(()=>expect(screen.queryByRole('tooltip')).not.toBeInTheDocument())
  await user.hover(screen.getByRole('button',{name:'About Calculated Account Balances'}));expect(screen.getByRole('tooltip')).toHaveTextContent('Month Start, Day Start and Day Close as of');await user.keyboard('{Escape}')
  await user.click(screen.getByRole('button',{name:'Walgreens Cash'}));expect(screen.getByRole('button',{name:'Mark reward unavailable'}).closest('.panel')).toHaveClass('reward-unavailable-panel')
+})
+
+it('edits a shared discount product selection and sends only supported API fields',async()=>{
+ const r=receipt();r.editDiscounts=[{applicationId:'shared',printedLabel:'Shared coupon',appliedAmount:'1.00',kind:'MANUFACTURER',wholeReceipt:true,lineItemIds:[],qualifyingQuantities:{}}]
+ const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue({reviewToken:'reviewed',totals:receiptRow('test').totals}),user=userEvent.setup()
+ render(<ReceiptEdit receipt={r} api={api} enabled onSaved={vi.fn()} onCancel={vi.fn()}/>)
+ await user.click(screen.getByLabelText('Discount products 1: line 1'))
+ expect(screen.getByLabelText('Qualifying quantity for line 1')).toHaveValue(1)
+ await user.type(screen.getByLabelText('Reason for correction'),'Select qualifying product')
+ await user.click(screen.getByRole('button',{name:'Review updated totals'}))
+ const body=mutate.mock.calls.find(call=>call[0].endsWith('/edit-preview'))?.[2] as {discounts:Record<string,unknown>[]}
+ expect(body.discounts[0]).toMatchObject({applicationId:'shared',wholeReceipt:false,lineItemIds:['original-line'],qualifyingQuantities:{'original-line':1}})
+ expect(body.discounts[0]).not.toHaveProperty('shared')
 })

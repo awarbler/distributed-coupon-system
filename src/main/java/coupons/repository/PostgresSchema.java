@@ -33,6 +33,7 @@ public final class PostgresSchema {
             applyWithinTransaction(connection);
             ReceiptFinancialProjection.install(connection);
             ReceiptFinancialProjection.appendAll(connection);
+            RewardInstrumentRepository.install(connection);
             if (ownsTransaction) connection.commit(); else connection.releaseSavepoint(savepoint);
         } catch (SQLException | IOException | RuntimeException failure) {
             try { if (ownsTransaction) connection.rollback(); else connection.rollback(savepoint); }

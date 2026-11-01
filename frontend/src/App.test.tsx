@@ -8,7 +8,7 @@ import { workspace, planningRow, receiptRow } from './api/fixtures.test-support'
 import { EditDialog } from './features/shopping/EditDialog'
 async function connect(readOnly = false) {
   const data = workspace(); data.canWrite = !readOnly
-  const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(url.endsWith('/rewards/register-rewards') ? [] : data)))); vi.stubGlobal('fetch', fetch)
+  const fetch = vi.fn().mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(url.endsWith('/rewards/register-rewards') ? [] : url.endsWith('/reward-instruments') ? {instruments:[]} : data)))); vi.stubGlobal('fetch', fetch)
   const user = userEvent.setup(); render(<App />)
   await user.type(screen.getByLabelText('API access token'), 'test-only-token'); await user.click(screen.getByRole('button', { name: 'Open my workspace' })); await screen.findByRole('heading', { name: 'Make every trip count.' })
   return { user, fetch }
@@ -19,6 +19,7 @@ describe('workspace UI', () => {
     data.receipts = Array.from({ length: 7 }, (_, i) => receiptRow(String(i), '2026-10-19', `9:0${i} AM`))
     const user = userEvent.setup()
     render(<WorkspacePages data={data} page="receipts" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()} />)
+    await user.click(screen.getByRole('button',{name:'All Time'}))
     expect(within(screen.getByRole('region', {name:'Receipt results'})).getAllByRole('row')).toHaveLength(6)
     expect(screen.getByText('Showing 1–5 of 7')).toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: 'Actual OOP' })).toBeInTheDocument()
@@ -175,4 +176,10 @@ it('keeps Shopping & Deals and its plan form in their original label and action 
  await user.click(screen.getByRole('button',{name:'New plan'}))
  expect(screen.queryByRole('group',{name:'Top form actions'})).not.toBeInTheDocument()
  expect(screen.getByLabelText('Plan name').closest('label')).not.toHaveAttribute('data-placeholder-field')
+})
+
+it('shows separately identified account values without treating overlapping provider totals as all accounts',()=>{
+ const data=workspace();data.rewardInstruments=[{id:'target-own',kind:'ACCOUNT_REWARD',provider:'Target',nickname:'My Target',lastFour:null,unit:'USD',revision:'1',opening:'12',openingDate:null,historyComplete:true,calculated:'12',reported:null,reportedDate:null,balanceDate:null,difference:null,comparisonStatus:'DATE_ALIGNMENT_UNRESOLVED',newEarnings:'0',events:[],history:[],issuedFrom:[]}];
+ render(<WorkspacePages data={data} page="dashboard" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>);
+ expect(screen.getByText('Available — existing provider records')).toBeInTheDocument();expect(screen.queryByText('Total Available — All Accounts')).not.toBeInTheDocument();expect(screen.getByText('Target — My Target')).toBeInTheDocument();expect(screen.getByText(/These views are not added together/)).toBeInTheDocument();
 })

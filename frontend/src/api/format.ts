@@ -3,7 +3,7 @@ import type { Decimal, ReceiptRow } from '../types/platform'
 export function decimal(value: Decimal | undefined, places = 2): string {
   if (value == null) return 'Not recorded'
   value = value.replace(/^(-?)\./, (_, sign: string) => `${sign}0.`)
-  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value)
+  const match = /^(-?)(\d+)(?:\.(\d*))?$/.exec(value)
   if (!match) return value // Preserve scientific notation exactly rather than lose precision.
   const fraction = (match[3] || '').padEnd(places + 1, '0')
   let units = BigInt(match[2] + fraction.slice(0, places))

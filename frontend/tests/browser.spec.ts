@@ -176,6 +176,8 @@ test('create and review a complete receipt through the disposable API', async ({
   await saved.getByRole('button', { name: 'History', exact: true }).click()
   await expect(saved.locator('ol.history li')).toHaveCount(1)
   await saved.getByRole('button', { name: 'Close dialog', exact: true }).click()
+  // Receipt date/time determines ordering; new records need not be on the first page.
+  await page.getByLabel('Search store, receipt number, or date').fill(receiptNumber)
   await expect(page.getByRole('button', { name: `Open receipt ${receiptNumber}`, exact: true })).toBeVisible()
   const response = await page.request.get('/api/workspace', { headers: { Authorization: `Bearer ${process.env.COUPON_BROWSER_TEST_TOKEN}` } })
   expect(response.ok()).toBe(true)
@@ -650,4 +652,26 @@ test.describe('workspace layout verification',()=>{
  await page.screenshot({path:info.outputPath('inventory-history.png'),fullPage:true})
 })
 
+})
+
+test('individual accounts, observed balances and linked gift-card exchanges retain separate value',async({page},info)=>{
+ test.skip(!process.env.COUPON_BROWSER_TEST_TOKEN,'Disposable API required.')
+ const headers={Authorization:`Bearer ${process.env.COUPON_BROWSER_TEST_TOKEN}`,'Idempotency-Key':crypto.randomUUID()}
+ const id=crypto.randomUUID(),nickname=`My Fetch ${info.project.name} ${Date.now()}`
+ const created=await page.request.post('/api/reward-instruments',{headers,data:{id,kind:'ACCOUNT_REWARD',provider:'Fetch',nickname,unit:'POINTS',opening:'20000',date:'2026-10-30',historyComplete:true,reason:'Synthetic observed opening'}})
+ expect(created.status()).toBe(201)
+ await page.goto('/');await page.getByLabel('API access token').fill(process.env.COUPON_BROWSER_TEST_TOKEN!);await page.getByRole('button',{name:'Open my workspace',exact:true}).click();await expect(page.getByRole('heading',{name:'Make every trip count.'})).toBeVisible()
+ const menu=page.getByRole('button',{name:'Open navigation',exact:true});if(await menu.isVisible())await menu.click();await page.getByRole('link',{name:/^Rewards & Accounts(?: \d+)?$/}).click()
+ await page.getByLabel('Select individual account or card').selectOption(id)
+ await expect(page.getByLabel('Individual balance comparison')).toContainText('20000 points')
+ await page.getByText('Record an observed exchange into a gift card',{exact:true}).click()
+ await page.getByLabel('Issued card retailer').fill('Target');await page.getByLabel('Issued card nickname').fill(`Issued ${nickname}`);await page.getByLabel('Observed source redemption (POINTS, blank if unknown)').fill('10000');await page.getByLabel('Issued gift-card value (USD)').fill('10.00');await page.getByLabel('Exchange date (optional)').fill('2026-10-30');await page.getByLabel('Exchange evidence or reason').fill('Observed synthetic points redemption and separate card');await page.getByRole('button',{name:'Save linked exchange',exact:true}).click()
+ await expect(page.getByLabel('Select individual account or card').getByRole('option',{name:new RegExp(`Issued ${nickname}`)})).toHaveCount(1)
+ const data=await (await page.request.get('/api/reward-instruments',{headers})).json();const card=data.instruments.find((r:{nickname:string})=>r.nickname===`Issued ${nickname}`);expect(card.calculated).toBe(10);expect(card.newEarnings).toBe(0)
+ await page.getByLabel('Select individual account or card').selectOption(card.id);await page.getByLabel('Activity type',{exact:true}).selectOption('REDEMPTION');await page.getByLabel('Observed activity amount (USD)').fill('4.00');await page.getByLabel('Actual event date (optional)').fill('2026-10-30');await page.getByLabel('Evidence reference or reason',{exact:true}).fill('Observed four dollar card use');await page.getByRole('button',{name:'Save observed activity',exact:true}).click()
+ await expect(page.getByLabel('Individual balance comparison')).toContainText('Calculated $6.00')
+ await page.getByLabel('Activity type',{exact:true}).selectOption('REPORTED_BALANCE');await page.getByLabel('Observed activity amount (USD)').fill('5.00');await page.getByLabel('Evidence reference or reason',{exact:true}).fill('Retailer reports five dollars');await page.getByRole('button',{name:'Save observed activity',exact:true}).click()
+ const comparison=page.getByLabel('Individual balance comparison');await expect(comparison).toContainText('Actual reported $5.00');await expect(comparison).toContainText('Difference $1.00')
+ const final=await(await page.request.get('/api/reward-instruments',{headers})).json();expect(final.instruments.find((r:{id:string})=>r.id===id).calculated).toBe(10000)
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
 })

@@ -63,6 +63,20 @@ class SavingsReportTest {
         assertEquals(0,n("5").compareTo((BigDecimal)result.get("expected")));
         assertEquals(0,n("28").compareTo((BigDecimal)result.get("total")));
         assertEquals(1,result.get("expectedCount"));
+        assertEquals(0,n("3").compareTo((BigDecimal)result.get("monthlyEarning")));
+        var nextMonth=PostgresPlatformRepository.rewardsOverview(summary,List.of(r),DAY.plusMonths(1).withDayOfMonth(1),List.of("Walgreens Cash"));
+        assertEquals(BigDecimal.ZERO,nextMonth.get("monthlyEarning"));
+    }
+    @Test void cashDoesNotRequireABalanceOrIncreaseRewardTotals() {
+        var summary=new ProviderBalanceSummary();
+        summary.recordOpening(DAY,"Walgreens Cash",n("20"),false);
+        var result=PostgresPlatformRepository.rewardsOverview(summary,List.of(),DAY,List.of("Cash","Walgreens Cash"));
+        assertEquals(n("20"),result.get("available"));
+        assertEquals(n("20"),result.get("total"));
+        assertEquals(List.of(),new java.util.ArrayList<>((java.util.Set<?>)result.get("missingBalances")));
+        summary.recordOpening(DAY,"Cash",n("100"),false);
+        var withCash=PostgresPlatformRepository.rewardsOverview(summary,List.of(),DAY,List.of("Cash","Walgreens Cash"));
+        assertEquals(n("20"),withCash.get("available"));
     }
     @Test void benefitReportIncludesExistingPrintedWcFallbackWithoutCreatingAnEarning() {
         var r=receipt("Footer","10","0","2","2","0","0","0","0",List.of(),DAY);

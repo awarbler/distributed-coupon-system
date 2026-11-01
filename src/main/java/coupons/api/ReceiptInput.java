@@ -134,7 +134,7 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
         for(var entry:q.entrySet())out.put(UUID.fromString(asText(entry.getKey())),Math.toIntExact(number(entry.getValue())));return out;
     }
     static UUID uuid(Map<String,Object> m,String name){return UUID.fromString(required(m,name));}
-    static BigDecimal decimal(Map<String,Object> m,String name,boolean nullable){String text=optional(m,name);if(text==null&&nullable)return null;if(text==null||text.length()>80||!text.matches("(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)"))throw new IllegalArgumentException(name+" must be a nonnegative decimal string.");return new BigDecimal(text);}
+    static BigDecimal decimal(Map<String,Object> m,String name,boolean nullable){String text=optional(m,name);if(text==null&&nullable)return null;if(text==null||text.length()>80||!text.matches("(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)"))throw new IllegalArgumentException(name+" must be a nonnegative decimal string.");return new BigDecimal(text);}
     static boolean flag(Map<String,Object> m,String name){var value=m.get(name);if(value!=null&&!(value instanceof Boolean))throw new IllegalArgumentException(name+" must be a boolean.");return Boolean.TRUE.equals(value);}
     static List<UUID> ids(Map<String,Object> m,String name){var v=m.get(name);if(v==null)return List.of();if(!(v instanceof List<?> l))throw new IllegalArgumentException(name+" must be a list.");return l.stream().map(x->UUID.fromString(asText(x))).toList();}
     static Integer requiredQuantity(Map<String,Object> fields) {
@@ -361,8 +361,33 @@ final class ReceiptImport {
             if(!process.waitFor(45,java.util.concurrent.TimeUnit.SECONDS))throw new CouponApiService.ApiError(400,"Scan timed out. Try a smaller, clearer image.");
             reader.join(1000);writer.join(1000);
             if(process.exitValue()!=0)throw new CouponApiService.ApiError(400,"Image could not be scanned. Convert it to a standard JPEG or PNG.");
-            return new String(output.get(),java.nio.charset.StandardCharsets.UTF_8);
+            String recognized=new String(output.get(),java.nio.charset.StandardCharsets.UTF_8);
+            if(sparse) {
+                // Sparse OCR can miss large reward text over patterned poster backgrounds.
+                // A second pass over the lower half recovers only explicit reward lines.
+                try {
+                    var decoded=javax.imageio.ImageIO.read(new java.io.ByteArrayInputStream(image));
+                    if(decoded!=null) {
+                        int top=decoded.getHeight()/2;
+                        var crop=decoded.getSubimage(0,top,decoded.getWidth(),decoded.getHeight()-top);
+                        var bytes=new java.io.ByteArrayOutputStream();javax.imageio.ImageIO.write(crop,"png",bytes);
+                        recognized=mergeRewardOcr(recognized,ocr(bytes.toByteArray(),false));decoded.flush();
+                    }
+                }catch(Exception ignored){ /* Keep the first scan if the recovery pass fails. */ }
+            }
+            return recognized;
         }finally{process.destroyForcibly();}
+    }
+    static String mergeRewardOcr(String original,String recovery) {
+        String result=original;
+        var reward=java.util.regex.Pattern.compile("(?im)^\\s*(?:get|earn|receive)\\s*\\$?([0-9]+(?:[.][0-9]+)?)\\s*(RR|WC|WCash|ECB)\\s*$");
+        var found=reward.matcher(recovery);
+        while(found.find()) {
+            String amount=found.group(1),unit=found.group(2);
+            var existing=java.util.regex.Pattern.compile("(?i)(?:get|earn|receive)\\s*\\$?"+java.util.regex.Pattern.quote(amount)+"\\s*"+java.util.regex.Pattern.quote(unit)+"\\b");
+            if(!existing.matcher(result).find())result+="\n"+found.group().trim();
+        }
+        return result;
     }
     static java.util.Map<String,Object> parse(String name,String raw,boolean scanned) {
         var warnings=new java.util.ArrayList<String>();warnings.add("Review every imported value before saving. Printed labels do not prove whether a coupon was an RR.");

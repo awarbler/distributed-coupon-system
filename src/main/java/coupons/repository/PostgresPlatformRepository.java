@@ -229,6 +229,13 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         for(String table:List.of("receipt_draft_history","receipt_drafts"))try(var p=c.prepareStatement("DELETE FROM "+table+" WHERE draft_id=?")){p.setObject(1,id);p.executeUpdate();}
     }
 
+    public List<Map<String,Object>> rewardInstruments(){return new RewardInstrumentRepository(db).list();}
+    public Map<String,Object> rewardInstrument(UUID id){return new RewardInstrumentRepository(db).get(id);}
+    public Map<String,Object> createRewardInstrument(Map<String,Object> f,String actor){return new RewardInstrumentRepository(db).create(f,actor);}
+    public Map<String,Object> correctRewardInstrument(UUID id,long expected,Map<String,Object> f,String actor){return new RewardInstrumentRepository(db).correct(id,expected,f,actor);}
+    public Map<String,Object> rewardInstrumentEvent(UUID id,long expected,Map<String,Object> f,String actor){return new RewardInstrumentRepository(db).event(id,expected,f,actor);}
+    public Map<String,Object> exchangeRewardInstrument(UUID id,long expected,Map<String,Object> f,String actor){return new RewardInstrumentRepository(db).exchange(id,expected,f,actor);}
+
     public Map<String,Object> importReceiptInventory(String actor){return new PostgresInventoryRepository(db).importReceipts(actor);}
     public void adjustReceiptInventory(UUID id,long expected,String action,int quantity,String location,String note,String actor,Integer lowStockLevel,Integer unitsPerPackage,String unitName,String countUnit){new PostgresInventoryRepository(db).adjust(id,expected,action,quantity,location,note,actor,lowStockLevel,unitsPerPackage,unitName,countUnit);}
 
@@ -236,19 +243,21 @@ public final class PostgresPlatformRepository implements PlatformRepository {
 
     public Map<String, Object> workspace(LocalDate asOf) {
         return transaction(db, c -> {
+            c.setTransactionIsolation(java.sql.Connection.TRANSACTION_REPEATABLE_READ);
             c.setReadOnly(true);
+            var reads = db.snapshotReads(c);
             var state = PostgresReceiptState.read(c);
             var records = state.receipts().values().stream().map(r -> new ReceiptRecord(r.transactionId(), r.status(), r.revision(), r.contents().toTransaction(), r.metadata(), r.evidenceIds()))
                     .sorted(Comparator.comparing((ReceiptRecord r) -> r.transaction().getObservations().purchaseDate(), Comparator.nullsLast(Comparator.reverseOrder()))
                             .thenComparing(r -> ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).orElse(LocalTime.MIN), Comparator.reverseOrder())).toList();
             var summary = new ProviderBalanceSummary(PostgresReceiptState.rules(state));
-            LocalDate day = asOf != null ? asOf : records.stream().map(r -> r.transaction().getObservations().purchaseDate()).filter(Objects::nonNull).max(Comparator.naturalOrder()).orElse(LocalDate.now());
+            LocalDate day = asOf != null ? asOf : LocalDate.now(java.time.ZoneId.of("America/Chicago"));
             List<Object> balances = new ArrayList<>();
             var balanceProviders=new ArrayList<String>();
             boolean targetSplit = state.balances().openings().stream().anyMatch(o -> !o.date().isAfter(day) && (o.provider().equals("Target Gift Card") || o.provider().equals("Target Circle")))
                     || summary.movements(records).stream().anyMatch(m -> m.date() != null && !m.date().isAfter(day) && (m.provider().equals("Target Gift Card") || m.provider().equals("Target Circle")));
             for (String name : summary.programs(records)) {
-                if (name.equals("Target") && targetSplit) {
+                if ("Cash".equalsIgnoreCase(name.trim()) || (name.equals("Target") && targetSplit)) {
                     continue;
                 }
                 var balance = summary.balance(day, name, records);
@@ -258,8 +267,8 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                     balanceProviders.add(name);
                 }
             }
-            var plans = new PostgresShoppingPlanRepository(db);
-            var purchases = new PostgresPlannedPurchaseRepository(db);
+            var plans = new PostgresShoppingPlanRepository(reads);
+            var purchases = new PostgresPlannedPurchaseRepository(reads);
             List<Object> planRows = new ArrayList<>();
             for (UUID id : ids(c, "SELECT plan_id FROM shopping_plan_current ORDER BY shopping_date NULLS LAST,plan_id")) {
                 var plan = plans.findById(id).orElseThrow();
@@ -268,29 +277,29 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                 Map<UUID, ClippedCoupon> planCoupons = new HashMap<>();
                 for (var item : items) {
                     if (item.advertisedDealId() != null) {
-                        new PostgresDealRepository(db).findById(item.advertisedDealId()).ifPresent(d -> planDeals.put(d.dealId(), d));
+                        new PostgresDealRepository(reads).findById(item.advertisedDealId()).ifPresent(d -> planDeals.put(d.dealId(), d));
 
                     }
                     for (var couponId : item.clippedCouponIds()) {
-                        new PostgresClippedCouponRepository(db).findById(couponId).ifPresent(v -> planCoupons.put(v.couponId(), v));
+                        new PostgresClippedCouponRepository(reads).findById(couponId).ifPresent(v -> planCoupons.put(v.couponId(), v));
 
                     }
                 }
                 var pricing = plan.scenario()==null?ShoppingEstimate.calculate(items, planDeals, planCoupons, plan.shoppingDate(), plan.retailer()):scenarioPricing(plan.scenario(),plan.retailer());
-                var checkout = new PostgresPlanCheckoutRepository(db).view(id, pricing);
+                var checkout = new PostgresPlanCheckoutRepository(reads).view(id, pricing);
                 planRows.add(fields("scenarioEstimate",plan.scenario()==null?null:plan.scenario().estimate(plan.retailer()),"pricing", pricing, "checkout", checkout, "plan", plan, "items", items, "estimatedMerchandise", plan.scenario()==null&&items.isEmpty() ? null : pricing.saleTotal(), "estimateComplete", (plan.scenario()!=null||!items.isEmpty()) && pricing.saleTotal() != null));
             }
-            var couponRepo = new PostgresClippedCouponRepository(db);
+            var couponRepo = new PostgresClippedCouponRepository(reads);
             List<Object> coupons = new ArrayList<>();
             for (UUID id : ids(c, "SELECT coupon_id FROM clipped_coupon_current ORDER BY provider,coupon_id")) {
                 coupons.add(couponFields(couponRepo.findById(id).orElseThrow()));
             }
-            var dealRepo = new PostgresDealRepository(db);
+            var dealRepo = new PostgresDealRepository(reads);
             List<Object> deals = new ArrayList<>();
             for (UUID id : ids(c, "SELECT deal_id FROM deal_current ORDER BY valid_through NULLS LAST,deal_id")) {
                 deals.add(dealRepo.findById(id).orElseThrow());
             }
-            var rebateRepo = new PostgresRebateRepository(db);
+            var rebateRepo = new PostgresRebateRepository(reads);
             List<Object> rebates = new ArrayList<>();
             for (UUID id : ids(c, "SELECT claim_id FROM rebate_current ORDER BY provider,claim_id")) {
                 rebates.add(rebateRepo.findById(id).orElseThrow());
@@ -302,7 +311,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                     reported.add(fields("transactionId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "date", r.transaction().getObservations().purchaseDate(), "status", r.status(), "values", r.transaction().getObservations().walgreensCash()));
                 }
             }
-            return fields("rewardsOverview", rewardsOverview(summary,records,day,balanceProviders),"productLookup", productLookup(records), "accountActivity", AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards()), "receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", historicalRewardOffers(records), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "sortTime", ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).map(LocalTime::toString).orElse(null), "totals", totals(r))).toList(),
+            return fields("expiringRewards", expiringRewards(state,records,day), "rewardInstruments", RewardInstrumentRepository.list(c), "rewardsOverview", rewardsOverview(summary,records,day,balanceProviders),"productLookup", productLookup(records), "accountActivity", AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards()), "receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", historicalRewardOffers(records), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "sortTime", ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).map(LocalTime::toString).orElse(null), "totals", totals(r))).toList(),
                     "receiptPeriods", receiptPeriods(records), "summaries", fields("all", savings(records), "day", savings(SavingsReport.day(records, day)), "week", savings(ReceiptWorksheetReport.week(records, day)), "month", savings(SavingsReport.month(records, YearMonth.from(day)))), "plans", planRows, "coupons", coupons, "deals", deals, "rebates", rebates, "inventory", inventory, "balances", balances, "reportedBalances", reported,
                     "unavailableRewardSources",state.balances().adjustments().stream().filter(AccountAdjustment::unavailable).filter(a->a.unavailableSource()!=null).map(a->fields("sourceId",a.unavailableSource(),"date",a.date(),"reason",a.reason())).toList(),"accountHistory", state.balances(), "movements", summary.movements(records), "promotions", state.giftCardPromotions().values().stream().map(p->rebateProgress(p,state.history().values())).toList(), "rrMatches", state.rrUsageLinks().values(), "rewardRemovals", state.rewardVoids().values());
         });
@@ -341,11 +350,37 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         return ReceiptViews.discountBreakdown(tx);
     }
 
+    static List<Object> expiringRewards(InMemoryStore.State state,List<ReceiptRecord> records,LocalDate day) {
+        var used=new HashSet<UUID>(state.rrUsageLinks().keySet());
+        state.redemptions().values().forEach(r->used.add(r.getRewardId()));
+        used.addAll(state.rewardVoids().keySet());
+        state.balances().adjustments().stream().filter(a->a.unavailable()&&!a.date().isAfter(day)).forEach(a->used.add(a.unavailableSource()));
+        var rows=new LinkedHashMap<UUID,Object>();
+        for(var r:SavingsReport.latestActive(records)) {
+            var purchased=r.transaction().getObservations().purchaseDate();
+            if(purchased==null||purchased.isAfter(day))continue;
+            for(var e:r.transaction().getObservations().earnings()) {
+                if(e.expirationDate()==null||e.expirationDate().isBefore(day)||e.confirmed()==null||!(e.status()==RebateStatus.PAID||e.status()==RebateStatus.CREDITED)||used.contains(e.earningId())||used.contains(e.instrumentId()))continue;
+                UUID id=e.instrumentId()!=null?e.instrumentId():e.earningId();
+                rows.put(id,fields("id",id,"provider",e.provider(),"description",e.offerReference(),"amount",e.confirmed().kind()==coupons.promotions.BenefitKind.POINTS?null:e.confirmed().amount(),"expirationDate",e.expirationDate(),"receiptId",r.transactionId()));
+            }
+        }
+        for(var r:state.rewards().values())if(r.getEarnedReceiptId()==null&&!used.contains(r.getRewardId())&&r.getExpirationDate()!=null&&!r.getExpirationDate().isBefore(day))
+            rows.put(r.getRewardId(),fields("id",r.getRewardId(),"provider","Register Rewards","description",r.getSourceDescription(),"amount",r.getFaceValue(),"expirationDate",r.getExpirationDate(),"receiptId",null));
+        for(var a:state.balances().adjustments())if(a.expirationDate()!=null&&!a.date().isAfter(day)&&!a.expirationDate().isBefore(day)&&!used.contains(a.eventId())&&!a.unavailable()&&a.reason().startsWith("Member reward:")&&a.usdChange()!=null&&a.usdChange().signum()>0)
+        {
+            var amount=a.usdChange();
+            for(var correction:state.balances().adjustments())if(correction.reason().equals("Member reward correction: "+a.eventId())&&!correction.date().isAfter(day)&&correction.usdChange()!=null)amount=amount.add(correction.usdChange());
+            if(amount.signum()>0)rows.put(a.eventId(),fields("id",a.eventId(),"provider",a.provider(),"description",a.reason().substring("Member reward: ".length()),"amount",amount,"expirationDate",a.expirationDate(),"receiptId",null));
+        }
+        return List.copyOf(rows.values());
+    }
+
     /** Calendar browsing summaries; all active receipts participate before pagination/search. */
     public static Map<String,Object> rewardsOverview(ProviderBalanceSummary summary,List<ReceiptRecord> records,LocalDate day,List<String> providers) {
         BigDecimal available=BigDecimal.ZERO,expected=BigDecimal.ZERO;boolean availableComplete=true,expectedComplete=true;
         var missingBalances=new LinkedHashSet<String>();var missingValuations=new LinkedHashSet<String>();int expectedCount=0;
-        for(var provider:new LinkedHashSet<>(providers)) {var value=summary.balance(day,provider,records).endUsd();if(value==null){availableComplete=false;missingBalances.add(provider);}else if(value.signum()>0)available=available.add(value);}
+        for(var provider:new LinkedHashSet<>(providers)) {if("Cash".equalsIgnoreCase(provider.trim()))continue;var value=summary.balance(day,provider,records).endUsd();if(value==null){availableComplete=false;missingBalances.add(provider);}else if(value.signum()>0)available=available.add(value);}
         for(var r:SavingsReport.latestActive(records)) {
             var date=r.transaction().getObservations().purchaseDate();if(date==null || date.isAfter(day))continue;
             for(var e:r.transaction().getObservations().earnings()) {
@@ -355,7 +390,14 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                 if(dollars==null){expectedComplete=false;missingValuations.add(e.provider());}else expected=expected.add(dollars);
             }
         }
-        return fields("asOf",day,"available",availableComplete?available:null,"expected",expectedComplete?expected:null,"total",availableComplete&&expectedComplete?available.add(expected):null,"knownAvailable",available,"knownExpected",expected,"expectedCount",expectedCount,"missingBalances",missingBalances,"missingValuations",missingValuations);
+        BigDecimal monthlyEarning=BigDecimal.ZERO;boolean monthlyComplete=true;
+        for(var movement:summary.movements(records)) {
+            if(movement.date()==null||movement.date().isBefore(day.withDayOfMonth(1))||movement.date().isAfter(day)||"Cash".equalsIgnoreCase(movement.provider()))continue;
+            if(!movement.source().contains(" | earning ")&&!movement.source().contains(" | Member reward:"))continue;
+            if(movement.usd()==null)monthlyComplete=false;
+            else if(movement.usd().signum()>0)monthlyEarning=monthlyEarning.add(movement.usd());
+        }
+        return fields("asOf",day,"monthlyEarning",monthlyComplete?monthlyEarning:null,"available",availableComplete?available:null,"expected",expectedComplete?expected:null,"total",availableComplete&&expectedComplete?available.add(expected):null,"knownAvailable",available,"knownExpected",expected,"expectedCount",expectedCount,"missingBalances",missingBalances,"missingValuations",missingValuations);
     }
 
     /** Receipt history is a product reference, never an on-hand quantity import. */

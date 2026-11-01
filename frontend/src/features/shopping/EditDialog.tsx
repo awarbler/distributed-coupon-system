@@ -41,7 +41,7 @@ export function EditDialog({ edit, api, data, onClose, onSaved, onReview, onEdit
     const key = crypto.randomUUID()
     if (edit.kind === 'plan') return { path: plan ? `/shopping-plans/${plan.planId}` : '/shopping-plans', method: plan ? 'PUT' : 'POST', key, revision: plan?.revision, body: { ...(plan ? {} : { planId: id }), name: name.trim(), retailer: retailer.trim() || null, shoppingDate: when || null } }
     if (edit.kind === 'purchase') {
-      if (price && (!/^\d+(\.\d+)?$/.test(price) || price.length > 64)) throw new Error('Enter a nonnegative decimal target price, without currency symbols.')
+      if (price && (!/^\d+(\.\d*)?$/.test(price) || price.length > 64)) throw new Error('Enter a nonnegative decimal target price, without currency symbols.')
       return { path: `/shopping-plans/${edit.row.plan.planId}/purchases${item ? `/${item.plannedPurchaseId}` : ''}`, method: item ? 'PUT' : 'POST', key, revision: item?.revision, body: { plannedPurchaseId: item?.plannedPurchaseId || id, productName: name.trim(), productCode: sku.trim() || null, quantity: integer(quantity), regularUnitPrice: price || null, saleUnitPrice: sale || null, priceSource, advertisedDealId: deal || null, clippedCouponIds: coupons } }
     }
     if (edit.kind !== 'redeem') throw new Error('Use the coupon form.')

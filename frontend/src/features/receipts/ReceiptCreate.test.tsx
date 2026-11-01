@@ -548,6 +548,7 @@ it('opens OOP detail records with cash/card totals and searchable sortable recei
   const summary={...data.summaries.all,recordedCashCardPaid:'3.60',cash:'1.10',card:'2.50'}
   const load=vi.spyOn(api,'receiptReport').mockResolvedValue({metric:'oop',summary,matchedTotal:'3.60',matchedCash:'1.10',matchedCard:'2.50',rows:[{receiptId:'source',receiptNumber:'000123',store:'Walgreens',date:'2026-10-05',time:'8:17 AM',description:'Card',amount:'2.50'}]})
   render(<WorkspacePages api={api} data={data} page="receipts" writable onPage={vi.fn()} onReceipt={open} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+  await user.click(screen.getByRole('button',{name:'All Time'}))
   await user.click(screen.getByRole('button',{name:'View Actual OOP'}))
   const dialog=await screen.findByRole('dialog',{name:'Actual OOP — All time'})
   await within(dialog).findByText('Period cash paid')
@@ -565,6 +566,7 @@ it('opens benefits with separate waiting amounts and confirms using the recorded
   vi.spyOn(api,'receiptReport').mockResolvedValue({metric:'benefits',summary:data.summaries.all,matchedTotal:'5',unconfirmedTotal:'3.40',matchedCash:'0',matchedCard:'0',rows:[{receiptId:'source',revision:'2',receiptNumber:'000123',store:'Walgreens',date:'2026-10-05',time:'8:17 AM',description:'Member rewards',amount:'3.40',nativeAmount:'3.40',unit:'USD',group:'Unconfirmed',status:'EXPECTED',earning}]})
   const save=vi.spyOn(api,'mutate').mockResolvedValue({})
   render(<WorkspacePages api={api} data={data} page="receipts" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
+  await user.click(screen.getByRole('button',{name:'All Time'}))
   await user.click(screen.getByRole('button',{name:'View Confirmed benefits'}))
   await user.click(await screen.findByRole('button',{name:'Confirm / update status'}))
   expect(screen.getByText('Matching unconfirmed benefits')).toBeInTheDocument()
@@ -1207,4 +1209,22 @@ it('edits a shared discount product selection and sends only supported API field
  const body=mutate.mock.calls.find(call=>call[0].endsWith('/edit-preview'))?.[2] as {discounts:Record<string,unknown>[]}
  expect(body.discounts[0]).toMatchObject({applicationId:'shared',wholeReceipt:false,lineItemIds:['original-line'],qualifyingQuantities:{'original-line':1}})
  expect(body.discounts[0]).not.toHaveProperty('shared')
+})
+
+
+it('flags the approved recorded 27.16 versus calculated 27.06 discrepancy outside legacy details', () => {
+  const totals: Totals = { ...result().totals, reportedDue: '27.16', calculatedDue: '27.06', difference: '0.10', paymentReview: {
+    printedTotal: '27.16', calculatedPurchaseTotal: '27.06', purchaseDifference: '0.10', knownFundingSubtotal: '27.16',
+    recordedCashCardPaid: '27.16', giftCardFunding: '0', otherFunding: '0', difference: '0',
+    status: 'BALANCED', printedTotalBasis: 'BEFORE_PAYMENT_FUNDING', paymentEntryStatus: 'COMPLETE',
+    unresolvedPaymentIds: [], reason: 'Review the recorded purchase discrepancy.', acknowledgementRequired: true,
+  } }
+  const original = structuredClone(totals)
+  render(<ReceiptFinancialReview totals={totals} />)
+  const note = screen.getByRole('note', { name: 'Receipt discrepancy' })
+  expect(note).toHaveTextContent('Recorded printed total $27.16')
+  expect(note).toHaveTextContent('Independently calculated purchase total $27.06')
+  expect(note).toHaveTextContent('Difference $0.10')
+  expect(note.closest('details')).toBeNull()
+  expect(totals).toEqual(original)
 })

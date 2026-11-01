@@ -3,6 +3,9 @@ import { ApiClient, ApiError, decode } from './client'
 import { decimal, integer, money } from './format'
 import { workspace } from './fixtures.test-support'
 describe('exact API boundary', () => {
+  it('displays whole dollar inputs consistently', () => {
+    for(const value of ['5','5.','5.00']) expect(money(value)).toBe('$5.00')
+  })
   it('retains decimal and large revision lexemes', () => {
     expect(decode('{"price":0.10000000000000000001,"revision":9007199254740993}')).toEqual({ price: '0.10000000000000000001', revision: '9007199254740993' })
     expect(money('9007199254740993.125')).toBe('$9,007,199,254,740,993.13'); expect(decimal('-0.005')).toBe('−0.01'); expect(money(null)).toBe('Not recorded'); expect(money('0.00')).toBe('$0.00')
@@ -23,4 +26,10 @@ describe('exact API boundary', () => {
     await expect(new ApiClient('token').workspace()).rejects.toMatchObject({ status: 502 }); await expect(new ApiClient('token').workspace()).rejects.toBeInstanceOf(ApiError)
   })
   it('loads a workspace envelope', async () => { vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(workspace())))); expect((await new ApiClient('token').workspace()).canWrite).toBe(true) })
+})
+
+it('explains an older account/card API without fabricating an empty successful result',async()=>{
+ const fetch=vi.fn().mockResolvedValue(new Response('{"error":"Unknown endpoint."}',{status:404}));vi.stubGlobal('fetch',fetch)
+ await expect(new ApiClient('token').rewardInstruments()).rejects.toMatchObject({status:404,message:expect.stringContaining('Start the updated Java API')})
+ expect(fetch).toHaveBeenCalledTimes(1)
 })

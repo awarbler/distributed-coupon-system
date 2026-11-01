@@ -23,6 +23,13 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReceiptInputTest {
+    @Test void dollarAmountsAcceptWholeNumbersAndTrailingDecimalPoints() {
+        for(String value:List.of("5","5.","5.00",".50","0."))
+            assertEquals(0,new BigDecimal(value).compareTo(ReceiptInput.decimal(Map.of("amount",value),"amount",false)));
+        for(String value:List.of(".","-5","5..","$5","5,00"))
+            assertThrows(IllegalArgumentException.class,()->ReceiptInput.decimal(Map.of("amount",value),"amount",false));
+    }
+
     private static Map<String,Object> printedCashDraft(String earned){
         var fields=draft(UUID.randomUUID());fields.put("retailer","Walgreens");fields.put("earnings",List.of());
         fields.put("printedFooter",Map.of("status","PRINTED","wcEarned",earned));return fields;
@@ -363,10 +370,22 @@ class ReceiptCorrectionTest {
         @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");assertEquals(2,items.size());assertEquals("[FSA/HSA] RX",items.getFirst().get("description"));assertEquals("1509950",items.getFirst().get("sku"));assertEquals("15.00",items.getFirst().get("regular"));assertEquals("45.00",items.get(1).get("regular"));
     }
     @Test void suppliedWebsitePdfExtractsAnEditableDraftWithoutWrites()throws Exception {
-        var path=java.nio.file.Path.of("/Users/anitawoodford/Downloads/nivea and aquaphor.pdf");org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.exists(path));
-        var result=ReceiptImport.extract("website","application/pdf",java.nio.file.Files.readAllBytes(path));
+        var bytes=new java.io.ByteArrayOutputStream();
+        try(var document=new org.apache.pdfbox.pdmodel.PDDocument()) {
+            var page=new org.apache.pdfbox.pdmodel.PDPage();document.addPage(page);
+            try(var content=new org.apache.pdfbox.pdmodel.PDPageContentStream(document,page)) {
+                content.beginText();content.setFont(new org.apache.pdfbox.pdmodel.font.PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),12);
+                content.setLeading(16);content.newLineAtOffset(40,740);
+                for(var line:java.util.List.of("Walgreens synthetic receipt", "10/08/2026 9:34 AM", "SYNTHETIC LOTION", "00000000001 14.49", "SYNTHETIC BALM", "00000000002 6.74", "SUBTOTAL 3.23", "SALES TAX 0.27", "TOTAL 3.50", "RFN# 0000-0000-0000-0000-0000")) {
+                    content.showText(line);content.newLine();
+                }
+                content.endText();
+            }
+            document.save(bytes);
+        }
+        var result=ReceiptImport.extract("website","application/pdf",bytes.toByteArray());
         @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
-        assertEquals(2,items.size(),result.toString());assertEquals("3.50",result.get("reported"));assertEquals("0476-1231-0521-2610-0803",result.get("number"));
+        assertEquals(2,items.size(),result.toString());assertEquals("3.50",result.get("reported"));assertEquals("0000-0000-0000-0000-0000",result.get("number"));
         assertTrue(items.stream().allMatch(i->i.get("regular").isBlank()));
         assertTrue(items.stream().allMatch(i->!i.get("sale").isBlank()),items.toString());
         assertEquals("14.49",items.getFirst().get("sale"));assertEquals("6.74",items.get(1).get("sale"));

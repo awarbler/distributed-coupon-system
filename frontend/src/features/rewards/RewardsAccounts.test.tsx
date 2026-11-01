@@ -94,12 +94,17 @@ it('searches accounts and opens activity through the selected balance date', asy
 
 it('shows available and expected rewards separately from their combined total', async () => {
   const data=workspace(),user=userEvent.setup()
-  data.rewardsOverview={asOf:data.asOf,available:'23',expected:'5',total:'28',knownAvailable:'23',knownExpected:'5',expectedCount:'1',missingBalances:[],missingValuations:[]}
+  data.rewardsOverview={monthlyEarning:'3',asOf:data.asOf,available:'23',expected:'5',total:'28',knownAvailable:'23',knownExpected:'5',expectedCount:'1',missingBalances:[],missingValuations:[]}
   render(<RewardsAccounts data={data} writable onReceipt={vi.fn()}/>)
   const panel=screen.getByRole('heading',{name:'Rewards Overview'}).closest('section')!
   expect(within(panel).getByText('$28.00')).toBeInTheDocument()
   expect(within(panel).getByText('$23.00')).toBeInTheDocument()
   expect(within(panel).getByText('$5.00')).toBeInTheDocument()
+  expect(within(panel).getByText('Monthly Earning')).toBeInTheDocument()
+  expect(within(panel).getByText('$3.00')).toBeInTheDocument()
+  expect(screen.queryByText(/Balances and outstanding expected rewards through/)).not.toBeInTheDocument()
+  await user.click(within(panel).getByRole('button',{name:'About Rewards Overview'}))
+  expect(screen.getByRole('tooltip')).toHaveTextContent('Search filters account rows only.')
   await user.type(screen.getByLabelText('Search accounts'),'no match')
   expect(within(panel).getByText('$28.00')).toBeInTheDocument()
 })

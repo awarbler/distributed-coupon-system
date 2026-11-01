@@ -1,13 +1,13 @@
 import { InfoHelp } from '../../components/ui'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ApiClient } from '../../api/client'
-import { scenarioRequest } from '../../api/client'
+import { scenarioRequest, zeroScenarioAmount } from '../../api/client'
 import { money } from '../../api/format'
 import type { PlanScenario, ScenarioEstimate, ScenarioLine, Workspace } from '../../types/platform'
 import { EvidenceField } from '../../components/EvidenceField'
 import type { Upload } from '../../components/EvidenceField'
 
-interface ImportedNotes { retailer?:string|null; items: ScenarioLine[]; coupons: PlanScenario['coupons']; promotions: PlanScenario['promotions']; unresolved: string[]; source: PlanScenario['source']; notice: string }
+interface ImportedNotes { advertisedBundle?:boolean; walgreensCashUsed?:string|null; retailer?:string|null; items: ScenarioLine[]; coupons: PlanScenario['coupons']; promotions: PlanScenario['promotions']; unresolved: string[]; source: PlanScenario['source']; notice: string }
 export function QuickDealTools({ api, scenario, onChange, store, day, data, initialMode, onStoreChange }: {onStoreChange?:(store:string)=>void;initialMode?:'notes'|'screenshot'|null; api: ApiClient; scenario: PlanScenario; onChange: (value: PlanScenario) => void; store: string; day: string; data: Workspace }) {
   const [screenshotProduct,setScreenshotProduct]=useState('')
   const [text, setText] = useState(''), [mode, setMode] = useState<'notes' | 'screenshot' | null>(initialMode??null)
@@ -61,11 +61,12 @@ export function QuickDealTools({ api, scenario, onChange, store, day, data, init
       const importedCoupons=result.coupons.map(c=>({...c,lineIds:linkedIds(c.lineIds)})).filter(c=>!current.coupons.some(old=>(old.kind??'MANUFACTURER')===(c.kind??'MANUFACTURER')&&decimalKey(old.amount)===decimalKey(c.amount)&&String(old.requiredQuantity)===String(c.requiredQuantity)&&old.lineIds.length===c.lineIds.length&&old.lineIds.every(id=>c.lineIds.includes(id))))
       const importedPromotions=result.promotions.map(p=>({...p,lineIds:linkedIds(p.lineIds)})).filter(p=>!current.promotions.some(old=>old.rewardType===p.rewardType&&decimalKey(old.rewardAmount)===decimalKey(p.rewardAmount)&&old.requiredQuantity===p.requiredQuantity&&decimalKey(old.requiredSpend)===decimalKey(p.requiredSpend)&&old.lineIds.length===p.lineIds.length&&old.lineIds.every(id=>p.lineIds.includes(id))))
 
-      onChange({ ...current, items: reusingProduct ? current.items : result.items.length ? [...retained, ...result.items.map(l => ({ ...l, regular: l.regular ?? '' }))] : current.items, coupons: [...current.coupons.filter(c => c.amount.trim()), ...importedCoupons], promotions: [...current.promotions.filter(p => p.rewardAmount.trim()), ...importedPromotions], source: { ...result.source!, text: [current.source?.text,...(result.source?.text===current.source?.text?[]:[result.source?.text])].filter(Boolean).join('\n\n'), earlier:[...(current.source?.earlier??[]).filter(s=>!result.source?.contentBase64||s.contentBase64!==result.source.contentBase64),...(current.source?.contentBase64&&current.source.contentBase64!==result.source?.contentBase64&&!(current.source.earlier??[]).some(s=>s.contentBase64===current.source?.contentBase64)?[{text:'',mediaType:current.source.mediaType,contentBase64:current.source.contentBase64}]:[])] } })
+      if(result.walgreensCashUsed&&current.walgreensCashUsed&&!zeroScenarioAmount(current.walgreensCashUsed)&&decimalKey(current.walgreensCashUsed)!==decimalKey(result.walgreensCashUsed))result.unresolved.push(`Source uses $${result.walgreensCashUsed} Walgreens Cash; your existing WC amount was preserved.`)
+      onChange({ ...current, walgreensCashUsed:result.walgreensCashUsed&&(!current.walgreensCashUsed||zeroScenarioAmount(current.walgreensCashUsed))?result.walgreensCashUsed:current.walgreensCashUsed, items: reusingProduct ? current.items : result.items.length ? [...retained, ...result.items.map(l => ({ ...l, regular: l.regular ?? '' }))] : current.items, coupons: [...current.coupons.filter(c => c.amount.trim()), ...importedCoupons], promotions: [...current.promotions.filter(p => p.rewardAmount.trim()), ...importedPromotions], source: { ...result.source!, text: [current.source?.text,...(result.source?.text===current.source?.text?[]:[result.source?.text])].filter(Boolean).join('\n\n'), earlier:[...(current.source?.earlier??[]).filter(s=>!result.source?.contentBase64||s.contentBase64!==result.source.contentBase64),...(current.source?.contentBase64&&current.source.contentBase64!==result.source?.contentBase64&&!(current.source.earlier??[]).some(s=>s.contentBase64===current.source?.contentBase64)?[{text:'',mediaType:current.source.mediaType,contentBase64:current.source.contentBase64}]:[])] } })
       if(result.retailer&&(!retained.length||result.retailer.toLowerCase()===store.toLowerCase()))onStoreChange?.(result.retailer)
       else if(result.retailer&&result.retailer.toLowerCase()!==store.toLowerCase())result.unresolved.push(`Source store: ${result.retailer}. Existing plan store: ${store}. Review which store this plan is for.`)
       if (!result.items.length) setError('No products were recognized. Your existing products are preserved; enter the products below and review the original notes.')
-      setImportNotice(`${importedCoupons.length} coupon(s) and ${importedPromotions.length} expected reward/rebate(s) added.${reusingProduct?' Existing product details preserved.':''}`)
+      setImportNotice(`${result.advertisedBundle?'Advertised bundle estimate added. Review product details and offer requirements below. ':''}${importedCoupons.length} coupon(s) and ${importedPromotions.length} expected reward/rebate(s) added.${reusingProduct?' Existing product details preserved.':''}`)
       setUnresolved(result.unresolved); setMode(null); setText(''); setFile(null)
     } catch(e) { setError((e as Error).message) } finally { setBusy(false) }
   }

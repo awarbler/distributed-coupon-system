@@ -726,3 +726,61 @@ label[data-placeholder-field="true"] > textarea::placeholder { color:#647467; op
 .help-tooltip > div { display:grid; gap:10px; }
 .reward-unavailable-panel { padding-bottom:var(--panel-content-inset,22px); }
 .reward-unavailable-panel > .secondary { margin:4px var(--panel-content-inset,22px) 0; max-width:calc(100% - 44px); white-space:normal; }
+
+.instrument-balances{display:flex;flex-wrap:wrap;gap:.65rem 1.5rem;align-items:baseline;margin:1rem 0}
+.instrument-balances>span{white-space:nowrap}
+
+/* Keep the account/card editor spacing local to this panel. */
+.reward-instruments-panel .panel-head{align-items:flex-start;gap:1rem;flex-wrap:wrap}
+.reward-instruments-panel .panel-head p{max-width:65ch;line-height:1.65}
+.reward-instruments-content{display:grid;gap:1.25rem;padding:0 var(--panel-content-inset,23px) var(--panel-content-inset,23px);min-width:0}
+.reward-instruments-content>button{justify-self:start}
+.reward-instruments-content p{margin:0;line-height:1.65;overflow-wrap:anywhere}
+.reward-instruments-content label{display:grid;gap:.5rem;min-width:0}
+.reward-instruments-content fieldset{display:grid;gap:1rem;min-width:0;margin:0;padding:1.25rem;border:1px solid #e5e9e0;border-radius:10px}
+.reward-instruments-content legend{padding:0 .4rem;font-weight:600}
+.reward-instruments-content fieldset>button{justify-self:start;margin-top:.25rem}
+.reward-instruments-content summary{padding:.85rem 1rem;border-radius:8px;background:#f5f8f3;line-height:1.5;cursor:pointer}
+.reward-instruments-content details[open]>summary{margin-bottom:1rem}
+.reward-instruments-content details>label+label{margin-top:1rem}
+.reward-instruments-content .instrument-balances{margin:0;padding:1rem;border:1px solid #e5e9e0;border-radius:8px}
+@media(max-width:600px){
+ .reward-instruments-panel .panel-actions{width:100%}
+ .reward-instruments-panel .panel-actions>button{width:100%;white-space:normal}
+ .reward-instruments-content{gap:1rem}
+ .reward-instruments-content fieldset{padding:1rem}
+}
+
+.account-section-menu{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:.5rem;border:1px solid #dce5dd;border-radius:12px;background:#fff}
+.account-section-menu a{display:block;padding:.75rem 1.1rem;border-radius:8px;color:#28654f;text-decoration:none;font-weight:600;transition:background-color .15s,color .15s}
+.account-section-menu a:hover,.account-section-menu a:focus-visible{background:#28654f;color:#fff}
+.panel[id^="account-"]{scroll-margin-top:1.5rem}
+
+.receipt-entry-form [aria-invalid="true"]{border:2px solid #b42318;background:#fff4f2;outline-color:#b42318}
+.receipt-field-error{display:block;color:#b42318;font-size:.875rem;font-weight:600;margin-top:.35rem}
+
+.reward-expiration-content{padding:0 var(--panel-content-inset,23px) 1.25rem;display:grid;gap:1rem}
+.reward-expiration-content>p,.reward-expiration-row p{margin:.35rem 0}
+.reward-expiration-content>button{justify-self:start}
+.reward-expiration-row{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:1rem;padding:1rem;border:1px solid #dce5dd;border-radius:10px}
+.reward-expiration-row.urgent{border-color:#c77b19;background:#fff6e5}
+
+.receipt-period-options{display:flex;flex-wrap:wrap;width:fit-content;max-width:100%;gap:.25rem}
+.receipt-period-options button[aria-pressed="true"]{background:#28654f;color:white}
+
+.receipt-period-panel>.receipt-period-options{margin:0 auto 1rem;justify-content:center;background:transparent;padding:.25rem}
+.receipt-period-panel>.receipt-period-options button{font-size:1.1rem;font-weight:600;padding:.65rem 1.2rem;border-radius:8px;color:#28654f;transition:background-color .15s,color .15s}
+.receipt-period-panel>.receipt-period-options button:hover,.receipt-period-panel>.receipt-period-options button:focus-visible,.receipt-period-panel>.receipt-period-options button[aria-pressed="true"]{background:#28654f;color:white}
+.receipt-period-panel>.receipt-period-description{text-align:center;margin:0 var(--panel-content-inset,23px) 1.5rem;color:#7d8a7a;line-height:1.6}
+
+.receipt-period-panel>.receipt-period-options{border:0;box-shadow:none;background:transparent;gap:.5rem;padding:0}
+.receipt-period-panel>.receipt-period-options button{font-size:.9rem;padding:.4rem .7rem;border:0;box-shadow:none;border-radius:0;background:transparent}
+.receipt-period-panel>.receipt-period-options button:hover,.receipt-period-panel>.receipt-period-options button[aria-pressed="true"]{background:transparent;color:#1d5540;text-decoration:underline;text-underline-offset:.3rem}
+.rewards-overview .receipt-period-totals{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:700px){.rewards-overview .receipt-period-totals{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.receipt-period-panel>.receipt-period-options button{outline:none;border:0;box-shadow:none;border-radius:999px;text-decoration:none}
+.receipt-period-panel>.receipt-period-options button:hover,.receipt-period-panel>.receipt-period-options button[aria-pressed="true"],.receipt-period-panel>.receipt-period-options button:focus-visible{outline:none;border:0;box-shadow:none;background:#edf5ed;color:#28654f;text-decoration:none}
+.receipt-period-panel>.receipt-period-options button:focus-visible{text-decoration:underline;text-underline-offset:.3rem}
+
+.rewards-overview .receipt-period-totals{padding-bottom:1.75rem}

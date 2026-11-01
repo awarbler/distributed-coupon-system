@@ -14,6 +14,115 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ShoppingNotebookTest {
+    @Test void kotexAtPricePosterImportsBogoAndUsesDQSummaryOnce() {
+        String text="3 Kotex @$7.49 ea BOGO 50%\ntotal $18.72\n-4 DQ\npay $14.72\nget 7 WC\nfinal price $2.57 each";
+        var result=ShoppingNoteInput.parse(text,null);
+        @SuppressWarnings("unchecked") var items=(List<ShoppingPlan.Line>)result.get("items");
+        @SuppressWarnings("unchecked") var coupons=(List<ShoppingPlan.ScenarioCoupon>)result.get("coupons");
+        @SuppressWarnings("unchecked") var promotions=(List<ShoppingPlan.ScenarioPromotion>)result.get("promotions");
+        assertEquals(1,items.size());assertEquals(3,items.getFirst().quantity());assertEquals(n("7.49"),items.getFirst().sale());
+        assertEquals("BOGO_HALF",items.getFirst().priceRule().type());assertEquals(1,coupons.size());assertEquals(n("4"),coupons.getFirst().amount());
+        assertEquals(1,promotions.size());assertEquals("WALGREENS_CASH",promotions.getFirst().rewardType());assertEquals(n("7"),promotions.getFirst().rewardAmount());
+    }
+    @Test void kotexIndividualCouponsDoNotDoubleCountDQSummary() {
+        String text="$1 off 1\n$3 off 2\n3 Kotex @$7.49 ea BOGO 50%\n-4 DQ\nget 7 WC";
+        var result=ShoppingNoteInput.parse(text,null);
+        @SuppressWarnings("unchecked") var coupons=(List<ShoppingPlan.ScenarioCoupon>)result.get("coupons");
+        assertEquals(2,coupons.size());assertEquals(n("4"),coupons.stream().map(ShoppingPlan.ScenarioCoupon::amount).reduce(BigDecimal.ZERO,BigDecimal::add));
+    }
+    @Test void rewardOcrRecoveryDoesNotInferFromFinalPricesOrDuplicateReadRewards() {
+        assertEquals("3 Kotex\nget 7 WC",ReceiptImport.mergeRewardOcr("3 Kotex","pay $14.72\nget 7 WC\nfinal price $2.57 each"));
+        assertEquals("get 7 WC",ReceiptImport.mergeRewardOcr("get 7 WC","get 7 WC"));
+        assertEquals("3 Kotex",ReceiptImport.mergeRewardOcr("3 Kotex","7 WC?\nfinal price $2.57 each"));
+    }
+
+    @Test void softsoapPosterOcrUsesCombinedPriceAndDoesNotDoubleCountConflictingDQ() {
+        String text="""
+            Waloreens ,
+            G
+            OQwc
+            11701-11707
+            in store
+            Clip
+            $3. 50 off 2
+            ftsoap
+            anufacturer's coupon
+            Softs
+            Oap
+            HAND SOAP
+            REFILL
+            50 02
+            2 ‘Soft soap hand hand” o
+            $11.98
+            -4 DQ
+            payss.
+            48
+            get 3 RR
+            """;
+        var result=ShoppingNoteInput.parse(text,new ShoppingPlan.PlanningSource(text,"image/png","AQID"));
+        @SuppressWarnings("unchecked") var items=(List<ShoppingPlan.Line>)result.get("items");
+        @SuppressWarnings("unchecked") var coupons=(List<ShoppingPlan.ScenarioCoupon>)result.get("coupons");
+        @SuppressWarnings("unchecked") var promotions=(List<ShoppingPlan.ScenarioPromotion>)result.get("promotions");
+        assertEquals(1,items.size());assertEquals(2,items.getFirst().quantity());assertEquals(n("5.99"),items.getFirst().sale());
+        assertEquals(1,coupons.size());assertEquals(n("3.50"),coupons.getFirst().amount());assertEquals(2,coupons.getFirst().requiredQuantity());
+        assertEquals(1,promotions.size());assertEquals(n("3"),promotions.getFirst().rewardAmount());
+        var estimate=new ShoppingPlan.Scenario(items,coupons,promotions,n("0"),n("0"),n("0"),n("0"),null,"CASH","").estimate();
+        assertEquals(n("8.48"),estimate.get("calculatedOop"));assertEquals(n("5.48"),estimate.get("afterPotentialRewards"));
+        assertTrue(((List<?>)result.get("unresolved")).stream().anyMatch(v->v.toString().contains("conflicting amounts")));
+    }
+
+    @Test void importsSocialImageBundleMathWithoutInventingIndividualProductPrices() {
+        String text="""
+            coupon Search
+            $15.99+$15=$30.99
+            -4
+            -3
+            Pay $23.99+tax
+            Get $10RR P&G
+            $6RR crest
+            Net total $7.99/4=$1.99
+            Walgreens deal this week
+            """;
+        var result=ShoppingNoteInput.parse(text,new ShoppingPlan.PlanningSource(text,"image/png","AQID"));
+        @SuppressWarnings("unchecked") var items=(List<ShoppingPlan.Line>)result.get("items");
+        @SuppressWarnings("unchecked") var coupons=(List<ShoppingPlan.ScenarioCoupon>)result.get("coupons");
+        @SuppressWarnings("unchecked") var promotions=(List<ShoppingPlan.ScenarioPromotion>)result.get("promotions");
+        assertEquals(true,result.get("advertisedBundle"));assertEquals(1,items.size());
+        assertEquals(n("30.99"),items.getFirst().sale());assertEquals(1,items.getFirst().quantity());
+        assertEquals(2,coupons.size());assertTrue(coupons.stream().allMatch(ShoppingPlan.ScenarioCoupon::wholeReceipt));
+        assertEquals(2,promotions.size());assertTrue(promotions.stream().allMatch(ShoppingPlan.ScenarioPromotion::wholeReceipt));
+        var scenario=new ShoppingPlan.Scenario(items,coupons,promotions,n("0"),n("0"),n("0"),n("0"),null,"CASH","");
+        assertEquals(n("23.99"),scenario.estimate().get("calculatedOop"));
+        assertEquals(n("7.99"),scenario.estimate().get("afterPotentialRewards"));
+        assertTrue(((List<?>)result.get("unresolved")).stream().anyMatch(v->v.toString().contains("enter tax")));
+    }
+    @Test void inconsistentBundleEquationDoesNotCreateAProduct() {
+        var result=ShoppingNoteInput.parse("$15.99+$15=$99.99",null);
+        assertEquals(false,result.get("advertisedBundle"));assertTrue(((List<?>)result.get("items")).isEmpty());
+    }
+
+    @Test void importsUnquantifiedProductsSalePricesAndOffCoupons() {
+        String text="""
+            Tide Liquid Laundry Detergent Plus Boost Of Ultra Downy April Fresh, 73.0 fl oz 12.99
+            4.00 off coupon
+            Tide Power PODs + Laundry Detergent Pods, HE Compatible, Downy April Fresh, 25.0 ea 12.99
+            4.00 off coupon
+            mr clean 8.99 on sale for 5.99
+            2.00 off coupon
+            31.97 -10.00 coupons = 21.97 - 20.00 walgreens cash = 1.97 plus tax
+            """;
+        var result=ShoppingNoteInput.parse(text,new ShoppingPlan.PlanningSource(text,null,null));
+        @SuppressWarnings("unchecked") var items=(List<ShoppingPlan.Line>)result.get("items");
+        @SuppressWarnings("unchecked") var coupons=(List<ShoppingPlan.ScenarioCoupon>)result.get("coupons");
+        assertEquals(3,items.size());assertEquals(3,coupons.size());
+        assertEquals(n("12.99"),items.getFirst().sale());assertEquals(1,items.getFirst().quantity());
+        assertEquals(n("8.99"),items.get(2).regular());assertEquals(n("5.99"),items.get(2).sale());
+        for(int i=0;i<3;i++)assertEquals(List.of(items.get(i).id()),coupons.get(i).lineIds());
+        assertEquals(n("10.00"),coupons.stream().map(ShoppingPlan.ScenarioCoupon::amount).reduce(BigDecimal.ZERO,BigDecimal::add));
+        assertEquals(n("20.00"),result.get("walgreensCashUsed"));
+        assertEquals(1,((List<?>)result.get("unresolved")).size());
+    }
+
     static BigDecimal n(String value){return new BigDecimal(value);}
     static ShoppingPlan.Line line(String name,String price,int quantity,ShoppingPlan.PriceRule rule){return new ShoppingPlan.Line(UUID.randomUUID(),name,"123",null,n(price),quantity,null,rule);}
     static ShoppingPlan.Scenario scenario(List<ShoppingPlan.Line> lines,String coupon,String tax,String rr,String wc){

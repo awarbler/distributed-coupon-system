@@ -111,4 +111,10 @@ public interface PlatformRepository {
             Map<String, Object> values,
             String actor);
 
+    default List<Map<String,Object>> rewardInstruments(){throw new UnsupportedOperationException();}
+    default Map<String,Object> rewardInstrument(UUID id){throw new UnsupportedOperationException();}
+    default Map<String,Object> createRewardInstrument(Map<String,Object> fields,String actor){throw new UnsupportedOperationException();}
+    default Map<String,Object> correctRewardInstrument(UUID id,long expected,Map<String,Object> fields,String actor){throw new UnsupportedOperationException();}
+    default Map<String,Object> rewardInstrumentEvent(UUID id,long expected,Map<String,Object> fields,String actor){throw new UnsupportedOperationException();}
+    default Map<String,Object> exchangeRewardInstrument(UUID id,long expected,Map<String,Object> fields,String actor){throw new UnsupportedOperationException();}
 }

@@ -19,7 +19,7 @@ export function RewardFields({ value:r, onChange:set, lines, index=1, offers=[],
   const ibotta = r.kind === 'THIRD_PARTY_REBATE' && r.provider.trim().toLowerCase() === 'ibotta'
   const fetchPoints = r.form === 'POINTS' && r.provider.trim().toLowerCase() === 'fetch'
   const pgPoints = r.form === 'POINTS' && ['pg','pgbrand','pggoodeveryday','pgbrandsaver'].includes(r.provider.toLowerCase().replace(/[^a-z0-9]/g, ''))
-  const field=(key:keyof RewardDraft,label:string,required=false,type='text')=><label>{label}<input aria-label={label} required={required} type={type} value={String(r[key])} onChange={e=>set({...r,[key]:e.target.value,...(key==='provider' && ['ibotta','paypal','venmo'].includes(e.target.value.trim().toLowerCase()) ? {form:'CASH',valuation:'',basis:''} : {})})} /></label>
+  const field=(key:keyof RewardDraft,label:string,required=false,type='text')=><label>{label}<input aria-label={label} required={required} type={type} inputMode={['amount','valuation','threshold','confirmed'].includes(key)?'decimal':undefined} pattern={['amount','valuation','threshold','confirmed'].includes(key)?'([0-9]+([.][0-9]*)?|[.][0-9]+)':undefined} value={String(r[key])} onChange={e=>set({...r,[key]:e.target.value,...(key==='provider' && ['ibotta','paypal','venmo'].includes(e.target.value.trim().toLowerCase()) ? {form:'CASH',valuation:'',basis:''} : {})})} /></label>
   function copyTerms(offer: RewardOffer) {
     const categories: Record<string, string> = { Purchase: 'PURCHASE', ReceiptScan: 'RECEIPT_SCAN', Receipt: 'RECEIPT', Other: 'OTHER' }
     const form = offer.form || (offer.kind === 'WALGREENS_CASH' ? 'STORE_REWARD' : offer.kind === 'REGISTER_REWARD' ? 'STORE_COUPON' : '')

@@ -1,3 +1,4 @@
+import { RewardExpirationAlerts } from './features/rewards/RewardExpirationAlerts'
 import { FormActions } from './components/ui'
 import type { ReceiptDraftState } from './features/receipts/ReceiptCreate'
 import { useCallback, useEffect, useState } from 'react'
@@ -101,6 +102,7 @@ export default function App() {
         {!data.canWrite && <Notice>Read-only access. A write-authorized token is required to save changes.</Notice>}
         {error && <div className="error" role="alert">{error} Showing previously loaded data.<button className="text-button" onClick={() => void refresh()}>Try refresh</button></div>}
         {message && <div className="success" role="status">{message}<button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage('')}><X size={16} /></button></div>}
+        {page!=='dashboard'&&<RewardExpirationAlerts rewards={data.expiringRewards} visible={false} onReceipt={setReceipt} onRewards={()=>navigate('rewards')}/>}
         {refreshing && !data ? <Loading /> : <WorkspacePages
           data={data}
           api={api}

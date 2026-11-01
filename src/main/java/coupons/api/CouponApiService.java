@@ -143,7 +143,7 @@ public final class CouponApiService implements HttpHandler {
         } catch (IllegalArgumentException | DateTimeParseException error) {
             send(exchange, new Response(400, Json.object(Map.of("error", "Invalid request fields or resource state."))));
         } catch (Exception error) {
-            error.printStackTrace(System.err);
+            System.err.println("API request failed (" + error.getClass().getSimpleName() + ").");
             // Never expose SQL, credentials, paths, or repository exception messages to clients.
             send(exchange, new Response(500, Json.object(Map.of("error", "Request failed."))));
         } finally {
@@ -233,6 +233,16 @@ public final class CouponApiService implements HttpHandler {
                 e.getResponseHeaders().set("Location", "/receipts/" + input.id());
                 return json(201, result);
             });
+        }
+        if(path.equals("/reward-instruments")) {
+            requirePlatform();if(method.equals("GET"))return json(200,fields("instruments",platform.rewardInstruments()));
+            requireMethod(method,"POST");return write(e,principal,request->{var f=Json.parseObject(request);known(f,"id","kind","provider","nickname","lastFour","unit","opening","date","historyComplete","replacementId","evidenceReference","reason");return json(201,platform.createRewardInstrument(f,principal));});
+        }
+        if(parts.length>=3&&parts[1].equals("reward-instruments")) {
+            requirePlatform();UUID id=UUID.fromString(parts[2]);
+            if(parts.length==3){if(method.equals("GET"))return json(200,platform.rewardInstrument(id));requireMethod(method,"PUT");return write(e,principal,request->{var f=Json.parseObject(request);known(f,"provider","nickname","lastFour","opening","date","historyComplete","reason","confirmed");return json(200,platform.correctRewardInstrument(id,revision(e),f,principal));});}
+            if(parts.length==4&&parts[3].equals("events")){requireMethod(method,"POST");return write(e,principal,request->{var f=Json.parseObject(request);known(f,"id","kind","amount","date","reason","supersedes","confirmed","sourceRevision","sourceReceiptId","sourceEventId");return json(201,platform.rewardInstrumentEvent(id,revision(e),f,principal));});}
+            if(parts.length==4&&parts[3].equals("exchange")){requireMethod(method,"POST");return write(e,principal,request->{var f=Json.parseObject(request);known(f,"id","cardId","provider","nickname","lastFour","sourceAmount","cardValue","date","reason","evidenceReference");return json(201,platform.exchangeRewardInstrument(id,revision(e),f,principal));});}
         }
         if(path.equals("/accounts/activity")) {
             requireMethod(method,"GET"); requirePlatform();

@@ -1,14 +1,9 @@
+import { rewardExpirationDay, tomorrowFor } from './rewardExpirationDates'
 import { useEffect, useState } from 'react'
 import type { ExpiringReward } from '../../types/platform'
 import { date, money } from '../../api/format'
 import { Panel } from '../../components/ui'
 
-export function rewardExpirationDay(now=new Date()) {
- return now.toLocaleDateString('sv-SE',{timeZone:'America/Chicago'})
-}
-export function tomorrowFor(day:string) {
- const next=new Date(`${day}T12:00:00Z`);next.setUTCDate(next.getUTCDate()+1);return next.toISOString().slice(0,10)
-}
 export function RewardExpirationAlerts({rewards=[],visible,onReceipt,onRewards}:{rewards?:ExpiringReward[];visible:boolean;onReceipt:(id:string)=>void;onRewards:()=>void}) {
  const [today,setToday]=useState(rewardExpirationDay)
  const [permission,setPermission]=useState(()=>typeof Notification==='undefined'?'unsupported':Notification.permission)

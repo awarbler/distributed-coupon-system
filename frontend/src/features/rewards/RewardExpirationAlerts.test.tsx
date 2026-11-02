@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { RewardExpirationAlerts, tomorrowFor, rewardExpirationDay } from './RewardExpirationAlerts'
+import { RewardExpirationAlerts } from './RewardExpirationAlerts'
+import { tomorrowFor, rewardExpirationDay } from './rewardExpirationDates'
 
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();localStorage.clear()})
 const reward={id:'r1',provider:'ECB',description:'Weekly reward',amount:'5',expirationDate:'2026-11-02',receiptId:'receipt-1'}

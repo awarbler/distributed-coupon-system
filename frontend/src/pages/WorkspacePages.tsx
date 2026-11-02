@@ -101,7 +101,7 @@ function Receipts({ data, api, onChanged, onReceipt, writable, onAddReceipt, onR
   const [metric,setMetric]=useState('')
   const closeMetric=useCallback(()=>setMetric(''),[])
   const [search, setSearch] = useState(''), [status, setStatus] = useState('ALL')
-  const today=new Date().toLocaleDateString('sv-SE',{timeZone:'America/Chicago'})
+  const [today]=useState(()=>new Date().toLocaleDateString('sv-SE',{timeZone:'America/Chicago'}))
   const weekStart=new Date(`${today}T12:00:00Z`);weekStart.setUTCDate(weekStart.getUTCDate()-weekStart.getUTCDay())
   const weekEnd=new Date(weekStart);weekEnd.setUTCDate(weekEnd.getUTCDate()+6)
   const currentWeekFrom=weekStart.toISOString().slice(0,10),currentWeekTo=weekEnd.toISOString().slice(0,10)

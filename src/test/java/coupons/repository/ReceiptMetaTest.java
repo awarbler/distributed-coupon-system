@@ -6,6 +6,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** Tests preservation and validation of receipt metadata. */
 class ReceiptMetaTest {
+    @Test void formatsCompleteWalgreensRfnAndSerializesTransactionNumber() throws Exception {
+        var meta=new ReceiptMeta("Walgreens","RFN# 0000 1234 5678 9012 3456",null,"Store 11513",ReceiptMeta.PurchaseChannel.IN_STORE,ReceiptMeta.PrintedTotalBasis.UNKNOWN,ReceiptMeta.PaymentEntryStatus.UNKNOWN,ReceiptMeta.ReceiptKind.PURCHASE,"03013");
+        assertEquals("0000-1234-5678-9012-3456",meta.receiptNumber());
+        var bytes=new java.io.ByteArrayOutputStream();try(var out=new java.io.ObjectOutputStream(bytes)){out.writeObject(meta);}
+        try(var in=new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray()))){assertEquals(meta,in.readObject());}
+    }
     /** Verifies exact preservation of text and printed local time. */
     @Test
     void preservesRecordedValuesExactly() {

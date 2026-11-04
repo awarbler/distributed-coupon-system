@@ -19,7 +19,9 @@ public final class LocalReceiptOcr {
                 readable=work.resolve("converted.png");
                 run(new ProcessBuilder("sips","-s","format","png",image.toRealPath().toString(),"--out",readable.toString()),work.resolve("conversion.log"));
             }
-            var best=recognize(readable,work,"recognition");
+            Path prepared;
+            try {prepared=ReceiptPhotoRecovery.prepare(readable,work);}catch(IOException unavailable){prepared=readable;}
+            var best=recognize(prepared,work,"recognition");
             if(orientationScore(best.text())==0 && System.getProperty("os.name","").toLowerCase().contains("mac")) {
                 for(int degrees:new int[]{90,180,270}) {
                     Path rotated=work.resolve("rotated-"+degrees+".png");
@@ -29,6 +31,16 @@ public final class LocalReceiptOcr {
                     if(orientationScore(best.text())>=2)break;
                 }
             }
+            {
+                try {
+                    var candidate=recognize(readable,work,"recognition-original");
+                    if(ReceiptPhotoRecovery.score(candidate.text())>ReceiptPhotoRecovery.score(best.text()))best=candidate;
+                    if(System.getProperty("os.name","").toLowerCase().contains("mac")) {
+                        candidate=ReceiptPhotoRecovery.nativeRead(prepared,work);
+                        if(ReceiptPhotoRecovery.score(candidate.text())>ReceiptPhotoRecovery.score(best.text()))best=candidate;
+                    }
+                } catch(IOException recoveryUnavailable) { /* Retain the original local scan when optional recovery is unavailable. */ }
+            }
             return best;
         } finally {
             try(var files=Files.list(work)) { for(Path file:files.toList())Files.deleteIfExists(file); }
@@ -37,7 +49,7 @@ public final class LocalReceiptOcr {
     }
     private Recognition recognize(Path image,Path work,String name) throws IOException {
         Path base=work.resolve(name);
-        run(new ProcessBuilder("tesseract",image.toString(),base.toString(),"-l","eng","--psm","6","txt","tsv"),work.resolve("process.log"));
+        run(new ProcessBuilder(Files.isExecutable(Path.of("/opt/homebrew/bin/tesseract"))?"/opt/homebrew/bin/tesseract":"tesseract",image.toString(),base.toString(),"-l","eng","--psm","6","txt","tsv"),work.resolve("process.log"));
         return new Recognition(Files.readString(work.resolve(name+".txt"),StandardCharsets.UTF_8),Files.readString(work.resolve(name+".tsv"),StandardCharsets.UTF_8));
     }
     static int orientationScore(String text) {

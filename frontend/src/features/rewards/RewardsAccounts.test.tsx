@@ -242,3 +242,19 @@ it('moves account overview explanations into help and keeps unavailable actions 
  await user.click(screen.getByRole('button',{name:'Walgreens Cash'}));expect(screen.getByRole('button',{name:'Mark reward unavailable'}).closest('.panel')).toHaveClass('reward-unavailable-panel')
 })
 
+
+
+it('saves an expiration date for a missing Register Reward',async()=>{
+ const api=new ApiClient('test'),user=userEvent.setup(),saved=vi.fn()
+ const mutate=vi.spyOn(api,'mutate').mockResolvedValue({})
+ render(<MemberRewardEntry provider="Register Rewards" api={api} writable day="2026-11-03" initialOpen onSaved={saved}/>)
+ await user.type(screen.getByLabelText('Member reward amount'),'5')
+ await user.type(screen.getByLabelText('Member reward name / description'),'Crest reward')
+ const expiration=screen.getByLabelText('Register Reward expiration date (optional)')
+ expect(expiration).toHaveAttribute('type','date')
+ expect(expiration).toHaveAttribute('min','2026-11-03')
+ fireEvent.change(expiration,{target:{value:'2026-11-17'}})
+ await user.click(screen.getByRole('button',{name:'Save member reward'}))
+ await waitFor(()=>expect(mutate).toHaveBeenCalledWith('/accounts/member-rewards','POST',expect.objectContaining({provider:'Register Rewards',amount:'5',expirationDate:'2026-11-17'}),expect.any(String)))
+ expect(saved).toHaveBeenCalledOnce()
+})

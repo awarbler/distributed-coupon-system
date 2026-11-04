@@ -14,13 +14,18 @@ public record ReceiptImportDraft(UUID importId, String retailer, String receiptN
         List<ImportedItem> items, List<ImportedDiscount> discounts, List<Payment> payments,
         List<UnidentifiedRR> rrUses, List<Earning> earnings, WalgreensCashAccount account,
         List<SavingsCategory> savings, BigDecimal savingPercent, FooterStatus footerStatus,
-        List<ReceiptEvidence> evidence, List<ReviewIssue> issues, coupons.repository.ReceiptMeta.PurchaseChannel purchaseChannel) {
+        List<ReceiptEvidence> evidence, List<ReviewIssue> issues, coupons.repository.ReceiptMeta.PurchaseChannel purchaseChannel,
+        String storeReference,String transactionNumber,String registerNumber,
+        coupons.repository.ReceiptMeta.PrintedTotalBasis printedTotalBasis,
+        coupons.repository.ReceiptMeta.PaymentEntryStatus paymentEntryStatus,
+        Map<String,String> printedReferences) {
     public record ImportedItem(UUID lineId,String description,String sku,Integer quantity,
-            BigDecimal regularUnitPrice,BigDecimal enteredUnitPrice) { }
+            BigDecimal regularUnitPrice,BigDecimal enteredUnitPrice,BigDecimal storePromotion,
+            BigDecimal printedLineTotal,String returnValue,String taxCode,String eligibility) { }
     public record ImportedDiscount(CouponApplied application,DiscountKind kind) { }
     public record ReviewIssue(String field,String sourceText,String explanation) implements java.io.Serializable { }
     public ReceiptImportDraft {
-        Objects.requireNonNull(importId);
+        Objects.requireNonNull(importId);printedReferences=Map.copyOf(printedReferences);
         items=List.copyOf(items);discounts=List.copyOf(discounts);payments=List.copyOf(payments);
         rrUses=List.copyOf(rrUses);earnings=List.copyOf(earnings);savings=List.copyOf(savings);
         evidence=List.copyOf(evidence);issues=List.copyOf(issues);

@@ -33,14 +33,14 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
     ReceiptRecord record(){return new ReceiptRecord(id,ReceiptStatus.ACTIVE,1,transaction,metadata,evidence.stream().map(ReceiptEvidence::getEvidenceId).toList());}
     static void validateRewardOnly(ReceiptMeta metadata,CouponTransaction tx){if(metadata==null||metadata.receiptKind()!=ReceiptMeta.ReceiptKind.REWARD_ADJUSTMENT)return;if(!tx.getPurchaseItems().isEmpty()||!tx.getAppliedCoupons().isEmpty()||!tx.getPayments().isEmpty()||!tx.getObservations().unidentifiedRR().isEmpty()||tx.getReceiptTotals().getTaxAmount().signum()!=0||tx.getReceiptTotals().getFinalTotal().signum()!=0)throw new IllegalArgumentException("Reward-only receipts must have no purchased items, payments, redemptions, tax or purchase total.");if(tx.getObservations().earnings().stream().noneMatch(e->e.kind()==EarningKind.WALGREENS_CASH&&e.status()==RebateStatus.CREDITED&&e.confirmed()!=null&&e.confirmed().amount().signum()>0))throw new IllegalArgumentException("Record the Walgreens Cash actually added on this adjustment receipt.");}
     static ReceiptInput read(Map<String,Object> fields) {
-        known(fields,"receiptDraftId","receiptDraftRevision","shoppingPlanId","shoppingPlanRevision","clippedCouponIds","printedFooter","transactionId","retailer","receiptNumber","storeReference","purchaseDate","printedTime","purchaseChannel","receiptKind","printedTotalBasis","paymentEntryStatus","tax","reportedTotal","items","discounts","payments","rrUsed","rrUsageId","rrUses","earnings","evidence","reviewToken","acknowledgeDifference");
+        known(fields,"receiptDraftId","receiptDraftRevision","shoppingPlanId","shoppingPlanRevision","clippedCouponIds","printedFooter","transactionId","retailer","receiptNumber","transactionNumber","registerNumber","storeReference","purchaseDate","printedTime","purchaseChannel","receiptKind","printedTotalBasis","paymentEntryStatus","tax","reportedTotal","items","discounts","payments","rrUsed","rrUsageId","rrUses","earnings","evidence","reviewToken","acknowledgeDifference");
         if(optional(fields,"shoppingPlanId")!=null){UUID.fromString(required(fields,"shoppingPlanId"));if(optional(fields,"shoppingPlanRevision")==null||Long.parseLong(required(fields,"shoppingPlanRevision"))<1)throw new IllegalArgumentException("A saved shopping-plan revision is required.");}
         else if(optional(fields,"shoppingPlanRevision")!=null)throw new IllegalArgumentException("Shopping-plan revision requires a plan ID.");
         UUID id=uuid(fields,"transactionId");LocalDate day=optional(fields,"purchaseDate")==null?null:LocalDate.parse(required(fields,"purchaseDate"));
         String time=optional(fields,"printedTime");LocalTime parsed=time==null?null:ReceiptTimeInput.parse(time).orElseThrow(()->new IllegalArgumentException("Use a valid receipt time."));
         var metadata=new ReceiptMeta(required(fields,"retailer"),optional(fields,"receiptNumber"),parsed==null||day==null?null:day.atTime(parsed),optional(fields,"storeReference"),ReceiptMeta.PurchaseChannel.valueOf(required(fields,"purchaseChannel")),
                 optional(fields,"printedTotalBasis") == null ? ReceiptMeta.PrintedTotalBasis.UNKNOWN : ReceiptMeta.PrintedTotalBasis.valueOf(required(fields,"printedTotalBasis")),
-                optional(fields,"paymentEntryStatus") == null ? ReceiptMeta.PaymentEntryStatus.UNKNOWN : ReceiptMeta.PaymentEntryStatus.valueOf(required(fields,"paymentEntryStatus")),optional(fields,"receiptKind")==null?ReceiptMeta.ReceiptKind.PURCHASE:ReceiptMeta.ReceiptKind.valueOf(required(fields,"receiptKind")));
+                optional(fields,"paymentEntryStatus") == null ? ReceiptMeta.PaymentEntryStatus.UNKNOWN : ReceiptMeta.PaymentEntryStatus.valueOf(required(fields,"paymentEntryStatus")),optional(fields,"receiptKind")==null?ReceiptMeta.ReceiptKind.PURCHASE:ReceiptMeta.ReceiptKind.valueOf(required(fields,"receiptKind")),optional(fields,"transactionNumber"),optional(fields,"registerNumber"));
         var tx=new CouponTransaction(new ReceiptTotals(decimal(fields,"tax",false),decimal(fields,"reportedTotal",false)));
         var itemRows=rows(fields,"items",100);if(itemRows.isEmpty()&&metadata.receiptKind()!=ReceiptMeta.ReceiptKind.REWARD_ADJUSTMENT)throw new IllegalArgumentException("At least one purchased product is required.");
         for(var item:itemRows) {
@@ -198,7 +198,7 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
         }
     }
     private static ReceiptCorrection parse(ReceiptRecord old, Map<String, Object> f) {
-        known(f, "printedFooter", "retailer", "receiptNumber", "storeReference", "purchaseDate", "printedTime", "purchaseChannel", "receiptKind",
+        known(f, "printedFooter", "retailer", "receiptNumber", "transactionNumber", "registerNumber", "storeReference", "purchaseDate", "printedTime", "purchaseChannel", "receiptKind",
                 "printedTotalBasis", "paymentEntryStatus", "tax", "reportedTotal", "items", "payments",
                 "discounts", "rrUses", "rrReclassifications", "reason", "reviewToken", "acknowledgeDifference");
         var s = ReceiptSnapshot.from(old.transaction());
@@ -219,7 +219,9 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
                 f.containsKey("purchaseChannel") ? ReceiptMeta.PurchaseChannel.valueOf(required(f,"purchaseChannel")) : m == null ? ReceiptMeta.PurchaseChannel.UNKNOWN : m.purchaseChannel(),
                 f.containsKey("printedTotalBasis") ? ReceiptMeta.PrintedTotalBasis.valueOf(required(f,"printedTotalBasis")) : m == null ? ReceiptMeta.PrintedTotalBasis.UNKNOWN : m.printedTotalBasis(),
                 f.containsKey("paymentEntryStatus") ? ReceiptMeta.PaymentEntryStatus.valueOf(required(f,"paymentEntryStatus")) : m == null ? ReceiptMeta.PaymentEntryStatus.UNKNOWN : m.paymentEntryStatus(),
-                f.containsKey("receiptKind")?ReceiptMeta.ReceiptKind.valueOf(required(f,"receiptKind")):m==null?ReceiptMeta.ReceiptKind.PURCHASE:m.receiptKind());
+                f.containsKey("receiptKind")?ReceiptMeta.ReceiptKind.valueOf(required(f,"receiptKind")):m==null?ReceiptMeta.ReceiptKind.PURCHASE:m.receiptKind(),
+                f.containsKey("transactionNumber")?optional(f,"transactionNumber"):m==null?null:m.transactionNumber(),
+                f.containsKey("registerNumber")?optional(f,"registerNumber"):m==null?null:m.registerNumber());
         var items = f.containsKey("items") ? rows(f,"items",100).stream().map(row -> {
             known(row,"lineItemId","productName","productCode","regularUnitPrice","saleUnitPrice","quantity");
             UUID lineId = uuid(row,"lineItemId");
@@ -324,7 +326,7 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
 final class ReceiptImport {
     static final String AMOUNT="-?\\$?\\s*([0-9]+[.,][0-9]{2})";
     static String match(String text,String pattern){var m=java.util.regex.Pattern.compile(pattern,java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);return m.find()?m.group(1).replace(',','.').trim():"";}
-    static String value(String text,String label){return match(text,"(?m)^\\s*"+label+"\\s*:?\\s*[-−~]?\\$?\\s*([0-9]+[.,][0-9]{2})\\b");}
+    static String value(String text,String label){return match(text,"(?m)^\\s*"+label+"\\s*:?\\s*[-−~]?\\$?\\s*([0-9]+[.,:][0-9]{2})\\b").replace(':','.');}
     static java.util.Map<String,Object> extract(String name,String type,byte[] bytes)throws Exception {
         if(bytes.length==0||bytes.length>5*1024*1024)throw new CouponApiService.ApiError(400,"Import a file up to 5 MiB.");
         String text;boolean scanned=false;
@@ -335,7 +337,7 @@ final class ReceiptImport {
                 var stripper=new org.apache.pdfbox.text.PDFTextStripper();stripper.setSortByPosition(true);var out=new StringBuilder();var renderer=new org.apache.pdfbox.rendering.PDFRenderer(doc);
                 for(int i=0;i<doc.getNumberOfPages();i++) {
                     stripper.setStartPage(i+1);stripper.setEndPage(i+1);String page=stripper.getText(doc);
-                    if(page.replaceAll("\\s","").length()<80) {
+                    if(page.isBlank()) {
                         scanned=true;var box=doc.getPage(i).getCropBox();if((double)box.getWidth()*box.getHeight()*6.25>25_000_000)throw new CouponApiService.ApiError(400,"PDF page is too large to scan safely. Upload a smaller scan.");
                         var image=renderer.renderImageWithDPI(i,150);var png=new java.io.ByteArrayOutputStream();javax.imageio.ImageIO.write(image,"png",png);page=ocr(png.toByteArray());image.flush();
                     }out.append(page).append('\n');
@@ -350,6 +352,15 @@ final class ReceiptImport {
     static String ocr(byte[] image)throws Exception {return ocr(image,false);}
     static String ocr(byte[] image,boolean sparse)throws Exception {
         try(var stream=javax.imageio.ImageIO.createImageInputStream(new java.io.ByteArrayInputStream(image))){var readers=javax.imageio.ImageIO.getImageReaders(stream);if(readers.hasNext()){var reader=readers.next();try{reader.setInput(stream);if((long)reader.getWidth(0)*reader.getHeight(0)>25_000_000)throw new CouponApiService.ApiError(400,"Image is too large to scan. Resize it below 25 megapixels.");}finally{reader.dispose();}}}
+        if(!sparse) {
+            var photo=java.nio.file.Files.createTempFile("receipt-upload-",".png");
+            try {
+                java.nio.file.Files.write(photo,image);
+                return new coupons.receipts.LocalReceiptOcr().read(photo);
+            } catch(java.io.IOException ex) {
+                throw new CouponApiService.ApiError(ex.getMessage().contains("reader unavailable")?503:400,ex.getMessage());
+            } finally {java.nio.file.Files.deleteIfExists(photo);}
+        }
         String executable=java.nio.file.Files.isExecutable(java.nio.file.Path.of("/opt/homebrew/bin/tesseract"))?"/opt/homebrew/bin/tesseract":"tesseract";
         Process process;
         try{process=new ProcessBuilder(executable,"stdin","stdout","-l","eng","--psm",sparse?"11":"6").redirectError(ProcessBuilder.Redirect.DISCARD).start();}
@@ -393,32 +404,56 @@ final class ReceiptImport {
         var warnings=new java.util.ArrayList<String>();warnings.add("Review every imported value before saving. Printed labels do not prove whether a coupon was an RR.");
         if(scanned)warnings.add("Read by OCR: check digits, decimal points, quantities and product boundaries against the original.");
         var text=raw.replace('\r','\n').replace('\u00a0',' ');var lines=text.lines().map(v->v.replaceAll("\\s+"," ").trim().replaceFirst("(?i)^.{0,12}?(?=(?:SUBTOTAL|SALES TAX|TOTAL\\s+\\$?\\d|MFG (?:ECPN|CPN)|MYWALGREENS SAVINGS|RETURN VALUE|REGULAR PRICE)\\b)","")).filter(v->!v.isBlank()).toList();
+        if(scanned) {
+            var recovered=new java.util.ArrayList<String>();boolean checkout=false;
+            for(String line:lines) {
+                if(line.matches("(?i)^(?:SUBTOTAL|SUBTCITA|SALES TAX|TOTAL\\b).*"))checkout=true;
+                if(checkout&&line.matches("(?i)^PASH\\s+\\$?[0-9]+[.,][0-9]{2}$")) {
+                    warnings.add("OCR read the cash label as PASH; the cash amount was imported for review.");line=line.replaceFirst("(?i)^PASH","CASH");
+                }
+                if(line.matches("(?i)^MFE\\s+EEPA\\s+-[0-9]+[.,][0-9]{2}$")) {
+                    warnings.add("OCR coupon label MFE EEPA needs classification; its printed amount was retained.");line=line.replaceFirst("(?i)^MFE\\s+EEPA","MFG CPN");
+                }
+                recovered.add(line);
+            }
+            lines=recovered;
+        }
         text=String.join("\n",lines);
         var result=new java.util.LinkedHashMap<String,Object>();result.put("name",name);result.put("rawText",raw);result.put("scanned",scanned);
         result.put("store",text.toUpperCase().contains("WALGREENS")?"Walgreens":"");
         if(!text.toUpperCase().contains("WALGREENS"))warnings.add("Store was not identified as Walgreens. Review all fields; this first importer is tuned for Walgreens receipts.");
-        result.put("number",match(text,"(?:RFN|REN)\\s*#?\\s*([0-9][0-9 -]{14,30})").replaceAll("\\s",""));
+        result.put("number",ReceiptMeta.formatReceiptNumber(result.get("store").toString(),match(text,"(?:RFN|REN)\\s*#?\\s*([0-9][0-9 -]{14,30})").replaceAll("\\s","")));
         var day=match(text,"\\b([0-1]?[0-9]/[0-3]?[0-9]/20[0-9]{2})\\b");
         if(!day.isBlank()){try{day=java.time.LocalDate.parse(day,java.time.format.DateTimeFormatter.ofPattern("M/d/uuuu")).toString();}catch(Exception ex){day="";}}
         if(day.isBlank()){var date=match(text,"\\b((?:JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\\s+[0-9]{1,2},?\\s+20[0-9]{2})");try{day=java.time.LocalDate.parse(date.replace(",",""),new java.time.format.DateTimeFormatterBuilder().parseCaseInsensitive().appendPattern("MMMM d uuuu").toFormatter(java.util.Locale.US)).toString();}catch(Exception ignored){}}
-        result.put("storeReference",lines.stream().filter(v->v.matches("(?i).*#\\s*[0-9]{3,6}\\s+[0-9]+\\s+.*")).findFirst().orElse(""));
+        var register=java.util.regex.Pattern.compile("^\\s*([0-9]{1,4})\\s+([0-9]{1,6})\\s+([0-9]{1,4})\\s+[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}\\b");
+        int headerEnd=-1;String transactionNumber="",registerNumber="";
+        for(int i=0;i<lines.size();i++){var row=register.matcher(lines.get(i));if(row.find()){headerEnd=i;transactionNumber=row.group(2);registerNumber=row.group(3);break;}}
+        result.put("transactionNumber",transactionNumber);result.put("registerNumber",registerNumber);
+        if(headerEnd>=0)result.put("storeReference",String.join("\n",lines.subList(0,headerEnd).stream().filter(v->!v.equalsIgnoreCase("Walgreens")).toList()));
+        else result.put("storeReference",lines.stream().filter(v->v.matches("(?i).*#\\s*[0-9]{3,6}\\s+[0-9]+\\s+.*")).findFirst().orElse(""));
         result.put("day",day);result.put("time",match(text,"\\b([0-9]{1,2}:[0-9]{2}\\s*[AP]M)\\b"));
         result.put("subtotal",value(text,"SUBTOTAL"));result.put("websiteSavings",value(text,"YOU SAVED"));
         result.put("tax",value(text,"SALES TAX(?:\\s+[A-Z]?[= ]?[0-9.]+%)?"));result.put("reported",value(text,"TOTAL"));
+        String footerText=String.join("\n",lines.stream().dropWhile(l->!l.matches("(?i)^(?:SUBTOTAL|SUBTCITA|SALES TAX|TOTAL\\b).*" )).toList());
         var footer=new java.util.LinkedHashMap<String,String>();footer.put("status","UNKNOWN");
-        for(var field:java.util.Map.ofEntries(java.util.Map.entry("myWalgreensSavings","MYWALGREENS SAVINGS"),java.util.Map.entry("storeCouponSavings","STORE COUPON SAVINGS"),java.util.Map.entry("manufacturerCouponSavings","(?:MFG COUPON SAVINGS|MANUFACTURER COUPONS)"),java.util.Map.entry("totalSavings","TOTAL SAVINGS"),java.util.Map.entry("wcOpening","OPENING BALANCE"),java.util.Map.entry("wcEarned","EARNED THIS VISIT"),java.util.Map.entry("wcUsed","(?:REDEEMED|USED) THIS VISIT"),java.util.Map.entry("wcClosing","CLOSING BALANCE")).entrySet())footer.put(field.getKey(),value(text,field.getValue()));
-        footer.put("wcAvailable",match(text,"(?m)^\\$?([0-9]+[.,][0-9]{2})\\s+W(?:ALGREENS)? CASH REWARDS AVAILABLE"));
+        for(var field:java.util.Map.ofEntries(java.util.Map.entry("myWalgreensSavings","MYWALGREENS SAVINGS"),java.util.Map.entry("storeCouponSavings","STORE COUPON SAVINGS"),java.util.Map.entry("manufacturerCouponSavings","(?:MFG COUPON SAVINGS|MANUFACTURER COUPONS)"),java.util.Map.entry("totalSavings","TOTAL SAVINGS"),java.util.Map.entry("wcOpening","OPENING BALANCE"),java.util.Map.entry("wcEarned","EARNED THIS VISIT"),java.util.Map.entry("wcUsed","(?:REDEEMED|USED) THIS VISIT"),java.util.Map.entry("wcClosing","CLOSING BALANCE")).entrySet())footer.put(field.getKey(),value(footerText,field.getValue()));
+        footer.put("wcAvailable",match(footerText,"(?m)^\\$?([0-9]+[.,][0-9]{2})\\s+W(?:ALGREENS)? CASH REWARDS AVAILABLE"));
         footer.put("savingsValuePercent",match(text,"SAVINGS VALUE\\s+([0-9]+(?:[.][0-9]+)?)%"));if(footer.values().stream().anyMatch(v->!v.isBlank()&&!v.equals("UNKNOWN")))footer.put("status","PRINTED");result.put("footer",footer);
         var earned=footer.get("wcEarned");if(earned.isBlank())earned=match(text,"(?m)^\\$?([0-9]+[.][0-9]{2})\\s+WALGREENS CASH REWARDS EARNED");result.put("wcEarned",earned);
         if(text.toUpperCase().contains("YOU SAVED"))warnings.add("Website savings totals can include earned rewards and may conflict with paper savings. They were not added as new discounts. If the website combines coupon amounts, use the paper source or omit the aggregate and enter separate coupon / RR rows.");
         var items=new java.util.ArrayList<java.util.Map<String,String>>();var deductions=new java.util.ArrayList<java.util.Map<String,String>>();
+        var productLines=new java.util.HashMap<String,Integer>();var uncertainPrices=new java.util.HashSet<String>();int checkoutLine=lines.size();
         java.util.Map<String,String> current=null;var pending=new java.util.ArrayList<String>();boolean finished=false;String promotion="";
-        for(String line:lines) {
+        for(int lineIndex=0;lineIndex<lines.size();lineIndex++) {
+            if(lineIndex<=headerEnd)continue;
+            String line=lines.get(lineIndex);
             String upper=line.toUpperCase(java.util.Locale.ROOT);
+            if(upper.startsWith("RETURN VALUE"))continue;
             if(upper.matches(".*BUY.*GET.*(?:OFF|FREE).*")){promotion=line;pending.clear();continue;}
-            if(upper.matches("^(?:SUBTOTAL|SALES TAX|TOTAL\\b|MFG |MANUFACTURER COUPONS|FINAL CHARGES|VISA|MASTERCARD|CASH\\b|RFN).*"))finished=true;
+            if(upper.matches(".*\\bMFG\\s+E?CPN\\b.*")||upper.matches("^(?:SUBTOTAL|SALES TAX|TOTAL\\b|MFG |MANUFACTURER COUPONS|FINAL CHARGES|VISA|MASTERCARD|CASH\\b|RFN).*")){finished=true;checkoutLine=Math.min(checkoutLine,lineIndex);}
             var rx=java.util.regex.Pattern.compile("(?i)^(?:\\[FSA/HSA\\]\\s*)?(?:FSA[- ]*RX|RX)\\s+([0-9]{5,9})\\s+\\$?([0-9]+[.,][0-9]{2})\\b").matcher(line);
-            if(!finished&&result.get("store").equals("Walgreens")&&rx.find()) {current=new java.util.LinkedHashMap<>();current.put("id",java.util.UUID.randomUUID().toString());current.put("description","[FSA/HSA] RX");current.put("sku",rx.group(1));current.put("quantity","1");current.put("regular",rx.group(2).replace(',','.'));current.put("sale","");current.put("purchaseTotal",rx.group(2).replace(',','.'));current.put("promotion","");items.add(current);pending.clear();continue;}
+            if(!finished&&result.get("store").equals("Walgreens")&&rx.find()) {current=new java.util.LinkedHashMap<>();current.put("id",java.util.UUID.randomUUID().toString());current.put("description","[FSA/HSA] RX");current.put("sku",rx.group(1));current.put("quantity","1");current.put("regular",rx.group(2).replace(',','.'));current.put("sale","");current.put("purchaseTotal",rx.group(2).replace(',','.'));current.put("promotion","");items.add(current);productLines.put(current.get("id"),lineIndex);pending.clear();continue;}
             var sku=java.util.regex.Pattern.compile("\\b([0-9]{8,14})\\b").matcher(line);
             boolean hasSku=!finished&&sku.find();
             if(hasSku) {
@@ -426,24 +461,66 @@ final class ReceiptImport {
                 String desc=before.isBlank()?String.join(" ",pending):before;
                 desc=desc.replaceAll("(?i)\\[FSA/HSA\\]","").trim();
                 if(desc.isBlank())desc="Product — Review Description";
-                current=new java.util.LinkedHashMap<>();current.put("id",java.util.UUID.randomUUID().toString());current.put("description",desc);current.put("sku",sku.group(1));current.put("quantity","1");current.put("regular","");current.put("sale","");
-                String after=line.substring(sku.end());var price=match(after,"(?:^|\\s)\\$?([0-9]+[.,][0-9]{2})\\s*$");current.put("purchaseTotal",price);
-                if(price.isBlank()){price=match(desc,"(?<![0-9.])([0-9]+[.][0-9]{2})(?![0-9A-Za-z])");if(!price.isBlank()){current.put("purchaseTotal",price);current.put("description",desc.replaceFirst(java.util.regex.Pattern.quote(price),"").replaceAll("\\s+"," ").trim());}}
+                boolean completesRecovered=before.isBlank()&&current!=null&&current.get("sku").isBlank()&&productLines.get(current.get("id"))==lineIndex-1;
+                if(!completesRecovered) {
+                    current=new java.util.LinkedHashMap<>();current.put("id",java.util.UUID.randomUUID().toString());current.put("description",desc);current.put("quantity","1");current.put("regular","");current.put("sale","");
+                    items.add(current);productLines.put(current.get("id"),lineIndex);
+                }
+                current.put("sku",sku.group(1));
+                String priorPrice=current.getOrDefault("purchaseTotal","");
+                String after=line.substring(sku.end());var price=match(after,"(?:^|\\s)\\$?([0-9]+[.,][0-9]{2})\\s*(?:SALE)?\\s*$");current.put("purchaseTotal",price.isBlank()?priorPrice:price);
+                if(price.isBlank()&&priorPrice.isBlank()){price=match(desc,"(?<![0-9.])([0-9]+[.][0-9]{2})(?![0-9A-Za-z])");if(!price.isBlank()){current.put("purchaseTotal",price);current.put("description",desc.replaceFirst(java.util.regex.Pattern.quote(price),"").replaceAll("\\s+"," ").trim());}}
                 String qty=match(line,"QTY\\s*:?\\s*([0-9]+)");if(!qty.isBlank())current.put("quantity",qty);
-                current.put("promotion",promotion);items.add(current);pending.clear();continue;
+                current.put("promotion",promotion);pending.clear();continue;
             }
             if(current!=null&&!finished) {
-                if(upper.startsWith("REGULAR PRICE")){current.put("regular",match(line,"REGULAR PRICE\\s*\\$?([0-9]+[.][0-9]{2})"));continue;}
+                if(upper.startsWith("REGULAR PRICE")){current.put("regular",match(line,"REGULAR PRICE\\s*\\$?([0-9]+[.,][0-9]{2})"));current.put("observedRegularPrice",line.replaceFirst("(?i)^REGULAR PRICE\\s*", ""));continue;}
                 if(upper.matches("MYWALGREENS SA[VY]INGS.*"))continue;
+                if(scanned) {
+                    var quantityRecovery=java.util.regex.Pattern.compile("^([0-9IlL]+)\\s+[@9]\\s+\\$?([0-9]+[.,:][0-9]{2})$").matcher(line);
+                    if(quantityRecovery.matches()&&!current.get("purchaseTotal").isBlank()) {
+                        var unit=new java.math.BigDecimal(quantityRecovery.group(2).replace(',','.').replace(':','.'));
+                        java.math.BigDecimal count;
+                        if(quantityRecovery.group(1).matches("[0-9]+"))count=new java.math.BigDecimal(quantityRecovery.group(1));
+                        else {
+                            if(unit.signum()<=0)continue;
+                            var quotient=new java.math.BigDecimal(current.get("purchaseTotal")).divideAndRemainder(unit);
+                            if(quotient[1].signum()!=0||quotient[0].signum()<=0)continue;
+                            count=quotient[0];
+                        }
+                        if(count.signum()>0&&count.multiply(unit).compareTo(new java.math.BigDecimal(current.get("purchaseTotal")))==0) {
+                            current.put("quantity",count.toPlainString());current.put("sale",unit.toPlainString());
+                            warnings.add(current.get("description")+": OCR quantity/unit-price notation was recovered because it reconciles exactly to the printed product total. Verify it against the original.");continue;
+                        }
+                    }
+                }
                 var quantity=java.util.regex.Pattern.compile("(?i)([0-9]+)\\s*@\\s*\\$?([0-9]+[.][0-9]{2})").matcher(line);
                 if(quantity.find()){current.put("quantity",quantity.group(1));current.put("sale",quantity.group(2));continue;}
             }
-            if(upper.startsWith("RETURN VALUE"))continue;
+            if(!finished&&upper.matches(".*\\bSALE\\s*$")&&!upper.matches("^(?:REGULAR|RETURN|MYWALGREENS|MFG|MFE|STORE CPN|SAVINGS).*")) {
+                var printedPrice=java.util.regex.Pattern.compile("(-?\\$?[0-9]+[.,][0-9]{2})\\s+SALE\\s*$",java.util.regex.Pattern.CASE_INSENSITIVE).matcher(line);
+                if(printedPrice.find()&&!printedPrice.group(1).startsWith("-")) {
+                    String description=line.substring(0,printedPrice.start()).trim();
+                    boolean joined=printedPrice.start()>0&&Character.isLetterOrDigit(line.charAt(printedPrice.start()-1));
+                    String price=joined?"":printedPrice.group(1).replace("$","").replace(',','.');
+                    if(description.isBlank()&&current!=null&&current.get("purchaseTotal").isBlank()&&pending.isEmpty()) {
+                        current.put("purchaseTotal",price);continue;
+                    }
+                    if(description.isBlank()&&!pending.isEmpty())description=String.join(" ",pending);
+                    if(joined)description=line.substring(0,printedPrice.start()).stripTrailing();
+                    if(description.isBlank())description="Product — description not read";
+                    current=new java.util.LinkedHashMap<>();current.put("id",java.util.UUID.randomUUID().toString());current.put("description",description);current.put("sku","");current.put("quantity","1");current.put("regular","");current.put("sale","");current.put("purchaseTotal",price);current.put("promotion",promotion);
+                    items.add(current);productLines.put(current.get("id"),lineIndex);pending.clear();
+                    warnings.add(description+": recovered without a readable SKU. Verify the description, quantity (initially 1), and price against the source.");
+                    if(joined){uncertainPrices.add(current.get("id"));warnings.add(description+": product code and price ran together in OCR. Enter the price manually; it was left blank.");}
+                    continue;
+                }
+            }
             if(!finished&&!upper.matches(".*(?:WALGREENS|TRANSACTION ID|STORE #|IN STORE PURCHASE|[0-9]{1,2}:[0-9]{2}|[0-9]{3}[-)][0-9]{3}[-][0-9]{4}|TX [0-9]{5}|[0-9]{5}.*(?:DR|RD|ST)|AUSTIN|THANK YOU).*")) {
-                if(line.matches("[0-9]+[.][0-9]{2}")&&current!=null&&current.get("purchaseTotal").isBlank())current.put("purchaseTotal",line);
+                if(line.matches("[0-9]+[.][0-9]{2}")&&current!=null&&current.get("purchaseTotal").isBlank()&&!uncertainPrices.contains(current.get("id"))&&lineIndex<=productLines.get(current.get("id"))+2)current.put("purchaseTotal",line);
                 else if(line.matches(".*[A-Za-z].*")) {pending.add(line);if(pending.size()>3)pending.removeFirst();}
             }
-            if(upper.matches("^(?:MFG (?:E?CPN)|MANUFACTURER COUPONS|STORE CPN|.*OFF.*PURCHASE).*")) {
+            if(upper.matches(".*\\bMFG\\s+E?CPN\\b.*")||upper.matches("^(?:MFG (?:E?CPN)|MANUFACTURER COUPONS|STORE CPN|.*OFF.*PURCHASE).*")) {
                 var amount=match(line,"-?\\$?([0-9]+[.][0-9]{2})(?:\\s*(?:RR)?)?\\s*$");
                 if(!amount.isBlank())deductions.add(new java.util.LinkedHashMap<>(java.util.Map.of("id",java.util.UUID.randomUUID().toString(),"label",line,"amount",amount,"kind",upper.startsWith("MFG ECPN")?"MANUFACTURER":"UNCLASSIFIED")));else warnings.add("Coupon amount could not be read: "+line+". Add or correct this deduction manually.");
             }
@@ -455,11 +532,18 @@ final class ReceiptImport {
             if(regular.isBlank())warnings.add(item.get("description")+": regular price was not identified. Enter it or review the source; none was invented.");
         }
         // Product savings are read within each block, never from the footer total.
-        for(int i=0;i<lines.size();i++)if(lines.get(i).toUpperCase().matches("MYWALGREENS SA[VY]INGS.*")&&i+1<lines.size()&&!lines.get(i+1).toUpperCase().startsWith("MFG COUPON")) {
+        for(int i=0;i<checkoutLine;i++)if(lines.get(i).toUpperCase().matches("MYWALGREENS SA[VY]INGS.*")&&i+1<lines.size()&&!lines.get(i+1).toUpperCase().startsWith("MFG COUPON")) {
             String amount=match(lines.get(i),"MYWALGREENS SA[VY]INGS\\s+([0-9]+[.,][0-9]{2})");
-            java.util.Map<String,String> product=null;for(var item:items){int at=text.indexOf(item.get("sku"));if(at>=0&&at<text.indexOf(lines.get(i)))product=item;}
-            if(product!=null&&!amount.isBlank()&&!product.get("regular").isBlank()) {
-                // Use regular basis with one explicit sale deduction, not reduced sale plus deduction.
+            java.util.Map<String,String> product=null;for(var item:items){Integer at=productLines.get(item.get("id"));if(at!=null&&at<i)product=item;}
+            if(product!=null&&!amount.isBlank()) {
+                product.put("observedStorePromotion",amount);
+                if(product.get("regular").isBlank()) {warnings.add(product.get("description")+": printed store promotion "+amount+" was retained for review; its regular price is unreadable, so it was not deducted again.");continue;}
+                // Change price basis only when both representations describe the same charge.
+                String charged=product.get("purchaseTotal");
+                var expected=new java.math.BigDecimal(product.get("regular")).multiply(new java.math.BigDecimal(product.get("quantity"))).subtract(new java.math.BigDecimal(amount));
+                if(charged.isBlank()||expected.compareTo(new java.math.BigDecimal(charged))!=0) {
+                    warnings.add(product.get("description")+": regular price, quantity and printed store savings do not reconcile to its charged total. The charged price was preserved; verify regular price and savings.");continue;
+                }
                 deductions.add(new java.util.LinkedHashMap<>(java.util.Map.of("id",java.util.UUID.randomUUID().toString(),"label",product.get("description")+" Store Promotion","amount",amount,"kind","SALE_PROMOTION","lineId",product.get("id"))));product.put("sale","");
             }
         }
@@ -472,6 +556,18 @@ final class ReceiptImport {
         warnings.add("Payment completeness and printed-total basis need your confirmation. Footer values are observations, not extra payments or discounts.");
         for(String field:java.util.List.of("store","number","day","time","tax","reported"))if(result.get(field).toString().isBlank())warnings.add(field+": not identified. Review the original and enter it manually.");
         if(!card.isBlank()&&!result.get("reported").toString().isBlank()&&new java.math.BigDecimal(card).compareTo(new java.math.BigDecimal(result.get("reported").toString()))>0)warnings.add("Card payment exceeds the printed total. OCR may have misread it; correct the payment before saving.");
+        var qualityIssues=new java.util.ArrayList<String>();
+        if(scanned) {
+            for(String field:List.of("store","number","day","tax","reported"))if(result.get(field).toString().isBlank())qualityIssues.add(field+": unreadable or missing");
+            if(items.isEmpty())qualityIssues.add("Products were not recognized");
+            for(int i=0;i<items.size();i++) {
+                var item=items.get(i);
+                if(item.get("sku").isBlank()||item.get("description").startsWith("Product —"))qualityIssues.add("Product "+(i+1)+": identity needs review");
+                if(item.get("purchaseTotal").isBlank())qualityIssues.add("Product "+(i+1)+": price needs review");
+            }
+            if(warnings.stream().anyMatch(w->w.contains("do not reconcile")))qualityIssues.add("Product prices and printed savings do not reconcile");
+        }
+        result.put("requiresManualReview",!qualityIssues.isEmpty());result.put("qualityIssues",qualityIssues);
         result.put("items",items);result.put("deductions",deductions);result.put("payments",payments);result.put("warnings",warnings);return result;
     }
 }

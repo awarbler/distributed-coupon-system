@@ -141,7 +141,11 @@ public final class CouponApiService implements HttpHandler {
         } catch (ReceiptCorrection.InvalidFields error) {
             send(exchange,new Response(400,Json.object(Map.of("error",error.getMessage()))));
         } catch (IllegalArgumentException | DateTimeParseException error) {
-            send(exchange, new Response(400, Json.object(Map.of("error", "Invalid request fields or resource state."))));
+            String message = error.getMessage();
+            send(exchange, new Response(400, Json.object(Map.of(
+                    "error", message == null || message.isBlank()
+                            ? "Invalid request fields or resource state."
+                            : message))));
         } catch (Exception error) {
             System.err.println("API request failed (" + error.getClass().getSimpleName() + ").");
             // Never expose SQL, credentials, paths, or repository exception messages to clients.
@@ -194,7 +198,7 @@ public final class CouponApiService implements HttpHandler {
             for(var file:files){known(file,"name","mediaType","contentBase64");var encoded=required(file,"contentBase64");if(encoded.length()>7*1024*1024)throw new ApiError(400,"Each import file must be at most 5 MiB.");var bytes=java.util.Base64.getDecoder().decode(encoded);total+=bytes.length;if(total>10*1024*1024)throw new ApiError(400,"Import at most 10 MiB total.");try{sources.add(ReceiptImport.extract(required(file,"name"),required(file,"mediaType"),bytes));}catch(ApiError error){throw error;}catch(Exception error){throw new ApiError(400,"Receipt extraction failed. Try a clearer PDF or image.");}}
             var numbers=sources.stream().map(v->v.get("number").toString().replaceAll("[^0-9]","")).filter(v->!v.isBlank()).distinct().toList();
             if(numbers.size()>1)throw new ApiError(400,"These files contain different RFNs. Import one purchase at a time.");
-            if(sources.size()>1&&sources.stream().filter(v->!((List<?>)v.get("items")).isEmpty()).count()==1){String combined=sources.stream().map(v->v.get("rawText").toString()).collect(java.util.stream.Collectors.joining("\n"));sources.addFirst(ReceiptImport.parse("Combined Receipt Pages",combined,sources.stream().anyMatch(v->Boolean.TRUE.equals(v.get("scanned")))));}
+            sources=new ArrayList<>(ReceiptPhotoMerge.combine(sources));
             var duplicates=new ArrayList<Map<String,Object>>();
             for(var source:sources){String number=source.get("number").toString();if(!number.isBlank())for(var receipt:receipts.findImportDuplicates(new coupons.repository.ReceiptMeta(source.get("store").toString(),number,null,null)))if(duplicates.stream().noneMatch(v->v.get("transactionId").equals(receipt.transactionId())))duplicates.add(fields("transactionId",receipt.transactionId(),"receiptNumber",receipt.metadata().receiptNumber(),"status",receipt.status()));}
             return json(200,fields("sources",sources,"duplicates",duplicates));
@@ -609,21 +613,51 @@ public final class CouponApiService implements HttpHandler {
             requireMethod(method,"POST");var f=Json.parseObject(body(e));known(f,"beginning","earned","used","reported");
             return json(200,ShoppingReview.reconcile(ReceiptInput.decimal(f,"beginning",true),ReceiptInput.decimal(f,"earned",true),ReceiptInput.decimal(f,"used",true),ReceiptInput.decimal(f,"reported",true)));
         }
+        if(path.equals("/shopping-plans/weekly-preview")) {
+            requireMethod(method,"POST");var f=Json.parseObject(body(e,1024*1024));known(f,"candidates","rewards","walgreensCash","budget","mode","day");
+            var candidates=ReceiptInput.rows(f,"candidates",50).stream().map(r->new WeeklyDealPlanner.Candidate(required(r,"id"),required(r,"name"),optional(r,"store"),parseScenario(r.get("scenario")),optional(r,"group"))).toList();
+            var rewards=ReceiptInput.rows(f,"rewards",30).stream().map(r->{String type=required(r,"type");if(!Set.of("REGISTER_REWARD","ECB").contains(type))throw new ApiError(400,"Unsupported reward type.");return new WeeklyDealPlanner.Reward(required(r,"id"),required(r,"description"),type,required(r,"store"),ReceiptInput.decimal(r,"amount",false),optional(r,"expires")==null?null:LocalDate.parse(required(r,"expires")));}).toList();
+            return json(200,WeeklyDealPlanner.plan(candidates,rewards,ReceiptInput.decimal(f,"walgreensCash",false),ReceiptInput.decimal(f,"budget",false),required(f,"mode"),LocalDate.parse(required(f,"day"))));
+        }
+        if(path.equals("/shopping-plans/convert-image")) {
+            requireMethod(method,"POST");authorize(e,true);var f=Json.parseObject(body(e,8*1024*1024));known(f,"mediaType","contentBase64");
+            try{return json(200,DealImageConversion.convert(required(f,"mediaType"),required(f,"contentBase64")));}
+            catch(Exception failure){throw new ApiError(400,"Photo conversion failed. Export JPEG from Photos and retry.");}
+        }
         if(path.equals("/shopping-plans/import-preview")) {
             requireMethod(method,"POST");authorize(e,true);
-            var f=Json.parseObject(body(e,8*1024*1024));known(f,"text","mediaType","contentBase64");
-            String text=optional(f,"text"),media=optional(f,"mediaType"),encoded=optional(f,"contentBase64");
-            var source=new ShoppingPlan.PlanningSource(text,media,encoded);
-            if(encoded!=null) {
-                try {String recognized=ReceiptImport.ocr(java.util.Base64.getDecoder().decode(encoded),true);text=text==null?recognized:text+"\n"+recognized;}
+            var f=Json.parseObject(body(e,15*1024*1024));known(f,"text","mediaType","contentBase64","files","reader");
+            String text=optional(f,"text");var attachments=new ArrayList<ShoppingPlan.PlanningSource>();int total=0;
+            if(optional(f,"contentBase64")!=null)attachments.add(new ShoppingPlan.PlanningSource("",optional(f,"mediaType"),optional(f,"contentBase64")));
+            for(var file:ReceiptInput.rows(f,"files",10)){known(file,"mediaType","contentBase64");attachments.add(new ShoppingPlan.PlanningSource("",required(file,"mediaType"),required(file,"contentBase64")));}
+            for(var file:attachments)total+=java.util.Base64.getDecoder().decode(file.contentBase64()).length;
+            if(total>5*1024*1024)throw new ApiError(400,"Use at most 5 MiB of images per deal so the draft can be saved.");
+            var source=attachments.isEmpty()?new ShoppingPlan.PlanningSource(text,null,null):new ShoppingPlan.PlanningSource(text,attachments.getFirst().mediaType(),attachments.getFirst().contentBase64(),attachments.subList(1,attachments.size()));
+            if(!"ocr".equals(optional(f,"reader"))) {
+                try{return json(200,LocalDealReader.read(text,source));}
+                catch(IllegalArgumentException failure){throw new ApiError(400,failure.getMessage());}
+                catch(Exception failure){throw new ApiError(400,"Local deal reading could not finish. Your image stays attached; retry or enter details manually.");}
+            }
+            for(var file:attachments) {
+                try {String recognized=ReceiptImport.ocr(java.util.Base64.getDecoder().decode(file.contentBase64()),true);text=text==null?recognized:text+"\n"+recognized;}
                 catch(ApiError failure){throw failure;}
                 catch(Exception failure){throw new ApiError(400,"Screenshot could not be read. Try a clearer JPEG or PNG.");}
-                source=new ShoppingPlan.PlanningSource(text,media,encoded);
             }
-            return json(200,ShoppingNoteInput.parse(text,source));
+            source=new ShoppingPlan.PlanningSource(text,source.mediaType(),source.contentBase64(),source.earlier());
+            var imported=ShoppingNoteInput.parse(text,source);imported.put("reader","local");
+            return json(200,imported);
         }
+
         if(path.equals("/shopping-plans/scenario/preview")) {
             requireMethod(method,"POST");var fields=Json.parseObject(body(e,1024*1024));known(fields,"scenario","retailer");return json(200,parseScenario(fields.get("scenario")).estimate(optional(fields,"retailer")));
+        }
+        if(parts.length==4&&parts[1].equals("shopping-plans")&&parts[3].equals("receipt-link")) {
+            requireMethod(method,"POST");requirePlatform();
+            return write(e,principal,request->{var f=Json.parseObject(request);known(f,"receiptId","receiptRevision");
+                UUID receiptId=ReceiptInput.uuid(f,"receiptId");long receiptRevision=Long.parseLong(required(f,"receiptRevision"));
+                platform.linkShoppingPlanReceipt(UUID.fromString(parts[2]),revision(e),receiptId,receiptRevision,principal);
+                return json(200,fields("linked",true,"receiptId",receiptId));
+            });
         }
         if (path.equals("/shopping-plans")) {
             requireMethod(method, "POST");

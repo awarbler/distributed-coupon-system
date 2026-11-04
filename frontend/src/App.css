@@ -784,3 +784,31 @@ label[data-placeholder-field="true"] > textarea::placeholder { color:#647467; op
 .receipt-period-panel>.receipt-period-options button:focus-visible{text-decoration:underline;text-underline-offset:.3rem}
 
 .rewards-overview .receipt-period-totals{padding-bottom:1.75rem}
+
+.store-autocomplete { display: flex; flex-direction: column; gap: .35rem; position: relative; }
+.store-autocomplete [role="listbox"] { display: flex; flex-wrap: wrap; gap: .5rem; padding: .5rem; border: 1px solid currentColor; border-radius: .4rem; }
+.store-autocomplete [aria-selected="true"] { font-weight: 700; text-decoration: underline; }
+
+/* Shopping sections and deal-entry rows follow the order of the shopping workflow. */
+.shopping-week-overview, .shopping-plan-columns { grid-template-columns:minmax(0,1fr); }
+.shopping-week-toolbar { display:flex; flex-direction:column; gap:12px; }
+.shopping-week-toolbar > p { margin:0; }
+.shopping-week-toolbar .shopping-week-controls { display:flex; flex-wrap:wrap; gap:16px; }
+.shopping-week-toolbar .product-entry-actions { display:flex; flex-wrap:wrap; gap:12px; }
+.shopping-week-toolbar .product-entry-actions > button { width:auto; }
+.weekly-section { width:100%; }
+.weekly-section summary h2 { margin:0; font-size:1.1rem; }
+.deal-scenario-form .scenario-product-main { grid-template-columns:minmax(0,1fr) minmax(0,2fr) repeat(2,minmax(0,1fr)); }
+.deal-scenario-form .scenario-coupon-main, .deal-scenario-form .scenario-rebate-main { grid-template-columns:minmax(0,2fr) repeat(3,minmax(0,1fr)); }
+.deal-scenario-form .scenario-tax { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.deal-scenario-form .scenario-tax .planning-calculated { background:transparent; border-color:transparent; }
+.deal-scenario-form .scenario-tax .tax-total { background:#eef6d9; border-color:#789b36; font-weight:700; }
+.deal-scenario-form .rebate-scope { min-width:0; display:flex; flex-direction:column; gap:8px; }
+.deal-scenario-form .rebate-scope > label { display:flex; flex-direction:column; gap:7px; }
+.deal-scenario-form .rebate-scope .check-list { display:flex; flex-direction:column; gap:6px; }
+@media(max-width:600px) {
+ .deal-scenario-form .scenario-product-main, .deal-scenario-form .scenario-coupon-main,
+ .deal-scenario-form .scenario-rebate-main, .deal-scenario-form .scenario-tax { grid-template-columns:minmax(0,1fr); }
+}
+
+.deal-scenario-form .scenario-rebate-conditions { align-items:start; }

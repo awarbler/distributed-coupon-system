@@ -139,6 +139,33 @@ class CouponApiServiceTest {
         assertTrue(receipts.findById(id).isEmpty());
     }
 
+    @Test void existingReceiptConnectionChangesOnlyThePlanInPostgres() throws Exception {
+        testDatabase=new PostgresTestDatabase();var db=testDatabase.connections;
+        var repository=new PostgresTransactionRepository(db);var planRepository=new PostgresShoppingPlanRepository(db);var platform=new PostgresPlatformRepository(db);
+        UUID id=UUID.randomUUID(),receiptId=UUID.randomUUID();
+        planRepository.save(new ShoppingPlan(id,"PG completed deal","Walgreens",LocalDate.of(2026,11,1),List.of(),1),"test");
+        var input=ReceiptInputTest.read(ReceiptInputTest.draft(receiptId));
+        repository.save(receiptId,input.transaction(),input.metadata(),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        var before=repository.findById(receiptId).orElseThrow();var snapshot=ReceiptSnapshot.from(before.transaction());
+        assertThrows(ConcurrentModificationException.class,()->platform.linkShoppingPlanReceipt(id,1,receiptId,before.revision()+1,"test"));
+        assertNull(planRepository.findById(id).orElseThrow().purchasedReceiptId());
+        platform.linkShoppingPlanReceipt(id,1,receiptId,before.revision(),"test");
+        var linked=planRepository.findById(id).orElseThrow();assertEquals(receiptId,linked.purchasedReceiptId());assertEquals(2,linked.revision());
+        assertEquals(receiptId,planRepository.findByRevision(id,2).orElseThrow().purchasedReceiptId());
+        var after=repository.findById(receiptId).orElseThrow();assertEquals(before.revision(),after.revision());assertEquals(snapshot,ReceiptSnapshot.from(after.transaction()));assertEquals(before.metadata(),after.metadata());
+        assertThrows(ConcurrentModificationException.class,()->platform.linkShoppingPlanReceipt(id,1,receiptId,before.revision(),"test"));
+    }
+    @Test void existingReceiptConnectionIsOwnerOnlyRevisionedAndIdempotent() throws Exception {
+        server.stop(0);UUID planId=UUID.randomUUID(),receiptId=UUID.randomUUID();var calls=new java.util.concurrent.atomic.AtomicInteger();
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{
+            if(!method.getName().equals("linkShoppingPlanReceipt"))throw new AssertionError(method.getName());
+            assertEquals(planId,args[0]);assertEquals(3L,args[1]);assertEquals(receiptId,args[2]);assertEquals(2L,args[3]);assertEquals("api-owner",args[4]);calls.incrementAndGet();return null;
+        });
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        String path="/shopping-plans/"+planId+"/receipt-link",body=Json.object(Map.of("receiptId",receiptId,"receiptRevision","2")),key=UUID.randomUUID().toString();
+        assertEquals(403,call("POST",path,"reader",body,key,"3").statusCode());assertEquals(0,calls.get());
+        assertEquals(200,call("POST",path,"owner",body,key,"3").statusCode());assertEquals(200,call("POST",path,"owner",body,key,"3").statusCode());assertEquals(1,calls.get());
+    }
     @Test void platformWorkspaceAccountsAndPayoutsUseInjectedInterfaceWithoutPostgres() throws Exception {
         server.stop(0);
         var payouts = new HashMap<UUID, ProviderRedemption>();
@@ -236,7 +263,7 @@ class CouponApiServiceTest {
     @Test void shoppingNotebookPreviewAndSourceSaveAreIsolatedFromReceipts() throws Exception {
         String text="Colgate 6 x2\n5 off 2\nearn 5 RR\nCheck my offer";
         assertEquals(403,call("POST","/shopping-plans/import-preview","reader",Json.object(Map.of("text",text)),null,null).statusCode());
-        var imported=call("POST","/shopping-plans/import-preview","owner",Json.object(Map.of("text",text)),null,null);
+        var imported=call("POST","/shopping-plans/import-preview","owner",Json.object(Map.of("text",text,"reader","ocr")),null,null);
         assertEquals(200,imported.statusCode(),imported.body());
         var fields=Json.parseObject(imported.body());
         var scenario=new LinkedHashMap<String,Object>();

@@ -492,6 +492,7 @@ public final class ReceiptEntryApp {
         }
         Draft draft=new Draft(imported.importId());draft.imported=true;draft.actor="Local owner";
         draft.retailer=imported.retailer()==null?questions(()->required("Missing retailer — verify from image")):imported.retailer();
+        draft.storeReference=imported.storeReference();draft.transactionNumber=imported.transactionNumber();draft.registerNumber=imported.registerNumber();draft.printedTotalBasis=imported.printedTotalBasis();draft.paymentEntryStatus=imported.paymentEntryStatus();
         draft.number=imported.receiptNumber();draft.date=imported.purchaseDate();draft.time=imported.printedTime();draft.purchaseChannel=imported.purchaseChannel();
         draft.tax=imported.tax()==null?questions(()->amount("Missing sales tax — enter the verified amount",false,false)):imported.tax();
         draft.total=imported.printedTotal()==null?questions(()->amount("Missing printed total — enter the verified amount",false,false)):imported.printedTotal();
@@ -1215,14 +1216,14 @@ public final class ReceiptEntryApp {
                     if(action.equals("DISCOUNTS")) for(var item:editDraft.items) mergedKinds.putAll(item.kinds());
                     obs = new ReceiptObservations(obs.purchaseDate(),obs.printedTime(),obs.earnings(),obs.unidentifiedRR(),obs.walgreensCash(),obs.savings(),mergedKinds,obs.receiptSavingValuePercent(),obs.promotionLinks(),obs.worksheet(),obs.footerStatus());
                     if(action.equals("DETAILS")) editedMetadata = new ReceiptMeta(editDraft.retailer,editDraft.number,
-                            metadata == null ? null : metadata.purchasedAt(),metadata == null ? null : metadata.storeReference(),editDraft.purchaseChannel);
+                            metadata == null ? null : metadata.purchasedAt(),metadata == null ? null : metadata.storeReference(),editDraft.purchaseChannel,metadata==null?ReceiptMeta.PrintedTotalBasis.UNKNOWN:metadata.printedTotalBasis(),metadata==null?ReceiptMeta.PaymentEntryStatus.UNKNOWN:metadata.paymentEntryStatus(),metadata==null?ReceiptMeta.ReceiptKind.PURCHASE:metadata.receiptKind(),metadata==null?null:metadata.transactionNumber(),metadata==null?null:metadata.registerNumber());
                 } else switch (action) {
                     case "DETAILS" -> {
                         var oldMetadata = metadata;
                         var entered = questions(() -> new CorrectionDetails(new ReceiptMeta(required("Retailer"), optional("Receipt number (blank unknown)"),
                                 oldMetadata == null ? null : oldMetadata.purchasedAt(), oldMetadata == null ? null : oldMetadata.storeReference(),oldMetadata==null?ReceiptMeta.PurchaseChannel.UNKNOWN:oldMetadata.purchaseChannel(),
                                 oldMetadata==null?ReceiptMeta.PrintedTotalBasis.UNKNOWN:oldMetadata.printedTotalBasis(),
-                                oldMetadata==null?ReceiptMeta.PaymentEntryStatus.UNKNOWN:oldMetadata.paymentEntryStatus()),
+                                oldMetadata==null?ReceiptMeta.PaymentEntryStatus.UNKNOWN:oldMetadata.paymentEntryStatus(),oldMetadata==null?ReceiptMeta.ReceiptKind.PURCHASE:oldMetadata.receiptKind(),oldMetadata==null?null:oldMetadata.transactionNumber(),oldMetadata==null?null:oldMetadata.registerNumber()),
                                 date("Receipt date (blank unknown)"), receiptTime()));
                         editedMetadata = entered.metadata();
                         LocalDate date = entered.date();
@@ -3322,7 +3323,7 @@ public final class ReceiptEntryApp {
         private boolean imported;
         private int entryStage=8;
         private final List<ReceiptImportDraft.ReviewIssue> importIssues=new ArrayList<>();
-        private String number, time, retailer, actor;
+        private String number, time, retailer, actor, storeReference,transactionNumber,registerNumber;
         private ReceiptMeta.PurchaseChannel purchaseChannel=ReceiptMeta.PurchaseChannel.UNKNOWN;
         private ReceiptMeta.PrintedTotalBasis printedTotalBasis=ReceiptMeta.PrintedTotalBasis.UNKNOWN;
         private ReceiptMeta.PaymentEntryStatus paymentEntryStatus=ReceiptMeta.PaymentEntryStatus.UNKNOWN;
@@ -3346,6 +3347,7 @@ public final class ReceiptEntryApp {
 
         Draft copy() { Draft result = new Draft(id); result.restore(this); return result; }
         void restore(Draft from) {
+            storeReference=from.storeReference;transactionNumber=from.transactionNumber;registerNumber=from.registerNumber;
             imported=from.imported;entryStage=from.entryStage;purchaseChannel=from.purchaseChannel;printedTotalBasis=from.printedTotalBasis;paymentEntryStatus=from.paymentEntryStatus;
             importIssues.clear();importIssues.addAll(from.importIssues);
             sharedKinds.clear();sharedKinds.putAll(from.sharedKinds);
@@ -3378,7 +3380,7 @@ public final class ReceiptEntryApp {
         }
 
         /** No combined timestamp is invented from partial date/time observations. */
-        ReceiptMeta metadata() { return new ReceiptMeta(retailer, number, date==null?null:ReceiptTimeInput.parse(time).map(date::atTime).orElse(null), null,purchaseChannel,printedTotalBasis,paymentEntryStatus); }
+        ReceiptMeta metadata() { return new ReceiptMeta(retailer, number, date==null?null:ReceiptTimeInput.parse(time).map(date::atTime).orElse(null), storeReference,purchaseChannel,printedTotalBasis,paymentEntryStatus,ReceiptMeta.ReceiptKind.PURCHASE,transactionNumber,registerNumber); }
 
         /** Creates a reviewable receipt and validates relationships before save. */
         ReceiptRecord receipt() {

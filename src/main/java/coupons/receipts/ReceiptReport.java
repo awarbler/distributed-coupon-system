@@ -85,6 +85,11 @@ public final class ReceiptReport {
         rule(output);
         output.println(receipt.metadata() == null ? "RECEIPT" : title(receipt.metadata().retailer()));
         output.println("Receipt: " + (receipt.metadata() == null ? "unknown" : receipt.metadata().receiptNumber()));
+        if(receipt.metadata()!=null) {
+            if(receipt.metadata().storeReference()!=null)output.println(receipt.metadata().storeReference());
+            if(receipt.metadata().transactionNumber()!=null)output.println("Transaction number: "+receipt.metadata().transactionNumber());
+            if(receipt.metadata().registerNumber()!=null)output.println("Register number: "+receipt.metadata().registerNumber());
+        }
         output.println("Date: " + (observations.purchaseDate() == null ? "unknown" : observations.purchaseDate())
                 + " | Time: " + ReceiptTimeInput.display(observations.printedTime()));
         rule(output);

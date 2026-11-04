@@ -18,7 +18,7 @@ final class ShoppingNoteInput {
     private static final Pattern SPEND=pattern("^spend\\s*\\$?"+AMOUNT+"\\s*,?\\s*(?:get|earn|receive)\\s*\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*[.!]?$");
     private static final Pattern MFC=pattern("\\$\\s*"+AMOUNT+"\\s*(?:MFC|manufacturer\\s+coupons?)\\b");
     private static final Pattern MFC_LIST=pattern("^use\\s+(?:\\$\\s*"+AMOUNT+"\\s*(?:MFC|manufacturer\\s+coupons?)\\s*[,;+&]?\\s*)+[.]?$");
-    private static final Pattern COUPON=pattern("^(?:use\\s+)?\\$?"+AMOUNT+"\\s*(?:off|/)\\s*([1-9][0-9]*)(.*)$");
+    private static final Pattern COUPON=pattern("^(?:use\\s+(?:the\\s+)?)?\\$?"+AMOUNT+"\\s*(?:off|/)\\s*([1-9][0-9]*)(.*)$");
     private static final Pattern REWARD=pattern("^(?:earn|get|receive)\\s+\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*$");
     private static final Pattern REWARD_VALUE=pattern("^\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*$");
     private static Pattern pattern(String regex){return Pattern.compile(regex,Pattern.CASE_INSENSITIVE);}
@@ -83,6 +83,7 @@ final class ShoppingNoteInput {
         var promotions=new ArrayList<ShoppingPlan.ScenarioPromotion>();var unresolved=new ArrayList<String>();
         var manufacturerLines=new HashSet<String>();
         String pendingBuyReward=null;
+        String pendingSale=null;
         BigDecimal walgreensCashUsed=null;
         boolean advertisedBundle=false;
         var screenshotCoupons=new ArrayList<String>();
@@ -95,6 +96,8 @@ final class ShoppingNoteInput {
         String screenshotProduct=null;
         String normalizedText=Arrays.stream(text.split("\\R")).map(ShoppingNoteInput::plainText).collect(java.util.stream.Collectors.joining("\n"));
         normalizedText=joinPosterProducts(normalizedText);
+        normalizedText=pattern("register\\s+rewards?").matcher(normalizedText).replaceAll("RR");
+        normalizedText=pattern("(?im)^pay (.*?)\\s*&\\s*get ").matcher(normalizedText).replaceAll("Pay $1 get ");
         normalizedText=pattern("(?im)(register|in[ -]?store)\\s*\\n\\s*(rewards?)\\b").matcher(normalizedText).replaceAll("$1 $2");
 
         normalizedText=pattern("(?im)(\\$"+AMOUNT+")\\s*\\n\\s*(RR|register rewards?|in[ -]?store rewards?)\\b").matcher(normalizedText).replaceAll("$1 $3");
@@ -155,6 +158,19 @@ final class ShoppingNoteInput {
             var buyReward=pattern("^buy\\s+([1-9][0-9]*)\\s+get\\s+\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*[.!]?$").matcher(line);
             if(buyReward.matches()){pendingBuyReward=line;continue;}
             var pending=pendingBuyReward==null?null:pattern("^buy\\s+([1-9][0-9]*)\\s+get\\s+\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*[.!]?$").matcher(pendingBuyReward);
+            var listedPrices=pattern("^buy\\s+\\(?([1-9][0-9]*)\\)?\\s+(.+?)\\s*\\((\\$[0-9., $]+)\\)\\s*$").matcher(line);
+            if(listedPrices.matches()) {
+                int count=Integer.parseInt(listedPrices.group(1));var prices=pattern("\\$"+AMOUNT).matcher(listedPrices.group(3));
+                var values=new ArrayList<BigDecimal>();while(prices.find())values.add(new BigDecimal(prices.group(1)));
+                if(values.size()!=count){unresolved.add(line+" — quantity does not match listed prices.");continue;}
+                var ids=new ArrayList<UUID>();
+                for(var value:values){current=UUID.randomUUID();ids.add(current);items.add(new ShoppingPlan.Line(current,listedPrices.group(2),null,null,value,1));}
+                if(pending!=null&&pending.matches()) {
+                    promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),pendingBuyReward,rewardType(pending.group(3)),new BigDecimal(pending.group(2)),Integer.parseInt(pending.group(1)),BigDecimal.ZERO,"BEFORE_COUPONS",true,ids));pendingBuyReward=null;
+                }
+                if(pendingSale!=null){unresolved.add(pendingSale+" — explicit listed prices preserved; sale discount is not applied twice.");pendingSale=null;}
+                continue;
+            }
             var standalone=pattern("^([\\p{L}].*?)\\s+\\$"+AMOUNT+"\\s+(?:(each|ea[.]?)|(bogo\\s+50\\s*%\\s+off))\\s*$").matcher(line);
             if(pending!=null&&pending.matches()&&standalone.matches()){
                 current=UUID.randomUUID();int count=Integer.parseInt(pending.group(1));
@@ -162,12 +178,14 @@ final class ShoppingNoteInput {
                 promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),pendingBuyReward,rewardType(pending.group(3)),new BigDecimal(pending.group(2)),count,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(current)));
                 pendingBuyReward=null;continue;
             }
+
             if(pendingBuyReward!=null){unresolved.add(pendingBuyReward);pendingBuyReward=null;}
             var payReward=pattern("^pay\\s+\\$?"+AMOUNT+"\\s+get\\s+\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*[.!]?$").matcher(line);
             if(current!=null&&payReward.matches()){
                 BigDecimal amount=new BigDecimal(payReward.group(2));String type=rewardType(payReward.group(3));UUID item=current;
-                if(promotions.stream().noneMatch(p->p.rewardType().equals(type)&&p.rewardAmount().compareTo(amount)==0&&p.lineIds().equals(List.of(item))))
-                    promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,type,amount,0,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(current)));
+                var linked=items.stream().filter(i->i.name().equals(items.stream().filter(v->v.id().equals(item)).findFirst().orElseThrow().name())).map(ShoppingPlan.Line::id).toList();
+                if(promotions.stream().noneMatch(p->p.rewardType().equals(type)&&p.rewardAmount().compareTo(amount)==0&&new HashSet<>(p.lineIds()).equals(new HashSet<>(linked))))
+                    promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,type,amount,0,BigDecimal.ZERO,"BEFORE_COUPONS",true,linked));
                 unresolved.add(line+" (advertised checkout amount; compare with the calculated total)");continue;
             }
 
@@ -207,6 +225,7 @@ final class ShoppingNoteInput {
                 continue;}
 
             var buyGet=BUY_GET.matcher(line);
+            if(current==null&&buyGet.matches()){pendingSale=line;continue;}
             if(current!=null&&buyGet.matches()) {
                 int index=items.size()-1;var old=items.get(index);
                 items.set(index,new ShoppingPlan.Line(old.id(),old.name(),old.sku(),old.regular(),old.sale(),old.quantity(),old.memberRewardRate(),new ShoppingPlan.PriceRule(buyGet.group(1).equalsIgnoreCase("free")?"BOGO_FREE":"BOGO_HALF",null)));
@@ -277,6 +296,12 @@ final class ShoppingNoteInput {
 
             var screenshotCoupon=pattern("^[=—–\\-\\s]*\\$"+AMOUNT+"\\s+off\\s+([1-9][0-9]*)\\s*[;:]?$").matcher(line);
             if(screenshotCoupon.matches()){screenshotCoupons.add(screenshotCoupon.group(1));screenshotCouponQuantities.add(Integer.parseInt(screenshotCoupon.group(2)));continue;}
+            var namedSlash=pattern("^use\\s+(?:the\\s+)?\\$"+AMOUNT+"\\s*/\\s*([1-9][0-9]*)\\s+(.+?)(?:\\s+digital)?\\s+coupon[.!]?$").matcher(line);
+            if(namedSlash.matches()) {
+                String brand=namedSlash.group(3).toLowerCase(Locale.ROOT);
+                var ids=items.stream().filter(i->i.name().toLowerCase(Locale.ROOT).contains(brand)).map(ShoppingPlan.Line::id).toList();
+                if(!ids.isEmpty()){coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,new BigDecimal(namedSlash.group(1)),Integer.parseInt(namedSlash.group(2)),ids,null));continue;}
+            }
             var coupon=COUPON.matcher(line);
             if(current!=null&&coupon.matches()) {
                 coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,new BigDecimal(coupon.group(1)),Integer.parseInt(coupon.group(2)),List.of(current),null));continue;

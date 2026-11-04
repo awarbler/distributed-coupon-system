@@ -86,6 +86,35 @@ class ReceiptImportTest {
     private String run(InMemoryTransactionRepository repo,String script) {
         var bytes=new ByteArrayOutputStream();new ReceiptEntryApp(new Scanner(script),new PrintStream(bytes),repo).run();return bytes.toString();
     }
+    @Test void readsReceiptHeaderReferencesAndOneRegularPriceBasedStorePromotion() throws Exception {
+        String source=manifest().replace("item.1.enteredUnitPrice=5", "item.1.storePromotion=1\nitem.1.printedLineTotal=4\nitem.1.returnValue=2.00\nitem.1.taxCode=A\nitem.1.eligibility=OTC")+"""
+                receipt.storeReference=123 Example Street
+                receipt.transactionNumber=3013
+                receipt.registerNumber=0023
+                receipt.printedTotalBasis=BEFORE_PAYMENT_FUNDING
+                receipt.paymentEntryStatus=COMPLETE
+                receipt.subtotal=4
+                receipt.coinRounding=-0.03
+                receipt.cashTender=1.00
+                receipt.change=0.05
+                receipt.cashierId=992
+                """;
+        var draft=ReceiptImportReader.read(file(source));
+        assertEquals("3013",draft.transactionNumber());assertEquals("0023",draft.registerNumber());
+        assertEquals("123 Example Street",draft.storeReference());
+        assertEquals(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,draft.printedTotalBasis());
+        assertEquals(new BigDecimal("5"),draft.items().getFirst().enteredUnitPrice());
+        assertEquals("2.00",draft.items().getFirst().returnValue());
+        assertEquals("-0.03",draft.printedReferences().get("receipt.coinRounding"));
+        assertEquals(1,draft.discounts().stream().filter(d->d.kind()==DiscountKind.SALE_PROMOTION).count());
+        assertEquals("Shampoo Store Promo",draft.discounts().getLast().application().getPrintedLabel());
+    }
+    @Test void rejectsAnItemPromotionRepeatedAsAnExplicitPromotionCoupon() throws Exception {
+        String source=manifest().replace("item.1.enteredUnitPrice=5","item.1.storePromotion=1")
+            .replace("coupon.1.kind=MANUFACTURER","coupon.1.kind=SALE_PROMOTION");
+        assertThrows(IllegalArgumentException.class,()->ReceiptImportReader.read(file(source)));
+    }
+
     @Test void importedReceiptEntryLetsOwnerSelectRegisterRewardPrinted() throws Exception {
         var path=file(manifest());var repo=new InMemoryTransactionRepository();
         String output=run(repo,"I\n"+path+"\nREBATES\ny\nRegister Reward\nPrinted Pantene reward\n3\n0\n4\n5\n\n\n\nn\nSAVE\n11\n");
@@ -110,10 +139,11 @@ class ReceiptImportTest {
         assertTrue(repo.recordedRewards().isEmpty());assertTrue(repo.accountBalances().openings().isEmpty());
     }
     @Test void approvedImportSavesEvidenceHistoryAndBalancesOnceAcrossRestartAndReimport() throws Exception {
-        var path=file(manifest());var storage=dir.resolve("receipts.bin");UUID id=ReceiptImportReader.read(path).importId();
+        var path=file(manifest()+"receipt.storeReference=123 Example Street\nreceipt.transactionNumber=1234\nreceipt.registerNumber=0023\n");var storage=dir.resolve("receipts.bin");UUID id=ReceiptImportReader.read(path).importId();
         try(var repo=InMemoryTransactionRepository.openLocal(storage)) {
             String output=run(repo,"IMPORT\n"+path+"\nSAVE\n9\n");assertTrue(output.contains("Save result:"),output);
             var saved=repo.findById(id).orElseThrow();assertEquals(1,repo.history().findByReceiptId(id).size());
+            assertEquals("1234",saved.metadata().transactionNumber());assertEquals("0023",saved.metadata().registerNumber());assertEquals("123 Example Street",saved.metadata().storeReference());
             assertEquals(3,saved.evidenceIds().size()); // Image, original manifest, approval audit.
             assertArrayEquals(image(),repo.evidence().findById(saved.evidenceIds().get(0)).orElseThrow().getContent());
             var tx=saved.transaction();assertEquals(new BigDecimal("5"),new TransactionCalculator().calculateExpectedCheckoutAmount(tx));

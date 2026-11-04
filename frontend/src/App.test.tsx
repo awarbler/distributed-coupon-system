@@ -103,7 +103,7 @@ describe('potential promotion progress', () => {
     data.deals = [{ dealId: 'deal-progress', title: 'Dove reward', interpretedTerms: 'Buy two', retailer: 'Walgreens', validFrom: '2026-10-18', validThrough: '2026-10-24', sourceArtifactIds: [], revision: '1' }]
     const onEdit = vi.fn(); const user = userEvent.setup()
     render(<WorkspacePages data={data} page="shopping" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={onEdit} onAddReceipt={vi.fn()} onCheckout={vi.fn()} />)
-    await user.click(screen.getByRole('button', { name: 'View' }))
+    await user.click(screen.getByRole('button', { name: 'View', expanded:false }))
     return { user, onEdit, row }
   }
   it('retains an incomplete offer and preselects its deal when adding an item', async () => {
@@ -164,17 +164,15 @@ it('shows the available total across all accounts without changing the four-acco
 
 it('keeps the welcome screen original with one workspace button and its visible token label',()=>{
  render(<App/>);expect(screen.getAllByRole('button',{name:'Open my workspace'})).toHaveLength(1)
- expect(screen.queryByRole('group',{name:'Top form actions'})).not.toBeInTheDocument()
  expect(screen.getByLabelText('API access token').closest('label')).not.toHaveAttribute('data-placeholder-field')
 })
 
-it('keeps Shopping & Deals and its plan form in their original label and action layout',async()=>{
+it('keeps shopping controls labelled and opens the quick-deal form',async()=>{
  const {user}=await connect();await user.click(screen.getByRole('link',{name:'Shopping & Deals'}))
  expect(screen.getByRole('heading',{name:'Shopping & Deals'})).toBeVisible()
  expect(screen.getByLabelText('Shopping week').closest('label')).not.toHaveAttribute('data-placeholder-field')
  expect(screen.getByLabelText('Weekly store').closest('label')).not.toHaveAttribute('data-placeholder-field')
- await user.click(screen.getByRole('button',{name:'New plan'}))
- expect(screen.queryByRole('group',{name:'Top form actions'})).not.toBeInTheDocument()
+ await user.click(screen.getByRole('button',{name:'+ Quick deal'}))
  expect(screen.getByLabelText('Plan name').closest('label')).not.toHaveAttribute('data-placeholder-field')
 })
 

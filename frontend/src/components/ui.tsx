@@ -8,7 +8,7 @@ export function InfoHelp({children}:{children:ReactNode}) {
 }
 
 /** The same live form commands are accessible at either end of a long form. */
-export function FormActions({children,topLeading}:{children:ReactNode;topLeading?:ReactNode}) {
+export function FormActions({children,topLeading,topChildren}:{children:ReactNode;topLeading?:ReactNode;topChildren?:ReactNode}) {
  const ref=useRef<HTMLDivElement>(null),[target,setTarget]=useState<HTMLDivElement|null>(null)
  useLayoutEffect(()=>{const node=ref.current,form=node?.closest('form');if(!node||!form||node.closest('[data-original-shopping="true"]')||form.querySelector('.receipt-edit-toolbar'))return
   const groups=Array.from(form.querySelectorAll('.form-actions:not(.form-actions-top)')).filter(n=>n.closest('form')===form)
@@ -21,7 +21,7 @@ export function FormActions({children,topLeading}:{children:ReactNode;topLeading
   if(node.type==='button'){const text=Children.toArray(node.props.children).filter(c=>typeof c==='string'||typeof c==='number').join(' ').trim();return cloneElement(node,{'aria-label':`Top: ${node.props['aria-label']??text??'Form action'}`,id:undefined})}
   return node.props.children?cloneElement(node,{},top(node.props.children)):node
  })}
- return <>{target&&createPortal(<>{topLeading}{top(children)}</>,target)}<div ref={ref} className="form-actions">{children}</div></>
+ return <>{target&&createPortal(<>{topLeading}{top(topChildren??children)}</>,target)}<div ref={ref} className="form-actions">{children}</div></>
 }
 
 export function Empty({ title, children, action }: { title: string; children?: ReactNode; action?: ReactNode }) {
@@ -55,6 +55,10 @@ export function PageHeader({ title, subtitle, action }: { title: string; subtitl
 }
 export function Badge({ children }: { children: ReactNode }) { return <span className="badge">{children}</span> }
 export function LinkButton({ children, onClick }: { children: ReactNode; onClick: () => void }) { return <button className="text-button" onClick={onClick}>{children}<ArrowRight size={15} /></button> }
+// Overlapping dialogs may unmount in any order. Only the final one releases scrolling.
+let modalScrollLocks = 0
+let bodyOverflowBeforeModals = ''
+
 export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null)
   const closeRef=useRef(onClose)
@@ -70,10 +74,17 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
       if (e.key === 'Tab') { const list = controls(); const first = list[0]; const last = list.at(-1); if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus() } else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus() } }
     }
     document.addEventListener('keydown', key)
-    const overflow = document.body.style.overflow; document.body.style.overflow = 'hidden'
-    return () => { document.removeEventListener('keydown', key); document.body.style.overflow = overflow; previous?.focus() }
+    if (modalScrollLocks++ === 0) {
+      bodyOverflowBeforeModals = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+    }
+    return () => {
+      document.removeEventListener('keydown', key)
+      if (--modalScrollLocks === 0) document.body.style.overflow = bodyOverflowBeforeModals
+      if (previous?.isConnected) previous.focus()
+    }
   }, [])
-  return <div className="modal-shade"><div ref={ref} className="modal" role="dialog" aria-modal="true" aria-label={title}><div className="modal-heading"><h2>{title}</h2><button className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
+  return <div className="modal-shade"><div ref={ref} className="modal" role="dialog" aria-modal="true" aria-label={title}><div className="modal-heading"><h2>{title}</h2><button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20} /></button></div>{children}</div></div>
 }
 export function Loading() { return <div className="loading" role="status"><span className="spinner" />Loading your workspace…</div> }
 

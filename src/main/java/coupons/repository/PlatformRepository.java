@@ -93,6 +93,7 @@ public interface PlatformRepository {
             UUID deal, List<UUID> coupons, long expected, String actor);
 
     void deleteShoppingPlan(UUID id, long expected, String actor);
+    void linkShoppingPlanReceipt(UUID planId,long planRevision,UUID receiptId,long receiptRevision,String actor);
 
     void deleteCatalogRecord(boolean deal, UUID id, long expected, String actor);
 

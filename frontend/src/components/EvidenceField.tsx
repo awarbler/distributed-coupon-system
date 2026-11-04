@@ -2,13 +2,31 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 export interface Upload { mediaType: string; contentBase64: string }
 /** Shared drop surface; the existing upload handler owns validation and submission. */
-export function FileDropZone({children,onFiles,disabled=false,label='Attachment drop area',multiple=false}:{children:ReactNode;onFiles:(files:FileList)=>void;disabled?:boolean;label?:string;multiple?:boolean}) {
-  const [dragging,setDragging]=useState(false)
+export function FileDropZone({children,onFiles,disabled=false,label='Attachment drop area',multiple=false}:{children:ReactNode;onFiles:(files:FileList|File[])=>void;disabled?:boolean;label?:string;multiple?:boolean}) {
+  const [dragging,setDragging]=useState(false),[dropError,setDropError]=useState('')
+  const blocked=(element:HTMLElement)=>disabled||!!element.closest('fieldset:disabled')
   return <div className={`screenshot-drop-zone${dragging?' dragging':''}`} role="group" aria-label={label} aria-disabled={disabled}
-    onDragOver={e=>{e.preventDefault();const blocked=disabled||!!e.currentTarget.closest('fieldset:disabled');e.dataTransfer.dropEffect=blocked?'none':'copy';setDragging(!blocked)}}
+    onDragEnter={e=>{e.preventDefault();e.stopPropagation();setDragging(!blocked(e.currentTarget))}}
+    onDragOver={e=>{e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect=blocked(e.currentTarget)?'none':'copy';setDragging(!blocked(e.currentTarget))}}
     onDragLeave={e=>{if(!(e.relatedTarget instanceof Node)||!e.currentTarget.contains(e.relatedTarget))setDragging(false)}}
-    onDrop={e=>{e.preventDefault();setDragging(false);if(disabled||e.currentTarget.closest('fieldset:disabled'))return;if(e.dataTransfer.files.length)onFiles(e.dataTransfer.files)}}>
+    onDropCapture={e=>{
+      e.preventDefault();e.stopPropagation();setDragging(false);setDropError('')
+      if(blocked(e.currentTarget))return
+      const files=Array.from(e.dataTransfer.files??[])
+      if(!files.length)for(const item of Array.from(e.dataTransfer.items??[])){if(item.kind==='file'){const file=item.getAsFile();if(file)files.push(file)}}
+      if(files.length){
+        // Keep the native chooser honest when the custom drop surface handles the event.
+        const input=e.currentTarget.querySelector<HTMLInputElement>('input[type="file"]')
+        if(input)try{
+          if(e.dataTransfer.files?.length)input.files=e.dataTransfer.files
+          else {const transfer=new DataTransfer();for(const file of files)transfer.items.add(file);input.files=transfer.files}
+        }catch { /* The attached-file list still reports accepted files on older browsers. */ }
+        onFiles(files)
+      }
+      else setDropError('The browser received no image file from this drop. In Photos, drag the photo itself, or use Choose Files → Photo Library. You can also export the photo to Downloads and drop that file.')
+    }}>
     <p>Drag and drop {multiple?'images or PDFs':'an image or PDF'} here, or choose {multiple?'files':'a file'} below.</p>{children}
+    {dropError&&<p role="alert">{dropError}</p>}
   </div>
 }
 

@@ -10,4 +10,7 @@ if [ ! -f target/classes/coupons/api/CouponApiServer.class ]; then
   echo "Build first: mvn -q -DskipTests package dependency:copy-dependencies" >&2
   exit 1
 fi
+if [ -x .local-reader/runtime/ollama ]; then
+  ./start-local-reader.sh --background
+fi
 exec java -cp 'target/classes:target/dependency/*' coupons.api.CouponApiServer

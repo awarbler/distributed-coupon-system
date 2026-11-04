@@ -1,3 +1,4 @@
+import { StoreInput } from '../../components/StoreInput'
 import { FormActions } from '../../components/ui'
 import { useState } from 'react'
 import type { FormEvent } from 'react'
@@ -75,7 +76,7 @@ export function EditDialog({ edit, api, data, onClose, onSaved, onReview, onEdit
     />
   </label>
 )}
-      {edit.kind === 'plan' && <div className="form-grid"><label>Store <span>(optional)</span><input value={retailer} onChange={e => setRetailer(e.target.value)} placeholder="Store name" /></label><label>Shopping date <span>(optional)</span><input type="date" value={when} onChange={e => setWhen(e.target.value)} /></label></div>}
+      {edit.kind === 'plan' && <div className="form-grid"><StoreInput label="Store (optional)" value={retailer} onChange={setRetailer}/><label>Shopping date <span>(optional)</span><input type="date" value={when} onChange={e => setWhen(e.target.value)} /></label></div>}
       {edit.kind === 'purchase' && <>
         <div className="product-identity-grid">
           <label>Product description <span>(Required)</span>

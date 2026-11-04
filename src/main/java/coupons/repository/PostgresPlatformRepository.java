@@ -540,7 +540,23 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         return repo.update(next, expected, actor, "Web plan item update");
     }
 
-    /** Permanently remove a plan and all its planning-only revisions and checkout drafts. */
+    /** Atomically associate an existing receipt; only the plan and its history change. */
+    @Override public void linkShoppingPlanReceipt(UUID planId,long planRevision,UUID receiptId,long receiptRevision,String actor) {
+        PostgresRepositorySupport.requireActor(actor,"Linked by");
+        if(planRevision<1||receiptRevision<1)throw new IllegalArgumentException("Select current plan and receipt revisions.");
+        transaction(db,c->{
+            PostgresReceiptState.lock(c);
+            try(var p=c.prepareStatement("SELECT status,revision FROM receipt_current WHERE transaction_id=? FOR UPDATE")) {
+                p.setObject(1,receiptId);try(var r=p.executeQuery()) {
+                    if(!r.next())throw new NoSuchElementException("Receipt no longer exists.");
+                    if(!r.getString(1).equals("ACTIVE"))throw new IllegalArgumentException("Connect an active receipt.");
+                    if(r.getLong(2)!=receiptRevision)throw new ConcurrentModificationException("Receipt changed. Refresh before connecting it.");
+                }
+            }
+            PostgresShoppingPlanRepository.markPurchased(c,planId,planRevision,receiptId,actor);
+            return null;
+        });
+    }
     public void deleteShoppingPlan(UUID id, long expected, String actor) {
         PostgresRepositorySupport.requireActor(actor, "Deleted by");
         PostgresRepositorySupport.transaction(db, c -> {

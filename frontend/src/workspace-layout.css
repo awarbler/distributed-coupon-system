@@ -35,7 +35,7 @@
 .shopping-week-controls .shopping-week-date { height:44px; min-height:44px; text-align:center; line-height:44px; }
 .shopping-week-date::-webkit-date-and-time-value { display:block; width:100%; text-align:center; margin:0; }
 .shopping-week-date::-webkit-datetime-edit { display:inline-flex; align-items:center; padding:0; height:100%; }
-.shopping-plan-columns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:24px; }
+.shopping-plan-columns { display:grid; grid-template-columns:minmax(0,1fr); align-items:start; gap:24px; }
 .shopping-plan-columns > :last-child { grid-column:1 / -1; }
 .section-navigation { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:24px; }
 .section-navigation a { text-decoration:none; }
@@ -115,10 +115,10 @@
 .shopping-week-overview { align-items:stretch; gap:24px; }
 .shopping-week-overview > .panel { height:100%; }
 .shopping-week-overview .product-entry-actions {
- display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px;
+ display:flex; flex-wrap:wrap; gap:12px;
 }
 .shopping-week-overview .product-entry-actions > button {
- width:100%; margin:0; white-space:normal;
+ width:auto; margin:0; white-space:normal;
 }
 .shopping-plan-columns { align-items:stretch; }
 .shopping-plan-columns > div:first-child { display:flex; min-width:0; }
@@ -138,3 +138,200 @@
  .shopping-plan-columns > .section-disclosure > summary { padding:16px; min-height:57px; }
  .shopping-plan-columns > .section-disclosure > .disclosure-body { padding:0 16px 16px; }
 }
+
+/* Shopping toolbar and section cards share the active-plan presentation. */
+.shopping-week-toolbar { display:grid; grid-template-columns:max-content minmax(0,1fr); align-items:end; gap:16px; }
+.shopping-week-toolbar > p { grid-column:1 / -1; }
+.shopping-week-toolbar .shopping-week-controls { margin:0; }
+.shopping-week-toolbar .product-entry-actions { margin:0; align-items:center; }
+.weekly-section { background:var(--color-surface,#fff); border:1px solid #e1e6dc; border-radius:14px; margin:0; }
+.weekly-section > summary { padding:20px; min-height:65px; }
+.weekly-section > .disclosure-body { padding:0 20px 20px; }
+.filters.shopping-plan-filters { grid-template-columns:minmax(180px,2fr) repeat(3,minmax(110px,1fr)) max-content; }
+.shopping-plan-filters .shopping-plan-search-field { grid-column:auto; }
+.shopping-plan-filter-actions { display:flex; flex-direction:column; gap:6px; align-items:center; }
+.shopping-plan-filter-actions small { font-size:.75rem; }
+@media(max-width:800px) {
+ .shopping-week-toolbar { grid-template-columns:minmax(0,1fr); }
+ .filters.shopping-plan-filters { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .shopping-plan-filters .shopping-plan-search-field { grid-column:1 / -1; }
+}
+@media(max-width:480px) { .filters.shopping-plan-filters { grid-template-columns:minmax(0,1fr); } }
+
+.shopping-card-actions { display:flex; flex-wrap:nowrap; align-items:center; gap:8px; max-width:100%; }
+.shopping-card-actions > button, .shopping-card-actions > .badge { flex-shrink:0; white-space:nowrap; }
+@media(max-width:600px) {
+ .shopping-plan-entry .panel-actions { min-width:0; max-width:100%; width:100%; }
+ .shopping-card-actions { overflow-x:auto; padding-bottom:4px; }
+}
+
+.checkout-order > li { display:grid; grid-template-columns:minmax(0,1fr) max-content max-content; align-items:center; gap:12px 20px; }
+.checkout-order > li > strong { grid-column:1; grid-row:1; }
+.checkout-order > li > p:not(.notice) { grid-column:2; grid-row:1; margin:0; white-space:nowrap; }
+.checkout-order > li > .trip-actions { grid-column:3; grid-row:1; display:flex; flex-wrap:nowrap; margin:0; }
+.checkout-order > li > .trip-actions > button { white-space:nowrap; }
+.checkout-order > li > .notice { grid-column:1 / -1; margin:0; }
+@media(max-width:800px) {
+ .weekly-panel-body .checkout-order { overflow-x:auto; }
+ .checkout-order > li { grid-template-columns:minmax(160px,1fr) max-content max-content; }
+}
+
+.weekly-idea-summary { display:flex; flex-wrap:nowrap; align-items:center; gap:20px; overflow-x:auto; padding-bottom:6px; }
+.weekly-idea-summary > h3 { margin:0; flex:0 0 auto; }
+.weekly-idea-summary > span { flex:0 0 auto; white-space:nowrap; }
+
+.active-plan-card > .panel-head { flex-direction:column; align-items:stretch; }
+.active-plan-card > .panel-head > div { min-width:0; }
+.active-plan-heading { display:flex; align-items:center; gap:24px; flex-wrap:nowrap; overflow-x:auto; }
+.active-plan-heading > span { flex:0 0 auto; white-space:nowrap; }
+.active-plan-heading > span:not(:first-child) { font-size:.9rem; font-weight:400; }
+.weekly-idea-summary > button { flex:0 0 auto; white-space:nowrap; }
+
+/* Consistent product selection for plans, receipts, coupons and rewards. */
+.product-scope { border:0; padding:0; margin:0 0 12px; min-width:0; }
+.product-scope legend { padding:0; margin-bottom:8px; font-weight:600; font-size:.9rem; }
+.product-scope-options { display:flex; flex-wrap:wrap; gap:8px 18px; }
+.product-scope-options > label { display:flex; flex-direction:row; align-items:center; gap:8px; margin:0; cursor:pointer; font-size:.85rem; }
+.product-scope input[type="radio"], .product-choice-label input[type="checkbox"] { width:18px; height:18px; min-width:18px; min-height:18px; margin:0; padding:0; flex:0 0 18px; accent-color:#28654f; }
+.product-selection { min-width:0; }
+.product-selection-list { display:flex; flex-direction:column; gap:8px; }
+.product-choice { border:1px solid #dce4dc; border-radius:10px; background:var(--color-surface,#fff); overflow:hidden; }
+.product-choice:focus-within { outline:2px solid #28654f; outline-offset:2px; }
+.product-choice:has(input:checked) { border-color:#8caa97; background:#f3f8f3; }
+.product-choice-label { display:flex; flex-direction:row; align-items:center; gap:10px; padding:12px; margin:0; cursor:pointer; min-width:0; }
+.product-choice-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.product-choice-name { font-size:.9rem; font-weight:500; line-height:1.45; overflow-wrap:anywhere; }
+.product-choice-copy small { font-size:.75rem; line-height:1.45; color:#617266; overflow-wrap:anywhere; }
+.product-quantity-badge { flex:0 0 auto; padding:4px 8px; border-radius:999px; background:#e8eee8; font-size:.75rem; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.product-choice-extra { border-top:1px solid #e2e9e2; padding:10px 12px; }
+.product-choice-extra > label { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0; font-size:.8rem; }
+.product-choice-extra input[type="number"] { width:90px; max-width:100%; margin:0; }
+.product-selection-count { display:block; margin-top:8px; color:#617266; font-size:.75rem; }
+.product-choice:has(input:disabled) { opacity:.75; }
+.product-choice-name { color:var(--color-text-primary,#24352f); }
+
+.deal-scenario-form .sale-buttons > .product-entry-actions { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; }
+.deal-scenario-form .sale-buttons > .product-entry-actions > button { min-width:0; margin:0; padding-inline:8px; white-space:nowrap; font-size:.8rem; }
+@media(max-width:700px) {
+ .deal-scenario-form .sale-buttons { overflow-x:auto; }
+ .deal-scenario-form .sale-buttons > .product-entry-actions { min-width:640px; }
+}
+
+/* Receipt entry: readable controls and compact product/discount rows. */
+.modal .receipt-entry-form { font-size:16px; line-height:1.5; }
+.modal .receipt-entry-form label { font-size:14px; line-height:1.45; }
+.modal .receipt-entry-form :is(input,select,textarea) {
+ font-size:16px; line-height:1.5; min-height:44px; height:auto;
+ padding:10px 12px; box-sizing:border-box;
+}
+.modal .receipt-entry-form select { padding-right:32px; }
+.modal .receipt-entry-form textarea { overflow:hidden; }
+.modal .receipt-product { padding:18px; margin-block:16px; }
+.modal .receipt-product > summary { font-size:15px; line-height:1.6; margin-bottom:16px; overflow-wrap:anywhere; }
+.modal .receipt-entry-form .item-discount-fields { margin-top:16px; padding-top:16px; border-top:1px solid #dce5d9; }
+.modal .receipt-input-row .item-discount-fields .form-grid {
+ grid-template-columns:minmax(180px,2fr) minmax(140px,1.2fr) minmax(90px,.7fr) minmax(110px,.8fr);
+ gap:12px; align-items:end;
+}
+.modal .item-discount-fields .form-grid > .field-full { grid-column:auto; }
+.modal .receipt-sale-controls .product-entry-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.modal .receipt-sale-controls .product-entry-actions button { padding:8px 12px; font-size:14px; line-height:1.4; }
+@media(max-width:800px) {
+ .modal .receipt-input-row .item-discount-fields .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:480px) {
+ .modal .receipt-input-row .item-discount-fields .form-grid { grid-template-columns:minmax(0,1fr); }
+ .modal .receipt-product { padding:14px; }
+}
+.receipt-product[open] > summary .receipt-collapsed-label,
+.receipt-product:not([open]) > summary .receipt-expanded-label { display:none; }
+
+@media(min-width:801px) {
+ .modal:has(.receipt-entry-form) { max-width:calc(var(--dialog-max-width) + 48px); }
+ .modal .receipt-sale-controls .product-entry-actions {
+  display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; flex-wrap:nowrap;
+ }
+ .modal .receipt-sale-controls .product-entry-actions button {
+  white-space:nowrap; min-width:0; padding:8px 10px;
+ }
+}
+
+.clipped-coupon-field { margin-block:12px; min-width:0; }
+.clipped-coupon-heading { display:flex; align-items:center; gap:8px; margin-bottom:7px; }
+.modal .clipped-coupon-heading > label { margin:0; }
+.clipped-coupon-field > select { width:100%; }
+
+/* Import Review sits outside the entry form; avoid clipped native select text. */
+.modal .receipt-import-review select {
+ box-sizing:border-box; width:100%; height:48px; min-height:48px;
+ padding:0 36px 0 12px; font-size:16px; line-height:normal;
+}
+.modal .receipt-import-review > label { gap:8px; margin-bottom:16px; line-height:1.5; overflow-wrap:anywhere; }
+.receipt-import-review > summary { cursor:pointer; margin-bottom:12px; }
+.receipt-import-review > summary h3 { display:inline; font-size:16px; }
+.item-discount-fields > summary, .payment-entry > summary { cursor:pointer; font-weight:600; margin-bottom:12px; line-height:1.5; }
+.reward-qualification { display:inline-block; margin-top:6px; line-height:1.5; }
+/* Readable selects also outside the main form (receipt type and reward controls). */
+.modal select {
+ box-sizing:border-box; min-height:48px; height:48px;
+ padding:0 36px 0 12px; font-size:16px; line-height:normal;
+}
+.modal .receipt-entry-form select { height:48px; padding-block:0; line-height:normal; }
+.modal .receipt-type-field { margin-block:16px; gap:8px; }
+.reward-fields-grid > .reward-row:empty { display:none; }
+.reward-fields-grid > .reward-status-row { grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) minmax(0,1fr); }
+.receipt-reward > summary { font-weight:600; line-height:1.5; margin-bottom:14px; cursor:pointer; }
+.receipt-reward-fields > details > summary { display:list-item; line-height:1.5; margin-bottom:12px; }
+@media(max-width:600px){.reward-fields-grid > .reward-status-row {grid-template-columns:minmax(0,1fr)}}
+:is(.app-shell,.modal) label > select,
+.modal .receipt-type-field > select {
+ min-height:48px; height:48px; padding:0 36px 0 12px;
+ font-size:16px; line-height:normal; box-sizing:border-box;
+}
+.modal .receipt-reward-fields label > input:not([type="checkbox"]):not([type="radio"]) {
+ min-height:48px; height:48px; padding-block:0; line-height:normal;
+}
+.modal .receipt-reward-fields label > input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="range"]) {
+ height:48px; min-height:48px; padding-block:0; line-height:normal;
+}
+
+/* Approved receipt layout, November 3: section links and readable reward rows. */
+.receipt-section-nav { display:flex; flex-wrap:wrap; gap:8px 24px; border-bottom:1px solid var(--border,#dce3dd); margin:24px 0; padding-bottom:8px; }
+.receipt-section-nav button { border:0; border-radius:0; background:transparent; color:#356652; padding:10px 0; font:inherit; cursor:pointer; border-bottom:2px solid transparent; }
+.receipt-section-nav button:hover, .receipt-section-nav button:focus-visible { border-bottom-color:#287155; }
+.receipt-benefits-heading { margin-top:40px !important; padding-top:24px; border-top:1px solid #dce3dd; margin-bottom:24px !important; }
+.receipt-benefit-entry { padding:18px 0; margin:0 !important; border-bottom:1px solid #e1e7e2; line-height:1.7; }
+.receipt-paid-after-rebates { margin-top:40px !important; padding-top:24px; padding-bottom:16px; border-top:1px solid #dce3dd; }
+.receipt-total-saved-heading { margin-top:40px !important; padding-top:24px; border-top:1px solid #dce3dd; margin-bottom:20px !important; }
+.reward-fields-grid .reward-row:empty { display:none; }
+@media(min-width:801px) {
+ .reward-fields-grid .reward-program-wc-row { grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .receipt-selection-compact .product-choice { display:flex; align-items:center; gap:16px; }
+ .receipt-selection-compact .product-choice-label { flex:1; min-width:0; }
+ .receipt-selection-compact .product-choice-copy { display:flex; flex:1; align-items:center; gap:16px; min-width:0; }
+ .receipt-selection-compact .product-choice-name { flex:1; }
+ .receipt-selection-compact .product-choice-copy small { white-space:nowrap; }
+ .receipt-selection-compact .product-choice-extra { flex:0 0 145px; margin:0; padding:0; }
+}
+
+/* Approved five-column receipt review table. Rewards remain in Benefits. */
+.receipt-review-products th,
+.receipt-review-products td { padding:20px 14px; vertical-align:top; }
+.receipt-review-products tbody tr:nth-child(odd) { background:#f7f9f6; }
+.receipt-review-products td p { margin:0 0 8px; line-height:1.6; }
+.receipt-review-products td p:last-child { margin-bottom:0; }
+
+/* Shared store guide: readable at every width, with optional detailed tables. */
+.written-deal { font-size:16px; line-height:1.7; overflow-wrap:anywhere; }
+.written-deal article { padding:16px 0; border-bottom:1px solid #e1e7e2; }
+.written-deal p { margin:6px 0; }
+.written-checkout { padding:20px 0; }
+.written-pay { font-size:22px; color:var(--color-action-primary); }
+.weekly-idea-summary,.active-plan-heading { flex-wrap:wrap; overflow:visible; }
+.checkout-order > li { grid-template-columns:minmax(0,1fr); }
+.checkout-order > li > strong,.checkout-order > li > p:not(.notice),.checkout-order > li > .trip-actions { grid-column:1; grid-row:auto; white-space:normal; }
+.checkout-order > li > .trip-actions { flex-wrap:wrap; }
+.weekly-planner { background:var(--color-surface); border:1px solid #dce3dc; border-radius:14px; padding:20px; margin-bottom:24px; }
+.weekly-planner > summary { font-size:18px; font-weight:650; margin-bottom:16px; }
+.weekly-planner p { margin:12px 0; }
+.weekly-planner details { margin-top:20px; }

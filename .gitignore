@@ -43,3 +43,6 @@ checkpoint4-review.zip
 
 # Draft specifications, guides and evidence stay local until explicitly approved for publication.
 /docs/
+
+# Local AI runtime, model downloads and logs
+/.local-reader/

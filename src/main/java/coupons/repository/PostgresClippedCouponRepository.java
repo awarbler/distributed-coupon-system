@@ -41,7 +41,7 @@ ClippedCoupon old;try(PreparedStatement p=c.prepareStatement("SELECT payload FRO
         if(terms.minimumPurchase()!=null&&spend.compareTo(terms.minimumPurchase())<0)throw new IllegalArgumentException("Coupon qualifying purchase amount not met.");
         if(terms.offerId()!=null)try(var p=c.prepareStatement("SELECT cc.payload FROM clipped_coupon_redemptions r JOIN clipped_coupon_current cc ON cc.coupon_id=r.coupon_id WHERE r.transaction_id=?")) {
             p.setObject(1,receipt);int used=0;try(var r=p.executeQuery()){while(r.next()){var coupon=PostgresRepositorySupport.deserialize(r.getBytes(1),ClippedCoupon.class);if(coupon.coupon().getTerms()!=null&&terms.offerId().equals(coupon.coupon().getTerms().offerId()))used++;}}
-            if(used>=terms.usageLimit())throw new IllegalArgumentException("Coupon per-transaction usage limit reached.");
+            if(used>=terms.usageLimit())throw new IllegalArgumentException("Coupon per-transaction usage limit reached for \"" + old.coupon().getCouponDescription() + "\". Remove the saved-coupon link and record this printed deduction as an ordinary manufacturer or store coupon.");
         }
     }
     private static void write(Connection c,ClippedCoupon x)throws SQLException{try(PreparedStatement p=c.prepareStatement("UPDATE clipped_coupon_current SET provider=?,external_id=?,status=?,revision=?,payload=? WHERE coupon_id=?")){p.setString(1,x.provider());p.setString(2,x.externalId());p.setString(3,x.status().name());p.setLong(4,x.revision());p.setBytes(5,PostgresRepositorySupport.serialize(x));p.setObject(6,x.couponId());p.executeUpdate();}}

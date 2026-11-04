@@ -207,7 +207,8 @@ class ReceiptInputTest {
             requirement.put("category", category); requirement.put("spendBasis", "UNKNOWN"); input.put("requirement", requirement);
             var earning = EarningInput.read(Json.parseObject(Json.encode(input)));
             assertEquals(category, earning.requirement().category());
-            assertEquals("CANNOT_VERIFY", PromotionQualification.evaluate(earning, read(draft(UUID.randomUUID())).transaction()).status());
+            String expectedStatus = category.equals("Purchase") ? "MET" : "CANNOT_VERIFY";
+            assertEquals(expectedStatus, PromotionQualification.evaluate(earning, read(draft(UUID.randomUUID())).transaction()).status());
             requirement.put("amount", "1");
             assertThrows(IllegalArgumentException.class, () -> EarningInput.read(Json.parseObject(Json.encode(input))));
         }
@@ -365,10 +366,165 @@ class ReceiptCorrectionTest {
         @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");assertEquals(2,items.size());assertEquals("13.49",items.getFirst().get("regular"));assertEquals("",items.getFirst().get("sale"));assertEquals("",items.get(1).get("regular"));
         @SuppressWarnings("unchecked") var ds=(List<Map<String,String>>)result.get("deductions");assertEquals(5,ds.size());assertEquals(2,ds.stream().filter(d->d.get("kind").equals("UNCLASSIFIED")).count());assertEquals(1,ds.stream().filter(d->d.get("kind").equals("SALE_PROMOTION")).count());
     }
+    @Test void importsStoreHeaderAndTransactionNumberSeparatelyFromRfn() {
+        var result=ReceiptImport.parse("photo","Walgreens\n#11513 5011 W SLAUGHTER LN\nAUSTIN TX 78749\n512-292-1340\n992 3013 0023 11/02/2026 5:20 PM\nCREST GUM DETX\n03077206185 10.00 SALE\nSUBTOTAL 10.00\nRFN# 11513233013826110203",true);
+        assertEquals("3013",result.get("transactionNumber"));assertEquals("0023",result.get("registerNumber"));assertEquals("1151-3233-0138-2611-0203",result.get("number"));
+        assertEquals("#11513 5011 W SLAUGHTER LN\nAUSTIN TX 78749\n512-292-1340",result.get("storeReference"));
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        assertEquals("CREST GUM DETX",items.getFirst().get("description"));
+        var fields=ReceiptInputTest.draft(UUID.randomUUID());fields.put("transactionNumber","03013");fields.put("registerNumber","0023");fields.put("receiptNumber","11513233013826110203");fields.put("retailer","Walgreens");
+        var receipt=ReceiptInputTest.read(fields);
+        assertEquals("03013",receipt.metadata().transactionNumber());assertEquals("0023",receipt.metadata().registerNumber());assertEquals("1151-3233-0138-2611-0203",receipt.metadata().receiptNumber());
+        var correction=ReceiptCorrection.read(receipt.record(),Map.of("reason","Update store details","storeReference","Updated address"));
+        assertEquals("03013",correction.metadata().transactionNumber());assertEquals("0023",correction.metadata().registerNumber());
+        var changed=ReceiptCorrection.read(receipt.record(),Map.of("reason","Correct transaction number","transactionNumber","003013"));
+        assertEquals("003013",changed.metadata().transactionNumber());
+    }
+    @Test void recoversProductRowsFromSkuIncompleteOcrWithoutInventingTheMissingDetails() {
+        var result=ReceiptImport.parse("photo","""
+                Walgreens
+                CREST G.M DETX TP 2.60Z
+                03077206185 10.00 SALE
+                2 9 5:00
+                REGULAR PRICE 6.07
+                MYWALGREENS SAVINGS 2.58
+                RETURN VALUE 105. 1$1.00
+                5.00 SALE
+                TIDE 1T9 ME 2RIG BOLD SOC US10003.99 SALE
+                REGULAR PRICE 21,9
+                MYWALGREENS SAVINGS 6.00
+                RETURN VALUE 11.99
+                8E 8M BETA T 3:00
+                MFE EEPA -3.80
+                18.93
+                SUBTCITA
+                SALES TAX A 8.25%
+                TOTAL
+                W CASH REMARDS REDEEMED 0.0
+                Coin Rounding -0.03
+                PASH 1.00
+                CHANGE 0.05
+                MYWALGREENS SAVINGS 11:33
+                MFG COUPON SAVINGS
+                THANK YOU FOR SHOPPING AT WALGREENS
+                CONGRATULATIONS ON EARNING WALGREENS
+                CASH REMARDS! EARN EVEN MORE
+                WALGREENS CASH REWARDS BY USING YOUR
+                MEMBERSHIP WITH EVERY PURCHASE FOR
+                FULL DÉTAILS SEE MYWALGREENS.COM
+                RFN# 0000-0000-0000-0000-0000
+                myte
+                TOTAL AVNEVINE
+                $271.38 W CASH REWARDS AVAILABLE
+                """,true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        assertEquals(3,items.size());assertEquals("03077206185",items.get(0).get("sku"));
+        assertEquals("2",items.get(0).get("quantity"));assertEquals("5.00",items.get(0).get("sale"));
+        @SuppressWarnings("unchecked") var footer=(Map<String,String>)result.get("footer");
+        assertEquals("11.33",footer.get("myWalgreensSavings"));assertEquals("271.38",footer.get("wcAvailable"));
+        @SuppressWarnings("unchecked") var payments=(List<Map<String,String>>)result.get("payments");
+        assertEquals("0.95",payments.getFirst().get("amount"));
+        @SuppressWarnings("unchecked") var coupons=(List<Map<String,String>>)result.get("deductions");
+        assertEquals(1,coupons.size());assertEquals("3.80",coupons.getFirst().get("amount"));assertEquals("UNCLASSIFIED",coupons.getFirst().get("kind"));
+        assertEquals("",result.get("tax"));assertEquals("",result.get("reported"));
+        assertTrue(result.get("warnings").toString().contains("do not reconcile"));
+        assertEquals("Product — description not read",items.get(1).get("description"));assertEquals("5.00",items.get(1).get("sale"));assertEquals("",items.get(1).get("sku"));
+        assertTrue(items.get(2).get("description").startsWith("TIDE"));assertFalse(items.get(2).get("description").contains("3.99"));assertEquals("6.00",items.get(2).get("observedStorePromotion"));assertEquals("21,9",items.get(2).get("observedRegularPrice"));assertEquals("2.58",items.get(0).get("observedStorePromotion"));assertEquals("",items.get(2).get("sale"));assertEquals("",items.get(2).get("purchaseTotal"));
+        assertTrue(result.get("warnings").toString().contains("product code and price ran together"));
+        assertEquals(true,result.get("requiresManualReview"));assertTrue(result.get("qualityIssues").toString().contains("reported: unreadable or missing"));
+    }
+    @Test void returnValuesCannotBecomeProductsEvenWhenTheyContainSkuLikeDigits() {
+        var result=ReceiptImport.parse("photo","Walgreens\nSOAP\n00000000001 5.00 SALE\nRETURN VALUE 12345678901 99.99\nSUBTOTAL 5.00",true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");assertEquals(1,items.size());assertEquals("00000000001",items.getFirst().get("sku"));
+    }
+    @Test void completeImageExtractionDoesNotTriggerTheIncompleteImportGate() {
+        var result=ReceiptImport.parse("photo","Walgreens\n11/02/2026 5:20 PM\nSOAP\n00000000001 5.00 SALE\nSUBTOTAL 5.00\nSALES TAX 0.41\nTOTAL 5.41\nRFN# 0000-0000-0000-0000-0000",true);
+        assertEquals(false,result.get("requiresManualReview"));
+    }
+    @Test void onlyRecoversDamagedQuantityNotationWhenTheProductTotalAgrees() {
+        var result=ReceiptImport.parse("photo","Walgreens\nSOAP\n00000000001 9.00 SALE\n2 9 5:00\nSUBTOTAL 9.00",true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        assertEquals("1",items.getFirst().get("quantity"));assertEquals("9.00",items.getFirst().get("sale"));
+    }
+    @Test void doesNotDuplicateRecoveredProductWhenItsSkuAppearsOnTheNextLine() {
+        var result=ReceiptImport.parse("photo","Walgreens\nSOAP 5.00 SALE\n00000000001\nREGULAR PRICE 7.00\nMYWALGREENS SAVINGS 2.00\nSUBTOTAL 5.00\nMYWALGREENS SAVINGS 12.00\nMFG COUPON SAVINGS 0.00",true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        assertEquals(1,items.size());assertEquals("SOAP",items.getFirst().get("description"));assertEquals("00000000001",items.getFirst().get("sku"));assertEquals("5.00",items.getFirst().get("purchaseTotal"));
+        @SuppressWarnings("unchecked") var deductions=(List<Map<String,String>>)result.get("deductions");
+        assertEquals(1,deductions.size());assertEquals("2.00",deductions.getFirst().get("amount"));assertEquals(items.getFirst().get("id"),deductions.getFirst().get("lineId"));
+    }
+    @Test void keepsAnAdjacentNamedSkuProductSeparateFromARecoveredProduct() {
+        var result=ReceiptImport.parse("photo","Walgreens\nSOAP 5.00 SALE\nLOTION 00000000001 6.00 SALE\nSUBTOTAL 11.00",true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        assertEquals(2,items.size());assertEquals("SOAP",items.get(0).get("description"));assertEquals("LOTION",items.get(1).get("description"));
+    }
+    @Test void attachesSavingsToTheCorrectSkuLessProductAndKeepsCheckoutOutOfProducts() {
+        var result=ReceiptImport.parse("photo","Walgreens\nSOAP 5.00 SALE\nREGULAR PRICE 7.00\nMYWALGREENS SAVINGS 2.00\nLOTION 6.00 SALE\nREGULAR PRICE 9.00\nMYWALGREENS SAVINGS 3.00\nSUBTOTAL 11.00\nTOTAL SAVINGS 5.00 SALE",true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        @SuppressWarnings("unchecked") var deductions=(List<Map<String,String>>)result.get("deductions");
+        assertEquals(2,items.size());assertEquals(2,deductions.size());
+        assertEquals(items.get(0).get("id"),deductions.get(0).get("lineId"));assertEquals(items.get(1).get("id"),deductions.get(1).get("lineId"));
+    }
+    @Test void recoveredPhotoPriceCanIncludeThePrintedSaleLabel() {
+        var result=ReceiptImport.parse("photo","Walgreens\n11/02/2026 5:20 PM\nCREST GUM DETX\n03077206185 10.00 SALE\nSUBTOTAL 10.00",true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        assertEquals(1,items.size());assertEquals("10.00",items.getFirst().get("purchaseTotal"));
+    }
     @Test void walgreensRxIdentifiersAndExplicitPricesImportWithoutProductUpcGuessing() {
         var result=ReceiptImport.parse("rx","Walgreens\n10/25/2026 4:23 PM\nFSA-RX 1509950 15.00\nFSA RX 1502600 45,00\nTOTAL 60.00\nVISA ACCT 0254 60.00\nRFN# 1151-3418-6519-2610-2503",false);
         @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");assertEquals(2,items.size());assertEquals("[FSA/HSA] RX",items.getFirst().get("description"));assertEquals("1509950",items.getFirst().get("sku"));assertEquals("15.00",items.getFirst().get("regular"));assertEquals("45.00",items.get(1).get("regular"));
     }
+    @Test void retainsProductLabelledCouponOccurrencesAndRecoversQuantityFromExactAmounts() {
+        String raw="""
+            Walgreens
+            992 3013 0023 11/02/2026 5:20 PM
+            SYNTHETIC TOOTHPASTE
+            00011111111 10.00 SALE
+            L @ 5,00
+            REGULAR PRICE 6.29
+            MYWALGREENS SAVINGS 2.58
+            RETURN VALUE 1@5.00, 1@1.00
+            SYNTHETIC CHARCOAL
+            00022222222 OTC 5.00 SALE
+            REGULAR PRICE 7.79
+            MYWALGREENS SAVINGS 2.79
+            SYNTHETIC DETERGENT
+            00033333333 15.99 SALE
+            REGULAR PRICE 21.99
+            MYWALGREENS SAVINGS 6.00
+            SYNTHETIC TOOTHPASTE MFG CPN -2.00
+            SYNTHETIC TOOTHPASTE MFG CPN -2.00
+            MFG ECPN -4.00
+            MFG ECPN -3.00
+            SUBTOTAL 19.99
+            SALES TAX A=8.25% 0.99
+            TOTAL 20.98
+            RFN# 0000-0000-0000-0000-0000
+            """;
+        var result=ReceiptImport.parse("synthetic",raw,true);
+        @SuppressWarnings("unchecked") var items=(List<Map<String,String>>)result.get("items");
+        @SuppressWarnings("unchecked") var deductions=(List<Map<String,String>>)result.get("deductions");
+        assertEquals(3,items.size());assertEquals("2",items.getFirst().get("quantity"));
+        assertEquals(4,deductions.stream().filter(d->!d.get("kind").equals("SALE_PROMOTION")).count());
+        assertEquals(3,deductions.stream().filter(d->d.get("kind").equals("SALE_PROMOTION")).count());
+        assertEquals("0.99",result.get("tax"));assertEquals("20.98",result.get("reported"));
+        assertEquals(false,result.get("requiresManualReview"));
+    }
+
+    @Test void shortSelectablePdfPageBypassesOcr() throws Exception {
+        var bytes=new java.io.ByteArrayOutputStream();
+        try(var document=new org.apache.pdfbox.pdmodel.PDDocument()) {
+            var page=new org.apache.pdfbox.pdmodel.PDPage();document.addPage(page);
+            try(var content=new org.apache.pdfbox.pdmodel.PDPageContentStream(document,page)) {
+                content.beginText();content.setFont(new org.apache.pdfbox.pdmodel.font.PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),12);
+                content.newLineAtOffset(40,740);content.showText("Walgreens TOTAL 2.00");content.endText();
+            }
+            document.save(bytes);
+        }
+        var result=ReceiptImport.extract("short.pdf","application/pdf",bytes.toByteArray());
+        assertEquals(false,result.get("scanned"));assertTrue(result.get("rawText").toString().contains("Walgreens TOTAL 2.00"));
+    }
+
     @Test void suppliedWebsitePdfExtractsAnEditableDraftWithoutWrites()throws Exception {
         var bytes=new java.io.ByteArrayOutputStream();
         try(var document=new org.apache.pdfbox.pdmodel.PDDocument()) {

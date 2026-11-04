@@ -33,3 +33,5 @@ use synthetic fixtures or an explicitly configured disposable API database.
 
 
 Receipt Import (1.61): Add Receipt includes an owner-only PDF/image import into its existing editable draft. It retains original evidence and review flags, offers source comparison and duplicate links, and uses the existing preview/save flow. OCR stays on the local Java server; no frontend OCR key or external upload service is used.
+
+The deal reader now uses a local Ollama vision/text model (`qwen3-vl:8b`) at `127.0.0.1:11434`. Run `./start-local-reader.sh` from the repository root if it is stopped. `./start-local-api.sh` also starts it when the downloaded runtime is present. Model files are in the ignored `.local-reader/` directory. No API key or paid service is used. Extracted products, coupons, and rewards go directly into editable plan fields; unknown details and arithmetic differences appear as review notes.

@@ -27,7 +27,7 @@ describe('approved shopping notebook',()=>{
     render(<QuickDealTools api={api} scenario={{...scenario(),items:[{...scenario().items[0],name:'',sale:'',regular:''}],source}} data={workspace()} store="Walgreens" day="2026-10-29" onChange={change}/>)
     await user.click(screen.getByRole('button',{name:'Re-read screenshot offers'}))
     await screen.findByText(/1 coupon\(s\) and 0 expected/)
-    const updated=change.mock.calls[0][0] as PlanScenario
+    const updated=change.mock.lastCall![0] as PlanScenario
     expect(updated.items).toHaveLength(1);expect(updated.items[0]).toMatchObject({id:'febreze',name:'Febreze small space',sale:'3.49'})
     expect(updated.coupons).toHaveLength(1);expect(updated.coupons[0].lineIds).toEqual(['febreze'])
   })
@@ -61,7 +61,7 @@ describe('approved shopping notebook',()=>{
       throw new Error('Preview not needed for this field-preservation test')
     })
     render(<PlanScenarioEditor plan={null} data={workspace()} api={api} writable onClose={vi.fn()} initialMode="screenshot" onReceipt={vi.fn()}/>)
-    await user.upload(screen.getByLabelText('Optional supporting image or PDF'),new File([new Uint8Array([1,2,3])],'poise.png',{type:'image/png'}))
+    await user.upload(screen.getByLabelText('Deal photos — select companion images together'),new File([new Uint8Array([1,2,3])],'poise.png',{type:'image/png'}))
     await waitFor(()=>expect(screen.getByRole('button',{name:'Add to this plan'})).toBeEnabled())
     await user.click(screen.getByRole('button',{name:'Add to this plan'}))
     expect(await screen.findByLabelText('Coupon amount 1')).toHaveValue('5.00')
@@ -100,8 +100,8 @@ describe('approved shopping notebook',()=>{
     render(<QuickDealTools api={api} scenario={input} data={workspace()} onChange={change} store="Walgreens" day="2026-10-27" initialMode="notes"/>)
     await user.type(screen.getByLabelText('Type or paste your deal notes'),'Unrecognized note')
     await user.click(screen.getByRole('button',{name:'Add to this plan'}))
-    expect(change).toHaveBeenCalledWith(expect.objectContaining({items:input.items}))
-    expect(await screen.findByText(/No products were recognized/)).toBeInTheDocument()
+    expect(change).toHaveBeenCalledWith(expect.objectContaining({items:input.items,source:expect.objectContaining({text:'Unrecognized note'})}))
+    expect(await screen.findByText(/Source attached.*No products could be read/)).toBeInTheDocument()
   })
 
   it('imports notes into the editable plan, retaining unrecognized terms and the original source',async()=>{
@@ -120,7 +120,7 @@ describe('approved shopping notebook',()=>{
     const input={...scenario(),items:[],source:{text,mediaType:'image/png',contentBase64:'AQID',earlier:[]}}
     vi.spyOn(api,'mutate').mockResolvedValue({items:scenario().items,coupons:[],promotions:[],unresolved:[],source:input.source,retailer:'CVS'})
     render(<QuickDealTools api={api} scenario={input} data={workspace()} onChange={change} onStoreChange={store} store="Walgreens" day="2026-10-27" initialMode="screenshot"/>)
-    await user.upload(screen.getByLabelText('Optional supporting image or PDF'),new File([new Uint8Array([1,2,3])],'poster.png',{type:'image/png'}))
+    await user.upload(screen.getByLabelText('Deal photos — select companion images together'),new File([new Uint8Array([1,2,3])],'poster.png',{type:'image/png'}))
     await waitFor(()=>expect(screen.getByRole('button',{name:'Add to this plan'})).toBeEnabled())
     await user.click(screen.getByRole('button',{name:'Add to this plan'}))
     expect(change).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({text,contentBase64:'AQID',earlier:[]})}))
@@ -165,9 +165,23 @@ describe('approved shopping notebook',()=>{
     vi.spyOn(api,'account').mockRejectedValue(new Error('No test opening'));vi.spyOn(api,'standaloneRewards').mockResolvedValue([])
     const mutate=vi.spyOn(api,'mutate').mockResolvedValue({})
     render(<ShoppingWeek data={data} api={api} writable onQuick={vi.fn()} onEdit={vi.fn()} onAlternative={vi.fn()} onReceipt={vi.fn()} onPage={vi.fn()} onChanged={changed}/>)
+    expect(screen.queryByRole('button',{name:'Add to trip'})).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button',{name:'View'}))
+    expect(screen.getByRole('dialog',{name:'Colgate + Listerine'})).toBeVisible()
+    expect(screen.getByRole('cell',{name:'Colgate'})).toBeVisible()
+    expect(screen.getByRole('columnheader',{name:'Quantity'})).toBeVisible()
     await user.click(screen.getByRole('button',{name:'Add to trip'}))
     await waitFor(()=>expect(changed).toHaveBeenCalledTimes(1))
     expect(mutate).toHaveBeenCalledWith('/shopping-plans/a','PUT',expect.objectContaining({organization:expect.objectContaining({stage:'TRIP',checkoutOrder:0})}),expect.any(String),'1')
+  })
+  it('removes a plan from the trip without deleting it',async()=>{
+    const api=new ApiClient('test'),data=workspace(),plan=row('trip','PG deal'),changed=vi.fn(),user=userEvent.setup()
+    plan.plan.organization={stage:'TRIP',alternativeOf:null,checkoutOrder:2,rewardSources:[]};data.plans=[plan]
+    const mutate=vi.spyOn(api,'mutate').mockResolvedValue({})
+    render(<ShoppingWeek data={data} api={api} writable onQuick={vi.fn()} onEdit={vi.fn()} onAlternative={vi.fn()} onReceipt={vi.fn()} onPage={vi.fn()} onChanged={changed}/>)
+    await user.click(screen.getByRole('button',{name:'Remove from trip'}))
+    await waitFor(()=>expect(changed).toHaveBeenCalledOnce())
+    expect(mutate).toHaveBeenCalledWith('/shopping-plans/trip','PUT',expect.objectContaining({organization:expect.objectContaining({stage:'IDEA',checkoutOrder:null})}),expect.any(String),'1')
   })
   it('keeps follow-up while removing weekly balances and inventory from Shopping Plans',()=>{
     const api=new ApiClient('test'),data=workspace(),onPage=vi.fn()
@@ -183,4 +197,19 @@ describe('approved shopping notebook',()=>{
     expect(account).not.toHaveBeenCalled();expect(instruments).not.toHaveBeenCalled()
     expect(screen.getByRole('button',{name:'All rebates and follow-up'})).toBeInTheDocument()
   })
+})
+
+it('loads the source image even when reading fails, preserving products for manual entry',async()=>{
+ const api=new ApiClient('test'),user=userEvent.setup(),input=scenario()
+ const mutate=vi.spyOn(api,'mutate').mockRejectedValue(new Error('Screenshot could not be read.'))
+ let saved:PlanScenario|undefined
+ function Harness(){const [value,setValue]=useState(input);return <QuickDealTools api={api} scenario={value} data={workspace()} onChange={next=>{saved=next;setValue(next)}} store="Walgreens" day="2026-11-04" initialMode="screenshot"/>}
+ render(<Harness/>)
+ await user.upload(screen.getByLabelText('Deal photos — select companion images together'),new File(['photo'],'image.png',{type:'image/png'}))
+ await user.click(screen.getByRole('button',{name:'Add to this plan'}))
+ expect(await screen.findByText(/Source attached.*Screenshot could not be read/)).toBeInTheDocument()
+ expect(screen.queryByRole('dialog',{name:'Add screenshot'})).not.toBeInTheDocument()
+ expect(screen.getByRole('img',{name:'Original deal screenshot'})).toHaveAttribute('src',`data:image/png;base64,${btoa('photo')}`)
+ expect(saved?.items).toEqual(input.items)
+ expect(mutate).toHaveBeenCalledWith('/shopping-plans/import-preview','POST',{mediaType:'image/png',contentBase64:btoa('photo'),text:null},expect.any(String))
 })

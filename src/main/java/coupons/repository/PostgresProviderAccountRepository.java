@@ -52,6 +52,7 @@ public final class PostgresProviderAccountRepository implements ProviderAccountR
     @Override public void saveRedemption(ProviderRedemption value) {
         Objects.requireNonNull(value);
         PostgresRepositorySupport.transaction(connections, c -> {
+            PostgresReceiptState.lock(c);
             try (PreparedStatement p = c.prepareStatement("""
                     INSERT INTO provider_redemptions_current
                     (redemption_id,provider,revision,status,payload,recorded_at) VALUES (?,?,?,?,?,?)
@@ -62,6 +63,7 @@ public final class PostgresProviderAccountRepository implements ProviderAccountR
                 p.setTimestamp(6, Timestamp.from(Instant.now())); p.executeUpdate();
             } catch (SQLException e) { duplicate(e, "Redemption"); }
             insertRedemptionHistory(c, value, 1);
+            RewardInstrumentRepository.ensureReceivedCard(c,value,"received-payout-sync");
             return null;
         });
     }
@@ -113,6 +115,7 @@ public final class PostgresProviderAccountRepository implements ProviderAccountR
         if (!id.equals(next.redemptionId())) throw new IllegalArgumentException("Redemption ID cannot change.");
         if (expectedRevision < 1) throw new IllegalArgumentException("Revision must be positive.");
         return PostgresRepositorySupport.transaction(connections, c -> {
+            PostgresReceiptState.lock(c);
             long stored;
             String provider;
             try (PreparedStatement p = c.prepareStatement(
@@ -140,6 +143,7 @@ public final class PostgresProviderAccountRepository implements ProviderAccountR
                 p.executeUpdate();
             }
             insertRedemptionHistory(c, next, revision);
+            RewardInstrumentRepository.ensureReceivedCard(c,next,"received-payout-sync");
             return next;
         });
     }

@@ -91,10 +91,10 @@ public class TransactionCalculator {
         boolean acknowledge = basis == ReceiptMeta.PrintedTotalBasis.UNKNOWN
                 ? calculateReceiptDifference(tx).signum() != 0
                 : purchaseDifference.signum() != 0 || difference != null && difference.signum() != 0;
-        // A gift card exactly covering a known printed funding basis establishes
+        // Gift-card funding exactly covering the printed total establishes
         // zero cash/card without creating an invalid zero-value Payment object.
-        boolean giftCardFullyFundsPurchase = basis != ReceiptMeta.PrintedTotalBasis.UNKNOWN
-                && unresolved.isEmpty() && gift.signum() > 0 && funding.compareTo(printed) == 0;
+        boolean giftCardFullyFundsPurchase = entry != ReceiptMeta.PaymentEntryStatus.PARTIAL
+                && unresolved.isEmpty() && gift.signum() > 0 && gift.compareTo(printed) == 0 && funding.compareTo(gift) == 0;
         return new PaymentReconciliation(printed, calculated, purchaseDifference, funding,
                 monetaryEntry || complete || giftCardFullyFundsPurchase ? cashCard : null, gift, other, difference, status, basis, entry,
                 List.copyOf(unresolved), reason, acknowledge);

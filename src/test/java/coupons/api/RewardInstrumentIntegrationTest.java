@@ -19,6 +19,83 @@ class RewardInstrumentIntegrationTest {
         var response=fixture.call("POST","/reward-instruments/"+account.get("id")+"/events",Json.object(Map.of("id",UUID.randomUUID().toString(),"kind",kind,"amount",amount,"date","2026-10-30","reason","Observed synthetic activity")),UUID.randomUUID().toString(),account.get("revision").toString());
         assertEquals(201,response.statusCode(),response.body());return Json.parseObject(response.body());
     }
+    @Test void requestedGiftCardAppearsOnlyWhenMarkedReceived()throws Exception{
+        UUID payout=UUID.randomUUID();var request=Json.object(Map.of("payoutId",payout,"provider","Fetch","date","2026-11-05","points","55000","amount","50","destination","GIFT_CARD","brand","Walmart Gift Card","number","3438","status","REQUESTED"));assertEquals(201,fixture.call("POST","/accounts/payouts",request,UUID.randomUUID().toString(),null).statusCode());assertTrue(((List<?>)Json.parseObject(fixture.call("GET","/reward-instruments",null,null,null).body()).get("instruments")).isEmpty());
+        var response=fixture.call("PUT","/accounts/payouts/"+payout,Json.object(Map.of("status","RECEIVED","date","2026-11-06")),UUID.randomUUID().toString(),"1");assertEquals(200,response.statusCode(),response.body());var cards=(List<?>)Json.parseObject(fixture.call("GET","/reward-instruments",null,null,null).body()).get("instruments");assertEquals(1,cards.size());var card=(Map<?,?>)cards.getFirst();assertEquals("Walmart Gift Card",card.get("provider"));assertEquals("3438",card.get("lastFour"));assertEquals("50",card.get("opening").toString());assertNull(card.get("calculated"));
+    }
+    @Test void payoutFinancialCorrectionsAreBlockedWhileLinkedSpendingExists()throws Exception{
+        var id=UUID.randomUUID();new coupons.repository.PostgresProviderAccountRepository(fixture.db).saveRedemption(new coupons.repository.ProviderRedemption(id,"Fetch",java.time.LocalDate.of(2026,11,5),null,new java.math.BigDecimal("63500"),new java.math.BigDecimal("50"),coupons.repository.ProviderRedemption.Destination.GIFT_CARD,"Gift Cards",new java.math.BigDecimal("50"),coupons.repository.ProviderRedemption.Status.RECEIVED,java.time.LocalDate.of(2026,11,5),null,List.of(),"Visa synthetic","Verified payout"));
+        var instruments=Json.parseObject(fixture.call("GET","/reward-instruments",null,null,null).body());@SuppressWarnings("unchecked") var card=(Map<String,Object>)((List<?>)instruments.get("instruments")).getFirst();event(card,"REDEMPTION","5");
+        var response=fixture.call("POST","/accounts/payouts/"+id+"/correction",Json.object(Map.of("void",true,"confirmed",true,"reason","Request correction")),UUID.randomUUID().toString(),"1");assertEquals(400,response.statusCode());assertTrue(response.body().contains("linked card activity"));
+        var original=Json.parseObject(fixture.call("GET","/accounts/payouts/"+id,null,null,null).body());assertEquals("1",original.get("revision").toString());assertTrue(original.toString().contains("RECEIVED"));
+    }
+    @Test void receivedPayoutAutomaticallyCreatesMissingInstrumentAndRejectsDuplicateLinks()throws Exception{
+        var payout=UUID.randomUUID();new coupons.repository.PostgresProviderAccountRepository(fixture.db).saveRedemption(new coupons.repository.ProviderRedemption(payout,"Fetch",java.time.LocalDate.of(2026,11,5),null,new java.math.BigDecimal("63500"),new java.math.BigDecimal("50"),coupons.repository.ProviderRedemption.Destination.GIFT_CARD,"Gift Cards",new java.math.BigDecimal("50"),coupons.repository.ProviderRedemption.Status.RECEIVED,java.time.LocalDate.of(2026,11,5),null,List.of(),"Visa issuance","Brand: Visa Prepaid Card | Number: 4204**** **** 4668"));
+        var body=Json.object(Map.of("id",UUID.randomUUID(),"provider","Visa Prepaid Card","lastFour","4668","confirmed",true,"reason","Verified original payout"));String path="/accounts/payouts/"+payout+"/gift-card";
+        var response=fixture.call("GET","/reward-instruments",null,null,null);assertEquals(200,response.statusCode(),response.body());@SuppressWarnings("unchecked") var instrument=(Map<String,Object>)((List<?>)Json.parseObject(response.body()).get("instruments")).getFirst();assertNull(instrument.get("calculated"));assertEquals("50",instrument.get("opening").toString());assertEquals("PAYOUT:"+payout,instrument.get("evidenceReference"));assertTrue(((List<?>)instrument.get("events")).isEmpty());
+        assertEquals(400,fixture.call("POST",path,body,UUID.randomUUID().toString(),"1").statusCode());
+        assertEquals(200,fixture.call("POST","/accounts/payouts/reconcile-gift-cards","{}",UUID.randomUUID().toString(),null).statusCode());assertEquals(200,fixture.call("POST","/accounts/payouts/reconcile-gift-cards","{}",UUID.randomUUID().toString(),null).statusCode());assertEquals(1,((List<?>)Json.parseObject(fixture.call("GET","/reward-instruments",null,null,null).body()).get("instruments")).size());
+        var original=Json.parseObject(fixture.call("GET","/accounts/payouts/"+payout,null,null,null).body());assertEquals("1",original.get("revision").toString());
+    }
+    @Test @SuppressWarnings("unchecked") void plannedRRUsesConsumeSelectedSourcesOnlyOnPurchaseAndCannotBeSpentTwice()throws Exception {
+        var imported=ShoppingNoteInput.parse(ShoppingNotebookTest.ADIDAS,new coupons.shopping.ShoppingPlan.PlanningSource(ShoppingNotebookTest.ADIDAS,null,null));
+        var original=(List<coupons.shopping.ShoppingPlan.ScenarioPayment>)imported.get("payments");
+        var payments=new ArrayList<coupons.shopping.ShoppingPlan.ScenarioPayment>();
+        var supplement=new coupons.repository.PostgresReceiptSupplementRepository(fixture.db);
+        for(var payment:original) {
+            var source=UUID.randomUUID();supplement.addStandaloneReward(new coupons.rewards.RegisterReward(source,payment.notes(),payment.amount(),java.time.LocalDate.of(2026,10,1),java.time.LocalDate.of(2026,12,1),null,"MANUFACTURER"));
+            payments.add(new coupons.shopping.ShoppingPlan.ScenarioPayment(payment.id(),payment.type(),payment.amount(),payment.notes(),"MANUFACTURER",source));
+        }
+        var scenario=new coupons.shopping.ShoppingPlan.Scenario((List<coupons.shopping.ShoppingPlan.Line>)imported.get("items"),(List<coupons.shopping.ShoppingPlan.ScenarioCoupon>)imported.get("coupons"),(List<coupons.shopping.ShoppingPlan.ScenarioPromotion>)imported.get("promotions"),java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO,java.math.BigDecimal.ZERO,null,"CASH","",null,payments,(coupons.shopping.ShoppingPlan.PlanningSource)imported.get("source"));
+        UUID plan=UUID.randomUUID();fixture.plans.save(new coupons.shopping.ShoppingPlan(plan,"Addidas","Walgreens",java.time.LocalDate.of(2026,10,19),List.of(),1,scenario),"test");
+        assertTrue(supplement.rrUsageLinks().isEmpty());
+        var reopened=new coupons.repository.PostgresShoppingPlanRepository(fixture.db).findById(plan).orElseThrow();assertEquals(payments,reopened.scenario().payments());assertEquals(ShoppingNotebookTest.ADIDAS,reopened.scenario().source().text());
+        UUID receipt=UUID.randomUUID(),line=UUID.randomUUID();var fields=ReceiptInputTest.draft(receipt);
+        fields.remove("rrUsed");fields.remove("rrUsageId");fields.put("receiptNumber","ADIDAS-PLAN");fields.put("purchaseDate","2026-10-19");fields.put("tax","0");fields.put("reportedTotal","5");
+        fields.put("items",List.of(Map.of("lineItemId",line,"description","Addidas Gift Package","regularUnitPrice","10","unitPrice","10","quantity",3)));
+        fields.put("discounts",List.of(Map.of("applicationId",UUID.randomUUID(),"label","BOGO 50%","amount","5","kind","SALE_PROMOTION","lineItemIds",List.of(line)),Map.of("applicationId",UUID.randomUUID(),"label","$4 off 2","amount","4","kind","MANUFACTURER","lineItemIds",List.of(line),"requiredQuantity",2)));
+        fields.put("rrUses",payments.stream().map(p->Map.of("eventId",p.id(),"amount",p.amount().toPlainString(),"recordedDescription",p.notes())).toList());fields.put("earnings",List.of());fields.put("payments",List.of(Map.of("paymentId",UUID.randomUUID(),"type","CASH","amount","5")));
+        var input=ReceiptInput.read(Json.parseObject(Json.object(fields)));var request=new coupons.repository.ReceiptWriteRequest(UUID.randomUUID(),java.time.Instant.now());var context=new coupons.repository.ReceiptCreateCtx("test");
+        var saved=fixture.receipts.saveWithPlan(receipt,input.transaction(),input.metadata(),List.of(),request,context,List.of(),plan,1);
+        assertEquals(2,supplement.rrUsageLinks().size());assertEquals(saved,fixture.receipts.saveWithPlan(receipt,input.transaction(),input.metadata(),List.of(),request,context,List.of(),plan,1));assertEquals(2,supplement.rrUsageLinks().size());
+        UUID second=UUID.randomUUID(),secondPlan=UUID.randomUUID();fixture.plans.save(new coupons.shopping.ShoppingPlan(secondPlan,"Duplicate attempt","Walgreens",java.time.LocalDate.of(2026,10,19),List.of(),1,scenario),"test");
+        assertThrows(IllegalArgumentException.class,()->fixture.receipts.saveWithPlan(second,input.transaction(),new coupons.repository.ReceiptMeta("Walgreens","ADIDAS-DUPLICATE",null,null),List.of(),new coupons.repository.ReceiptWriteRequest(UUID.randomUUID(),java.time.Instant.now()),context,List.of(),secondPlan,1));
+        assertTrue(fixture.receipts.findById(second).isEmpty());assertNull(fixture.plans.findById(secondPlan).orElseThrow().purchasedReceiptId());
+    }
+
+    @Test void receiptAssignmentsSynchronizeEditsReassignmentRemovalAndRetries()throws Exception {
+        var first=create("GIFT_CARD","Walmart","First card","USD","50.00");
+        var second=create("GIFT_CARD","Walmart","Second card","USD","25.00");
+        UUID receipt=UUID.randomUUID(),payment=UUID.randomUUID();
+        var fields=ReceiptInputTest.draft(receipt);
+        fields.put("payments",List.of(Map.of("paymentId",payment,"type","GIFT_CARD","amount","8.75","giftCardId",first.get("id"))));
+        var preview=fixture.call("POST","/receipts/preview",Json.object(fields),null,null);assertEquals(200,preview.statusCode(),preview.body());
+        fields.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));fields.put("acknowledgeDifference",true);
+        var created=fixture.call("POST","/receipts",Json.object(fields),"assigned-card",null);assertEquals(201,created.statusCode(),created.body());
+        assertEquals(created.body(),fixture.call("POST","/receipts",Json.object(fields),"assigned-card",null).body());
+        assertCardBalance(first,"41.25");
+        assertEquals(UUID.fromString(first.get("id").toString()),fixture.receipts.findById(receipt).orElseThrow().transaction().getPayments().getFirst().getGiftCardId());
+        editCardPayment(receipt,1,payment,first.get("id"),"11.48");assertCardBalance(first,"38.52");
+        editCardPayment(receipt,2,payment,second.get("id"),"11.48");assertCardBalance(first,"50.00");assertCardBalance(second,"13.52");
+        var request=new coupons.repository.ReceiptWriteRequest(UUID.randomUUID(),java.time.Instant.now());
+        var context=new coupons.repository.ReceiptChangeContext("test","Delete receipt","test",java.time.Instant.now());
+        fixture.receipts.softDelete(receipt,3,request,context);assertCardBalance(second,"25.00");
+        fixture.receipts.restore(receipt,4,new coupons.repository.ReceiptWriteRequest(UUID.randomUUID(),java.time.Instant.now()),context);assertCardBalance(second,"13.52");
+        editCardPayment(receipt,5,payment,null,"11.48");assertCardBalance(second,"25.00");
+        editCardPayment(receipt,6,payment,null,"11.48");assertCardBalance(second,"25.00");
+    }
+    void assertCardBalance(Map<String,Object> card,String expected)throws Exception {
+        var response=fixture.call("GET","/reward-instruments/"+card.get("id"),null,null,null);assertEquals(200,response.statusCode(),response.body());
+        assertEquals(0,new java.math.BigDecimal(expected).compareTo(new java.math.BigDecimal(Json.parseObject(response.body()).get("calculated").toString())));
+    }
+    void editCardPayment(UUID receipt,long revision,UUID payment,Object card,String amount)throws Exception {
+        var tender=new LinkedHashMap<String,Object>(Map.of("paymentId",payment,"paymentType","GIFT_CARD","amount",amount));tender.put("giftCardId",card);
+        var body=new LinkedHashMap<String,Object>(Map.of("reason","Correct gift card payment","payments",List.of(tender)));
+        var preview=fixture.call("POST","/receipts/"+receipt+"/edit-preview",Json.object(body),null,""+revision);assertEquals(200,preview.statusCode(),preview.body());
+        body.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));body.put("acknowledgeDifference",true);
+        var response=fixture.call("PUT","/receipts/"+receipt,Json.object(body),"edit-card-"+revision,""+revision);assertEquals(200,response.statusCode(),response.body());
+    }
+
     @Test void separatesAccountsAndCardInstrumentsAndRetainsReportedDiscrepancies()throws Exception {
         var a=create("ACCOUNT_REWARD","Target","My Target","USD","12.00");
         var b=create("ACCOUNT_REWARD","Target","Son's Target","USD","7.00");
@@ -148,5 +225,14 @@ class RewardInstrumentIntegrationTest {
         var link=Json.object(Map.of("id",UUID.randomUUID().toString(),"kind","CREDIT","amount","5","sourceReceiptId",receipt.toString(),"sourceEventId",earning.toString(),"reason","Attempt unsupported currency relabeling"));
         assertEquals(400,fixture.call("POST","/reward-instruments/"+account.get("id")+"/events",link,"foreign-currency-source","1").statusCode());
         var unchanged=Json.parseObject(fixture.call("GET","/reward-instruments/"+account.get("id"),null,null,null).body());assertEquals("0",unchanged.get("calculated").toString());assertTrue(((List<?>)unchanged.get("events")).isEmpty());
+    }
+
+    @Test @SuppressWarnings("unchecked") void cardArchivalPreservesFinancialEventsAndRevisions()throws Exception{
+        var card=create("GIFT_CARD","Walgreens","Synthetic card","USD","50");card=event(card,"REDEMPTION","10");
+        String id=card.get("id").toString();var rejectedKind=fixture.call("PUT","/reward-instruments/"+id,Json.object(Map.of("kind","ACCOUNT_REWARD","confirmed",true,"reason","Cannot reclassify financial history")),UUID.randomUUID().toString(),card.get("revision").toString());assertEquals(400,rejectedKind.statusCode());
+        var response=fixture.call("PUT","/reward-instruments/"+id,Json.object(Map.of("status","ARCHIVED","confirmed",true,"reason","User confirmed duplicate/archive")),UUID.randomUUID().toString(),card.get("revision").toString());
+        assertEquals(200,response.statusCode(),response.body());var archived=Json.parseObject(response.body());assertEquals("ARCHIVED",archived.get("status"));assertEquals(new java.math.BigDecimal("40"),archived.get("calculated"));assertEquals(1,((List<?>)archived.get("events")).size());assertTrue(((List<?>)archived.get("history")).size()>=3);
+        var reopened=fixture.call("GET","/reward-instruments/"+id,null,null,null);assertEquals("ARCHIVED",Json.parseObject(reopened.body()).get("status"));
+        var rejected=fixture.call("POST","/reward-instruments/"+id+"/events",Json.object(Map.of("id",UUID.randomUUID().toString(),"kind","REDEMPTION","amount","5","date","2026-11-07","reason","Not permitted")),UUID.randomUUID().toString(),archived.get("revision").toString());assertEquals(400,rejected.statusCode());
     }
 }

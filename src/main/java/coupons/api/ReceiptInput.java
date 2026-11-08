@@ -42,9 +42,10 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
                 optional(fields,"printedTotalBasis") == null ? ReceiptMeta.PrintedTotalBasis.UNKNOWN : ReceiptMeta.PrintedTotalBasis.valueOf(required(fields,"printedTotalBasis")),
                 optional(fields,"paymentEntryStatus") == null ? ReceiptMeta.PaymentEntryStatus.UNKNOWN : ReceiptMeta.PaymentEntryStatus.valueOf(required(fields,"paymentEntryStatus")),optional(fields,"receiptKind")==null?ReceiptMeta.ReceiptKind.PURCHASE:ReceiptMeta.ReceiptKind.valueOf(required(fields,"receiptKind")),optional(fields,"transactionNumber"),optional(fields,"registerNumber"));
         var tx=new CouponTransaction(new ReceiptTotals(decimal(fields,"tax",false),decimal(fields,"reportedTotal",false)));
+        var packages=new HashMap<UUID,ReceiptWorksheetData.PackageDetails>();
         var itemRows=rows(fields,"items",100);if(itemRows.isEmpty()&&metadata.receiptKind()!=ReceiptMeta.ReceiptKind.REWARD_ADJUSTMENT)throw new IllegalArgumentException("At least one purchased product is required.");
         for(var item:itemRows) {
-            known(item,"lineItemId","description","sku","regularUnitPrice","unitPrice","quantity");long quantity=number(item.get("quantity"));if(quantity<1||quantity>Integer.MAX_VALUE)throw new IllegalArgumentException("Quantity must be a positive whole number.");
+            known(item,"lineItemId","description","sku","regularUnitPrice","unitPrice","quantity","packageDetails");if(item.get("packageDetails")!=null)packages.put(uuid(item,"lineItemId"),packageDetails(item.get("packageDetails")));long quantity=number(item.get("quantity"));if(quantity<1||quantity>Integer.MAX_VALUE)throw new IllegalArgumentException("Quantity must be a positive whole number.");
             tx.addPurchaseItem(new PurchaseItem(uuid(item,"lineItemId"),required(item,"description"),optional(item,"sku"),decimal(item,"regularUnitPrice",true),decimal(item,"unitPrice",false),(int)quantity));
         }
         Map<UUID,DiscountKind> kinds=new HashMap<>();
@@ -56,7 +57,7 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
         }
         Map<UUID, ReceiptWorksheetData.Use> paymentUses = new HashMap<>();
         for(var p:rows(fields,"payments",20)) {
-            known(p,"paymentId","type","amount","notes","role","accountName");var type=PaymentType.valueOf(required(p,"type"));
+            known(p,"paymentId","type","amount","notes","role","accountName","giftCardId");var type=PaymentType.valueOf(required(p,"type"));
             if(!Set.of(PaymentType.CASH,PaymentType.CARD,PaymentType.GIFT_CARD,PaymentType.OTHER,PaymentType.WALGREENS_CASH).contains(type))throw new IllegalArgumentException("Unsupported payment type; record RR use separately.");
             UUID paymentId = uuid(p,"paymentId");
             String role = optional(p,"role");
@@ -68,7 +69,7 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
                 if (!role.equals("UNRESOLVED")) paymentUses.put(paymentId,
                         new ReceiptWorksheetData.Use(List.of(), null, role.equals("CHECKOUT_DEDUCTION")));
             }
-            tx.addPayment(new Payment(paymentId,type,decimal(p,"amount",false),optional(p,"notes"),optional(p,"accountName")));
+            tx.addPayment(new Payment(paymentId,type,decimal(p,"amount",false),optional(p,"notes"),optional(p,"accountName"),optional(p,"giftCardId")==null?null:UUID.fromString(required(p,"giftCardId"))));
         }
         var rr=decimal(fields,"rrUsed",true);
         if(fields.containsKey("rrUses") && rr != null && rr.signum()!=0) throw new IllegalArgumentException("Enter separate RR uses or the legacy combined amount, not both.");
@@ -99,8 +100,13 @@ record ReceiptInput(UUID id,CouponTransaction transaction,ReceiptMeta metadata,L
         var footer = PrintedFooter.read(fields, new ReceiptObservations(null,null,List.of(),List.of(),null,List.of(),Map.of()));
         earnings=printedCashEarnings(id,metadata,footer,earnings);
         tx.setObservations(new ReceiptObservations(day,time,earnings,uses,footer.walgreensCash(),footer.savings(),kinds,
-                footer.receiptSavingValuePercent(), List.of(), new ReceiptWorksheetData(Map.of(), paymentUses, null), footer.footerStatus()));
+                footer.receiptSavingValuePercent(), List.of(), new ReceiptWorksheetData(Map.of(), paymentUses, null,packages), footer.footerStatus()));
         var result=new ReceiptInput(id,tx,metadata,List.copyOf(evidence),digest(fields),optional(fields,"reviewToken"),flag(fields,"acknowledgeDifference"));validateRewardOnly(metadata,tx);ReceiptValidator.validate(result.record());return result;
+    }
+    @SuppressWarnings("unchecked") static ReceiptWorksheetData.PackageDetails packageDetails(Object raw){
+        if(!(raw instanceof Map<?,?>))throw new IllegalArgumentException("Package details must be an object.");var f=(Map<String,Object>)raw;
+        known(f,"size","unit","itemCount","itemUnit","secondarySize","secondaryUnit");
+        return new ReceiptWorksheetData.PackageDetails(decimal(f,"size",true),optional(f,"unit"),f.get("itemCount")==null?null:Math.toIntExact(number(f.get("itemCount"))),optional(f,"itemUnit"),decimal(f,"secondarySize",true),optional(f,"secondaryUnit"));
     }
     static UUID printedCashId(UUID receiptId){return UUID.nameUUIDFromBytes((receiptId+":automatic-printed-walgreens-cash").getBytes(StandardCharsets.UTF_8));}
     /** Recorded earned amount only; explicit reward entries override this default, as with Fetch. */
@@ -223,7 +229,7 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
                 f.containsKey("transactionNumber")?optional(f,"transactionNumber"):m==null?null:m.transactionNumber(),
                 f.containsKey("registerNumber")?optional(f,"registerNumber"):m==null?null:m.registerNumber());
         var items = f.containsKey("items") ? rows(f,"items",100).stream().map(row -> {
-            known(row,"lineItemId","productName","productCode","regularUnitPrice","saleUnitPrice","quantity");
+            known(row,"lineItemId","productName","productCode","regularUnitPrice","saleUnitPrice","quantity","packageDetails");
             UUID lineId = uuid(row,"lineItemId");
             var regular = decimal(row,"regularUnitPrice",true);
             var previous = s.purchaseItems().stream().filter(p -> p.lineItemId().equals(lineId)).findFirst().orElse(null);
@@ -233,12 +239,12 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
         }).toList() : s.purchaseItems();
         if (items.isEmpty() && metadata.receiptKind()!=ReceiptMeta.ReceiptKind.REWARD_ADJUSTMENT) throw new IllegalArgumentException("A purchase receipt needs at least one product.");
         var payments = f.containsKey("payments") ? rows(f,"payments",100).stream().map(row -> {
-            known(row,"paymentId","paymentType","amount","notes","role","accountName");
+            known(row,"paymentId","paymentType","amount","notes","role","accountName","giftCardId");
             UUID id = uuid(row,"paymentId");
             var previous = s.payments().stream().filter(p -> p.paymentId().equals(id)).findFirst().orElse(null);
             var type=PaymentType.valueOf(required(row,"paymentType"));
             String account=type==PaymentType.OTHER || type==PaymentType.GIFT_CARD ? row.containsKey("accountName")?optional(row,"accountName"):previous==null?null:previous.accountName():null;
-            return new PaymentSnap(id,type,decimal(row,"amount",false),optional(row,"notes"),account);
+            return new PaymentSnap(id,type,decimal(row,"amount",false),optional(row,"notes"),account,type!=PaymentType.GIFT_CARD?null:row.containsKey("giftCardId")?optional(row,"giftCardId")==null?null:UUID.fromString(required(row,"giftCardId")):previous==null?null:previous.giftCardId());
         }).toList() : s.payments();
         var kinds = new HashMap<>(o.discountKinds());
         var discounts = f.containsKey("discounts") ? rows(f,"discounts",100).stream().map(row -> {
@@ -284,7 +290,10 @@ record ReceiptCorrection(CouponTransaction transaction, ReceiptMeta metadata, St
             if(targetUse.amount().compareTo(amount)!=0)throw new IllegalArgumentException("The original amount and selected RR use must match exactly.");
             converted.put(new ReceiptObservations.EventReference(kind,id),new ReceiptObservations.EventReference(ReceiptObservations.EventKind.UNIDENTIFIED_RR,target));
         }
-        var worksheet=new ReceiptWorksheetData(o.worksheet().earningGroups(),uses,o.worksheet().dayOrder());
+        var packages=new HashMap<>(o.worksheet().packageDetails());
+        packages.keySet().retainAll(items.stream().map(PurchaseLineSnap::lineItemId).toList());
+        for(var row:rows(f,"items",100))if(row.containsKey("packageDetails")){var key=uuid(row,"lineItemId");if(row.get("packageDetails")==null)packages.remove(key);else packages.put(key,packageDetails(row.get("packageDetails")));}
+        var worksheet=new ReceiptWorksheetData(o.worksheet().earningGroups(),uses,o.worksheet().dayOrder(),packages);
         var footer = PrintedFooter.read(f,o);
         var savings=footer.savings().stream().map(category->new ReceiptObservations.SavingsCategory(category.categoryId(),category.printedLabel(),category.currency(),category.reportedAmount(),
             category.inclusions().stream().map(i->new ReceiptObservations.Inclusion(converted.getOrDefault(i.event(),i.event()),i.includedAmount(),i.confirmedBy(),i.confirmedAt())).toList(),category.explanationComplete())).toList();

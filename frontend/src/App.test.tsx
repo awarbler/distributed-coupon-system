@@ -176,8 +176,8 @@ it('keeps shopping controls labelled and opens the quick-deal form',async()=>{
  expect(screen.getByLabelText('Plan name').closest('label')).not.toHaveAttribute('data-placeholder-field')
 })
 
-it('shows separately identified account values without treating overlapping provider totals as all accounts',()=>{
+it('keeps individual account and gift-card details off the dashboard',()=>{
  const data=workspace();data.rewardInstruments=[{id:'target-own',kind:'ACCOUNT_REWARD',provider:'Target',nickname:'My Target',lastFour:null,unit:'USD',revision:'1',opening:'12',openingDate:null,historyComplete:true,calculated:'12',reported:null,reportedDate:null,balanceDate:null,difference:null,comparisonStatus:'DATE_ALIGNMENT_UNRESOLVED',newEarnings:'0',events:[],history:[],issuedFrom:[]}];
  render(<WorkspacePages data={data} page="dashboard" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>);
- expect(screen.getByText('Available — existing provider records')).toBeInTheDocument();expect(screen.queryByText('Total Available — All Accounts')).not.toBeInTheDocument();expect(screen.getByText('Target — My Target')).toBeInTheDocument();expect(screen.getByText(/These views are not added together/)).toBeInTheDocument();
+ expect(screen.getByText('Total Available — All Accounts')).toBeInTheDocument();expect(screen.queryByText('Available — existing provider records')).not.toBeInTheDocument();expect(screen.queryByText('My Target')).not.toBeInTheDocument();expect(screen.queryByText('Individual Accounts And Gift Cards')).not.toBeInTheDocument();expect(screen.queryByText(/These views are not added together/)).not.toBeInTheDocument();
 })

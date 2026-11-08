@@ -7,12 +7,73 @@ import { workspace, planningRow } from '../../api/fixtures.test-support'
 import type { PlanScenario } from '../../types/platform'
 import { PlanScenarioEditor } from '../../pages/WorkspacePages'
 import { EvidenceField } from '../../components/EvidenceField'
-import { QuickDealTools, SaleButtons } from './QuickDealTools'
+import { QuickDealTools, SaleButtons, RewardPicker } from './QuickDealTools'
 import { CompareCosts, ShoppingWeek } from './ShoppingWeek'
 
 const scenario=():PlanScenario=>({items:[{id:'line',name:'Colgate',sku:null,regular:'',sale:'6',quantity:'2'}],coupons:[],promotions:[],tax:'0',walgreensCashUsed:'0',registerRewardsUsed:'0',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:''})
 function row(id:string,name:string){const r=planningRow();r.plan={...r.plan,planId:id,name,scenario:scenario(),shoppingDate:'2026-10-19',organization:{stage:'IDEA',alternativeOf:null,checkoutOrder:null,rewardSources:[]}};return r}
 describe('approved shopping notebook',()=>{
+  it('edits and reparses notes, confirms replacement, preserves attachments and names, and recovers from failure',async()=>{
+    const api=new ApiClient('test'),user=userEvent.setup(),name=vi.fn()
+    const original='Addidas Gift Package 10.00\nBuy One Get One 50% Off\n$4.00 Off 2\n3 Buy 10 + (10/2) + 10=25\n25 - 4 = 21 + Tax\nI Can Use 10 Pg Rr , Use 6 Rr\n21 -10-6=5\nIbotta Get 9.00\nSpend 25 Get 5 Rr'
+    const mutate=vi.spyOn(api,'mutate').mockImplementation(async(_path,_method,body)=>{
+      const text=(body as {text:string}).text
+      return {items:[{id:'adidas',name:'Addidas Gift Package',regular:'10.00',sale:'10.00',quantity:text.includes('4 Buy')?'4':'3',priceRule:{type:'BOGO_HALF'}}],coupons:[{id:'c',description:'Coupon',amount:text.includes('$5.00 Off')?'5.00':'4.00',requiredQuantity:'2',lineIds:['adidas']}],promotions:[],payments:[{id:'rr10',type:'REGISTER_REWARD',amount:'10',notes:'P&G',registerRewardType:'MANUFACTURER'},{id:'rr6',type:'REGISTER_REWARD',amount:'6',notes:'RR',registerRewardType:'MANUFACTURER'}],unresolved:[],source:{text}}
+    })
+    let saved:PlanScenario|undefined
+    function Harness(){const [value,setValue]=useState<PlanScenario>({...scenario(),items:[],source:{text:'',mediaType:'image/png',contentBase64:'AQID'}});return <QuickDealTools api={api} scenario={value} data={workspace()} store="Walgreens" day="2026-10-29" initialMode="notes" onImportedName={name} onChange={next=>{saved=next;setValue(next)}}/>}
+    const view=render(<Harness/>);fireEvent.change(screen.getByLabelText('Type or paste your deal notes'),{target:{value:original}})
+    await user.click(screen.getByRole('button',{name:'Add to this plan'}));await screen.findByText(/Deal updated from notes/)
+    expect(name).toHaveBeenCalledWith('Addidas');expect(saved?.items[0].quantity).toBe('3');expect(saved?.source?.text).toBe(original);expect(saved?.source?.contentBase64).toBe('AQID')
+    const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+    fireEvent.change(screen.getByLabelText('Original deal notes'),{target:{value:original.replace('3 Buy','4 Buy').replace('$4.00 Off','$5.00 Off')}})
+    await user.click(screen.getByRole('button',{name:'Update Deal From Notes'}));expect(mutate).toHaveBeenCalledTimes(1);expect(saved?.items[0].quantity).toBe('3')
+    confirm.mockReturnValue(true);await user.click(screen.getByRole('button',{name:'Update Deal From Notes'}));await waitFor(()=>expect(saved?.items[0].quantity).toBe('4'));expect(saved?.coupons[0].amount).toBe('5.00');expect(saved?.payments).toHaveLength(2)
+    mutate.mockRejectedValueOnce(new Error('Request failed (502)'));await user.click(screen.getByRole('button',{name:'Update Deal From Notes'}));await screen.findByRole('alert');expect(saved?.items[0].quantity).toBe('4');expect(screen.getByLabelText('Original deal notes')).toBeEnabled()
+    const persisted=structuredClone(saved!);view.unmount();render(<QuickDealTools api={api} scenario={persisted} data={workspace()} store="Walgreens" day="2026-10-29" onChange={vi.fn()}/>);expect(screen.getByLabelText('Original deal notes')).toHaveValue(persisted.source!.text)
+  })
+
+  it.each(['Addidas Gift Package','Qtips','Pampers Diapers Unscented'])('names %s from its product and preserves a manually changed name without assuming tax',async productName=>{
+    const api=new ApiClient('test'),user=userEvent.setup()
+    vi.spyOn(api,'mutate').mockImplementation(async path=>{
+      if(path==='/shopping-plans/import-preview')return {items:[{id:'product',name:productName,regular:'10',sale:null,quantity:'3'}],coupons:[],promotions:[],unresolved:[]}
+      throw new Error('No calculation response needed for naming')
+    })
+    render(<PlanScenarioEditor plan={null} data={workspace()} api={api} writable onClose={vi.fn()} initialMode="notes" onReceipt={vi.fn()}/>)
+    expect(screen.getByLabelText('Tax calculation')).toHaveValue('AMOUNT')
+    fireEvent.change(screen.getByLabelText('Type or paste your deal notes'),{target:{value:'Here is my deal\nAddidas Gift Package 10.00'}})
+    await user.click(screen.getByRole('button',{name:'Add to this plan'}));await waitFor(()=>expect(screen.getByLabelText('Plan name')).toHaveValue(productName.split(' ')[0]))
+    fireEvent.change(screen.getByLabelText('Plan name'),{target:{value:'My gift deal'}})
+    vi.spyOn(window,'confirm').mockReturnValue(true);await user.click(screen.getByRole('button',{name:'Update Deal From Notes'}));await screen.findByText(/Deal updated from notes/)
+    expect(screen.getByLabelText('Plan name')).toHaveValue('My gift deal')
+  })
+
+  it('links an inventory reward to an imported RR payment without counting its value twice',async()=>{
+    const api=new ApiClient('test'),user=userEvent.setup(),change=vi.fn(),input=scenario()
+    input.payments=[{id:'imported10',type:'REGISTER_REWARD',amount:'10.00',notes:'P&G',registerRewardType:'MANUFACTURER'},{id:'imported6',type:'REGISTER_REWARD',amount:'6',notes:'RR',registerRewardType:'MANUFACTURER'}]
+    vi.spyOn(api,'standaloneRewards').mockResolvedValue([{rewardId:'source10',description:'P&G RR',amount:'10',registerRewardType:'MANUFACTURER',earnedDate:'2026-10-01',expirationDate:'2026-11-01',status:'UNUSED'}])
+    render(<RewardPicker api={api} data={workspace()} scenario={input} onChange={change} day="2026-10-19"/>)
+    await user.click(screen.getByText('Choose a reward manually (optional)'));await screen.findByRole('option',{name:/P&G RR/})
+    await user.selectOptions(screen.getByLabelText('Select a recorded RR'),'source10')
+    const selected=change.mock.lastCall![0] as PlanScenario;expect(selected.payments).toHaveLength(2);expect(selected.payments![0]).toMatchObject({id:'imported10',amount:'10',registerRewardType:'MANUFACTURER',rewardSourceId:'source10'})
+    expect(selected.payments![1]).toEqual(input.payments[1])
+  })
+
+  it('maps an online Q-tips import into one editable product, coupons, rewards, and channel',async()=>{
+    const api=new ApiClient('test'),user=userEvent.setup()
+    const text='Qtips Deal Regular Price 4. 99\nStore Promotion .99\nBuy 3 : 3 X 4 = 12.00\nManufacturer Coupon Buy 3 Get $5.00 Off\nWalgreens Coupon 1.00 Off X 3 = 3.00\nOnline Promo Code Wag10 -.40\nOop = 3.60\nEarn .12 Walgreens Cash\nFetch 2500 Points\nIbotta 4.00 Must Buy 3\n\nOnline Only'
+    vi.spyOn(api,'mutate').mockImplementation(async path=>{
+      if(path==='/shopping-plans/import-preview')return {items:[{id:'qtips',name:'Qtips',regular:'4.99',sale:'4',quantity:'3'}],coupons:[{id:'mfg',description:'Manufacturer coupon',amount:'5',requiredQuantity:'3',kind:'MANUFACTURER',lineIds:['qtips']},{id:'store',description:'Walgreens coupon',amount:'3',requiredQuantity:'3',kind:'STORE_COUPON',lineIds:['qtips']},{id:'code',description:'Online promo code WAG10',amount:'0.40',requiredQuantity:'1',kind:'STORE_COUPON',lineIds:[],wholeReceipt:true}],promotions:[{id:'fetch',description:'Fetch',rewardType:'FETCH',rewardAmount:'2500',requiredQuantity:'0',requiredSpend:'0',spendBasis:'BEFORE_COUPONS',allowsWalgreensCash:true,lineIds:[],wholeReceipt:true}],source:{text,mediaType:null,contentBase64:null,purchaseChannel:'ONLINE'},retailer:'Walgreens',unresolved:['Store Promotion .99 — clarify the promotion.']}
+      throw new Error('Calculation is covered by Java regression tests')
+    })
+    render(<PlanScenarioEditor plan={null} data={workspace()} api={api} writable onClose={vi.fn()} initialMode="notes" onReceipt={vi.fn()}/>)
+    fireEvent.change(screen.getByLabelText('Type or paste your deal notes'),{target:{value:text}});await user.click(screen.getByRole('button',{name:'Add to this plan'}))
+    await waitFor(()=>expect(screen.getByLabelText('Plan name')).toHaveValue('Qtips'))
+    expect(screen.getByLabelText('Purchase channel')).toHaveValue('ONLINE');expect(screen.getByLabelText('Original deal notes')).toHaveValue(text)
+    expect(screen.getByLabelText('Coupon amount 1')).toHaveValue('5');expect(screen.getByLabelText('Coupon amount 2')).toHaveValue('3');expect(screen.getByLabelText('Coupon amount 3')).toHaveValue('0.40');expect(screen.getByLabelText('Rebate type 1')).toHaveValue('FETCH');expect(screen.getByLabelText('Rebate points 1')).toHaveValue('2500')
+    expect(screen.getAllByRole('button',{name:/Remove product/})).toHaveLength(1)
+  })
+
   it('does not read dropped attachments inside a disabled form',()=>{
     const change=vi.fn()
     render(<fieldset disabled><EvidenceField onChange={change}/></fieldset>)
@@ -101,7 +162,7 @@ describe('approved shopping notebook',()=>{
     await user.type(screen.getByLabelText('Type or paste your deal notes'),'Unrecognized note')
     await user.click(screen.getByRole('button',{name:'Add to this plan'}))
     expect(change).toHaveBeenCalledWith(expect.objectContaining({items:input.items,source:expect.objectContaining({text:'Unrecognized note'})}))
-    expect(await screen.findByText(/Source attached.*No products could be read/)).toBeInTheDocument()
+    expect(await screen.findByText(/Automatic reading failed.*No products could be read/)).toBeInTheDocument()
   })
 
   it('imports notes into the editable plan, retaining unrecognized terms and the original source',async()=>{
@@ -126,15 +187,15 @@ describe('approved shopping notebook',()=>{
     expect(change).toHaveBeenCalledWith(expect.objectContaining({source:expect.objectContaining({text,contentBase64:'AQID',earlier:[]})}))
     expect(store).toHaveBeenCalledWith('CVS')
   })
-  it('attaches a recorded match once and replaces the advertised deduction instead of stacking it',async()=>{
+  it('preserves an entered coupon instead of replacing it with a recorded match',async()=>{
     const api=new ApiClient('test'),data=workspace();data.coupons=[{couponId:'saved',provider:'Brand',externalId:null,status:'CLIPPED',clippedOn:'2026-10-01',redeemedOn:null,redeemedTransactionId:null,revision:'1',description:'My coupon',discountAmount:'3',couponType:'MANUFACTURER',expirationDate:'2026-10-31'}]
     const input=scenario();input.items[0].sku='123';input.coupons=[{id:'advertised',description:'Advertised coupon',amount:'5',requiredQuantity:'2',lineIds:['line'],savedCouponId:null,kind:'MANUFACTURER'}]
     const mutate=vi.spyOn(api,'mutate').mockResolvedValue([{id:'matched',description:'My coupon',amount:'3',requiredQuantity:'2',lineIds:['line'],savedCouponId:'saved',kind:'MANUFACTURER'}])
     let saved:PlanScenario|undefined
     function Harness(){const [value,setValue]=useState(input);return <QuickDealTools api={api} scenario={value} data={data} onChange={v=>{saved=v;setValue(v)}} store="Walgreens" day="2026-10-19"/>}
-    render(<Harness/>);await screen.findByText(/attached automatically/)
-    expect(saved?.coupons).toHaveLength(1);expect(saved?.coupons[0].amount).toBe('3');expect(saved?.coupons[0].savedCouponId).toBe('saved')
-    expect(mutate).toHaveBeenCalledTimes(1)
+    render(<Harness/>);await new Promise(resolve=>setTimeout(resolve,500))
+    expect(screen.queryByText(/attached automatically/)).not.toBeInTheDocument();expect(saved).toBeUndefined()
+    expect(input.coupons[0].amount).toBe('5');expect(mutate).not.toHaveBeenCalled()
   })
   it('does not stack recorded coupons onto unallocated advertised manufacturer amounts',async()=>{
     const api=new ApiClient('test'),data=workspace(),input=scenario()

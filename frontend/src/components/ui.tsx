@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom'
 import { useEffect, useRef, useLayoutEffect, useState, useId, Children, isValidElement, cloneElement } from 'react'
 import type { ReactNode, TextareaHTMLAttributes } from 'react'
-import { ArrowRight, ChevronDown, CircleAlert, Inbox, X } from 'lucide-react'
+import { ArrowRight, CircleAlert, Inbox, X } from 'lucide-react'
 
 export function InfoHelp({children}:{children:ReactNode}) {
  return <SectionHelp title="More information" label="More information">{children}</SectionHelp>
@@ -48,7 +48,9 @@ export function SectionHelp({title,children,label}:{title:string;children:ReactN
  return <><button ref={button} type="button" className="icon-button help-trigger" aria-label={label??`About ${title}`} aria-describedby={open?id:undefined} aria-expanded={open} onPointerDown={e=>{pointer.current=e.pointerType||'mouse';keyboard.current=false}} onPointerEnter={e=>{if(e.pointerType==='mouse'){clear();setOpen(true)}}} onPointerLeave={e=>{if(e.pointerType==='mouse')leave()}} onFocus={()=>{if(!pointer.current){keyboard.current=true;clear();setOpen(true)}}} onBlur={()=>{keyboard.current=false;setOpen(false)}} onClick={()=>{clear();if(pointer.current==='touch')setOpen(value=>!value);else setOpen(true);pointer.current=''}}>ⓘ</button>{open&&createPortal(<div ref={tip} id={id} role="tooltip" aria-label={title} data-help-visible="true" className="help-tooltip" style={position} onPointerEnter={clear} onPointerLeave={e=>{if(e.pointerType==='mouse')leave()}}><strong>{title}</strong><div>{children}</div></div>,document.body)}</>
 }
 export function Panel({ id, title, subtitle, action, children, className = '',help }: {id?:string; help?:ReactNode; className?: string; title?: ReactNode; subtitle?: ReactNode; action?: ReactNode; children?: ReactNode }) {
-  return <section id={id} tabIndex={id ? -1 : undefined} className={`panel ${className}`}>{(title||subtitle||action||help)&&<div className="panel-head"><div>{title&&<h2>{title}</h2>}{subtitle && <p>{subtitle}</p>}</div><div className="panel-actions">{help&&<SectionHelp title={typeof title==='string'?title:'This section'}>{help}</SectionHelp>}{action}</div></div>}{children}</section>
+  const inlineAction=isValidElement<{className?:string;'aria-expanded'?:boolean;children?:ReactNode}>(action)&&action.props.className?.includes('icon-button')
+  const headingAction=inlineAction&&isValidElement<{children?:ReactNode;'aria-expanded'?:boolean}>(action)&&typeof action.props['aria-expanded']==='boolean'?cloneElement(action,{children:<span aria-hidden="true">{action.props['aria-expanded']?'▾':'▸'}</span>}):action
+  return <section id={id} tabIndex={id ? -1 : undefined} className={`panel ${className}`}>{(title||subtitle||action||help)&&<div className="panel-head"><div><div className="panel-heading-line">{inlineAction&&headingAction}{title&&<h2>{title}</h2>}{help&&<SectionHelp title={typeof title==='string'?title:'This section'}>{help}</SectionHelp>}</div>{subtitle && <p>{subtitle}</p>}</div>{!inlineAction&&action&&<div className="panel-actions">{action}</div>}</div>}{children}</section>
 }
 export function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return <div className="page-heading"><div><span className="eyebrow">Your grocery workspace</span><h1>{title}</h1><p>{subtitle}</p></div>{action}</div>
@@ -116,5 +118,5 @@ export function AutoSizeTextArea(props: TextareaHTMLAttributes<HTMLTextAreaEleme
 
 
 export function Disclosure({title,children,className='',open=true}:{title:ReactNode;children:ReactNode;className?:string;open?:boolean}) {
- return <details open={open} className={`section-disclosure ${className}`}><summary><div className="disclosure-title">{title}</div><ChevronDown size={18} aria-hidden="true"/></summary><div className="disclosure-body">{children}</div></details>
+ return <details open={open} className={`section-disclosure ${className}`}><summary><span className="disclosure-arrow" aria-hidden="true"/><div className="disclosure-title">{title}</div></summary><div className="disclosure-body">{children}</div></details>
 }

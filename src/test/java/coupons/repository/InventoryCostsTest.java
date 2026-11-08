@@ -14,6 +14,13 @@ class InventoryCostsTest {
     private CouponApplied discount(String amount,List<UUID> ids,boolean whole) {
         return new CouponApplied(UUID.randomUUID(),"Discount",new BigDecimal(amount),ids,null,whole,Map.of());
     }
+    @Test void rejectsInvalidOunceSizesBeforeOpeningAnyDatabaseConnection() {
+        var repository=new PostgresInventoryRepository(new PostgresConnectionFactory("jdbc:must-not-open","test","test"));
+        for(String size:List.of("0","-1","7.12345","1000000000000"))assertThrows(IllegalArgumentException.class,()->repository.adjust(A,1,"DETAILS",0,null,null,"tester",null,null,null,"PACKAGE",null,new BigDecimal(size),"FL_OZ"));
+        assertThrows(IllegalArgumentException.class,()->repository.adjust(A,1,"DETAILS",0,null,null,"tester",null,null,null,"PACKAGE",null,null,"OZ"));
+        assertThrows(IllegalArgumentException.class,()->repository.adjust(A,1,"DETAILS",0,null,null,"tester",null,null,null,"PACKAGE",null,new BigDecimal("7.5"),"UNKNOWN"));
+    }
+
     @Test void usesSalePricesAndProductCouponsWhileExcludingReportedTaxAndTotal() {
         var costs=InventoryCosts.calculate(receipt("4.00","2.00",List.of(discount("2.00",List.of(A),false))));
         assertEquals(new BigDecimal("6.00"),costs.get(A));assertEquals(new BigDecimal("2.00"),costs.get(B));

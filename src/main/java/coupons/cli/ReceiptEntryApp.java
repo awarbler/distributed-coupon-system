@@ -875,7 +875,7 @@ public final class ReceiptEntryApp {
                 if(!yes("Delete "+earning.provider()+" | "+Objects.toString(earning.offerReference(),"No offer description")+" from this draft?",false))return true;
                 draft.earnings.remove(index);draft.deferredEarnings.remove(earning.earningId());
                 var groups=new HashMap<>(draft.worksheet.earningGroups());groups.remove(earning.earningId());
-                draft.worksheet=new ReceiptWorksheetData(groups,draft.worksheet.uses(),draft.worksheet.dayOrder());editingEarning=null;
+                draft.worksheet=new ReceiptWorksheetData(groups,draft.worksheet.uses(),draft.worksheet.dayOrder(),draft.worksheet.packageDetails());editingEarning=null;
             } else {
                 var coupons=new ArrayList<CouponApplied>();draft.items.forEach(i->coupons.addAll(i.deductions()));coupons.addAll(draft.sharedCoupons);
                 if(coupons.isEmpty()){output.println("No coupons or discounts to delete.");return true;}
@@ -2254,12 +2254,12 @@ public final class ReceiptEntryApp {
         var events=new HashSet<>(payments);events.addAll(knownRR);o.unidentifiedRR().forEach(r->events.add(r.eventId()));
         var groups=new HashMap<>(o.worksheet().earningGroups());groups.keySet().retainAll(earnings);
         var uses=new HashMap<>(o.worksheet().uses());uses.keySet().retainAll(events);
-        return new ReceiptObservations(o.purchaseDate(),o.printedTime(),o.earnings(),o.unidentifiedRR(),o.walgreensCash(),o.savings(),o.discountKinds(),o.receiptSavingValuePercent(),o.promotionLinks(),new ReceiptWorksheetData(groups,uses,o.worksheet().dayOrder()),o.footerStatus());
+        return new ReceiptObservations(o.purchaseDate(),o.printedTime(),o.earnings(),o.unidentifiedRR(),o.walgreensCash(),o.savings(),o.discountKinds(),o.receiptSavingValuePercent(),o.promotionLinks(),new ReceiptWorksheetData(groups,uses,o.worksheet().dayOrder(),o.worksheet().packageDetails()),o.footerStatus());
     }
 
     private ReceiptWorksheetData worksheetMetadata(CouponTransaction tx,ReceiptWorksheetData current,String action) {
         var groups=new HashMap<>(current.earningGroups()); var uses=new HashMap<>(current.uses());
-        if(action.equals("ORDER")) return new ReceiptWorksheetData(groups,uses,integer("Transaction sequence within this purchase day",1,Integer.MAX_VALUE));
+        if(action.equals("ORDER")) return new ReceiptWorksheetData(groups,uses,integer("Transaction sequence within this purchase day",1,Integer.MAX_VALUE),current.packageDetails());
         if(action.equals("GROUPS")) {
             var earnings=tx.getObservations().earnings();
             for(int i=0;i<earnings.size();i++) output.println((i+1)+". "+earnings.get(i).provider()+" | currently "+current.group(earnings.get(i)));
@@ -2281,7 +2281,7 @@ public final class ReceiptEntryApp {
                 uses.put(event.id(),new ReceiptWorksheetData.Use(ids,units,deduction));
             }
         } else output.println("Choose GROUPS, USES or ORDER.");
-        return new ReceiptWorksheetData(groups,uses,current.dayOrder());
+        return new ReceiptWorksheetData(groups,uses,current.dayOrder(),current.packageDetails());
     }
 
     private void receiptViews(ReceiptRecord receipt) {

@@ -192,7 +192,7 @@ public final class InMemoryTransactionRepository implements TransactionRepositor
             for(var old:previous.contents().observations().promotionLinks())if(!retained.contains(old.promotionId())) {
                 var offer=promotions.get(old.promotionId());
                 if(offer!=null){var contributions=new HashMap<>(offer.contributions());contributions.remove(receipt.transactionId());
-                    promotions.put(offer.id(),new GiftCardPromotion(offer.id(),offer.name(),offer.threshold(),offer.giftCardValue(),offer.start(),offer.end(),offer.basis(),offer.terms(),offer.status(),contributions));}
+                    promotions.put(offer.id(),new GiftCardPromotion(offer.id(),offer.name(),offer.threshold(),offer.giftCardValue(),offer.start(),offer.end(),offer.basis(),offer.terms(),offer.status(),contributions,offer.planningRules()));}
             }
         }
         for (var link : receipt.contents().observations().promotionLinks()) {

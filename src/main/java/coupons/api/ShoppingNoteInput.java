@@ -9,13 +9,13 @@ import java.util.regex.Pattern;
 /** Conservative local note extraction. Unrecognized text remains in the saved source. */
 final class ShoppingNoteInput {
     private ShoppingNoteInput() {}
-    private static final String AMOUNT="([0-9]+(?:[.][0-9]+)?)";
+    private static final String AMOUNT="((?:[0-9]+(?:[.][0-9]+)?|[.][0-9]+))";
     private static final Pattern TRAILING_QUANTITY=pattern("^(.+?)\\s+\\$?"+AMOUNT+"\\s*[*x×]\\s*([1-9][0-9]*)\\s*$");
     private static final Pattern PREFIX_QUANTITY=pattern("^(?:buy\\s+)?\\(?([1-9][0-9]*)\\)?\\s*[x×]\\s*([\\p{L}].*?)\\s+\\$?"+AMOUNT+"(?:\\s*(?:each|ea[.]?))?\\s*[›>»]?\\s*$");
     private static final Pattern LEADING_QUANTITY=pattern("^(?:buy\\s+)?\\(?([1-9][0-9]*)\\)?\\s+([\\p{L}].*?)\\s+\\$"+AMOUNT+"(?:\\s*(?:each|ea[.]?))?\\s*[›>»]?\\s*$");
-    private static final Pattern BUY_GET=pattern("^buy\\s*1\\s*,?\\s*get\\s*1\\s+(50\\s*%\\s*off|free)\\s*[.!]?$");
+    private static final Pattern BUY_GET=pattern("^buy\\s*(?:1|one)\\s*,?\\s*get\\s*(?:1|one)\\s+(50\\s*%\\s*off|free)\\s*[.!]?$");
     private static final Pattern IBOTTA=pattern("^(?:redeem|use)\\s+\\$?"+AMOUNT+"\\s*/\\s*([1-9][0-9]*)\\s+(.+?\\bibotta\\b.*?\\brebate)\\s+([1-9][0-9]*)\\s+times?\\s*[.]?$");
-    private static final Pattern SPEND=pattern("^spend\\s*\\$?"+AMOUNT+"\\s*,?\\s*(?:get|earn|receive)\\s*\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*[.!]?$");
+    private static final Pattern SPEND=pattern("^(?:p\\s*&\\s*g\\s+)?spend\\s*\\$?"+AMOUNT+"\\s*,?\\s*(?:get|earn|receive)\\s*\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*[.!]?$");
     private static final Pattern MFC=pattern("\\$\\s*"+AMOUNT+"\\s*(?:MFC|manufacturer\\s+coupons?)\\b");
     private static final Pattern MFC_LIST=pattern("^use\\s+(?:\\$\\s*"+AMOUNT+"\\s*(?:MFC|manufacturer\\s+coupons?)\\s*[,;+&]?\\s*)+[.]?$");
     private static final Pattern COUPON=pattern("^(?:use\\s+(?:the\\s+)?)?\\$?"+AMOUNT+"\\s*(?:off|/)\\s*([1-9][0-9]*)(.*)$");
@@ -23,6 +23,18 @@ final class ShoppingNoteInput {
     private static final Pattern REWARD_VALUE=pattern("^\\$?"+AMOUNT+"\\s*(RR|WCash|WC|ECB)\\s*$");
     private static Pattern pattern(String regex){return Pattern.compile(regex,Pattern.CASE_INSENSITIVE);}
     private static String rewardType(String unit){return switch(unit.toUpperCase(Locale.ROOT)){case "RR"->"REGISTER_REWARD";case "WC","WCASH"->"WALGREENS_CASH";default->"ECB";};}
+
+    private enum LinePurpose { PRODUCT, CALCULATION, COUPON, PROMOTION, PAYMENT, REWARD, CHANNEL }
+    /** Classify intent before the permissive product-price patterns can see the line. */
+    private static LinePurpose purpose(String line) {
+        if(pattern("^(?:online|in[ -]store)(?: only)?$").matcher(line).matches())return LinePurpose.CHANNEL;
+        if(pattern("^(?:(?:manufacturer|mfg|walgreens|store)\\s+coupon|(?:online\\s+)?promo\\s+code)\\b").matcher(line).find())return LinePurpose.COUPON;
+        if(pattern("^(?:store\\s+promotion|(?:p\\s*&\\s*g\\s+)?spend)\\b").matcher(line).find())return LinePurpose.PROMOTION;
+        if(pattern("^(?:oop|out of pocket|pay|total|tax|net total|use|i can use)\\b").matcher(line).find())return LinePurpose.PAYMENT;
+        if(pattern("^(?:earn|get|receive|fetch|ibotta)\\b").matcher(line).find())return LinePurpose.REWARD;
+        if(line.contains("="))return LinePurpose.CALCULATION;
+        return LinePurpose.PRODUCT;
+    }
 
     /** Clipboard presentation is normalized only for parsing; source bytes/text stay untouched. */
     private static String plainText(String raw) {
@@ -77,15 +89,34 @@ final class ShoppingNoteInput {
         return String.join("\n",lines);
     }
 
+    /** Normalize split N/$X regular/sale prices into the existing product-price syntax. */
+    private static String joinMultiUnitProducts(String text,List<String> unresolved) {
+        var prices=pattern("(?m)^([\\p{L}][^\\n]+)\\nregular\\s+price\\s+([1-9][0-9]*)\\s*/\\s*\\$?"+AMOUNT+"\\s+current\\s+sale\\s+price\\s+is\\s+([1-9][0-9]*)\\s*/\\s*\\$?"+AMOUNT+"\\s*$").matcher(text);
+        return prices.replaceAll(m->{
+            if(purpose(m.group(1))!=LinePurpose.PRODUCT)return Matcher.quoteReplacement(m.group());
+            try {
+                var regular=new BigDecimal(m.group(3)).divide(new BigDecimal(m.group(2)));
+                var sale=new BigDecimal(m.group(5)).divide(new BigDecimal(m.group(4)));
+                String name=m.group(1).replaceFirst("(?i)\\s+reg[.]?$","").trim();
+                return Matcher.quoteReplacement(name+" $"+regular.toPlainString()+" on sale for $"+sale.toPlainString());
+            }catch(ArithmeticException invalid){
+                unresolved.add(m.group()+" — enter unit prices; the multi-unit price cannot be divided exactly.");
+                return Matcher.quoteReplacement(m.group());
+            }
+        });
+    }
+
     static Map<String,Object> parse(String text, ShoppingPlan.PlanningSource source) {
         if(text==null||text.isBlank())throw new IllegalArgumentException("Paste a deal or enter readable item text.");
         var items=new ArrayList<ShoppingPlan.Line>();var coupons=new ArrayList<ShoppingPlan.ScenarioCoupon>();
         var promotions=new ArrayList<ShoppingPlan.ScenarioPromotion>();var unresolved=new ArrayList<String>();
         var manufacturerLines=new HashSet<String>();
+        var payments=new ArrayList<ShoppingPlan.ScenarioPayment>();
         String pendingBuyReward=null;
         String pendingSale=null;
         BigDecimal walgreensCashUsed=null;
         boolean advertisedBundle=false;
+        String purchaseChannel=source==null?null:source.purchaseChannel();
         var screenshotCoupons=new ArrayList<String>();
         var digitalSummaries=new ArrayList<BigDecimal>();
         var screenshotCouponQuantities=new ArrayList<Integer>();
@@ -95,6 +126,7 @@ final class ShoppingNoteInput {
         UUID current=null;boolean rewardHeading=false;ShoppingPlan.ScenarioPromotion lastSpend=null;
         String screenshotProduct=null;
         String normalizedText=Arrays.stream(text.split("\\R")).map(ShoppingNoteInput::plainText).collect(java.util.stream.Collectors.joining("\n"));
+        normalizedText=joinMultiUnitProducts(normalizedText,unresolved);
         normalizedText=joinPosterProducts(normalizedText);
         normalizedText=pattern("register\\s+rewards?").matcher(normalizedText).replaceAll("RR");
         normalizedText=pattern("(?im)^pay (.*?)\\s*&\\s*get ").matcher(normalizedText).replaceAll("Pay $1 get ");
@@ -122,6 +154,111 @@ final class ShoppingNoteInput {
         }
         for(String line:normalizedText.split("\\R")) {
             if(line.isEmpty())continue;
+            var purpose=purpose(line);boolean productLine=purpose==LinePurpose.PRODUCT;
+            if(purpose==LinePurpose.CHANNEL) {
+                purchaseChannel=line.toLowerCase(Locale.ROOT).startsWith("online")?"ONLINE":"IN_STORE";continue;
+            }
+            if(pattern("^store\\s+promotion\\b").matcher(line).find()) {
+                unresolved.add(line+" — clarify the promotion; explicit purchase-price calculations are preserved.");continue;
+            }
+            var productCoupon=pattern("^(.+?)\\s+\\$"+AMOUNT+"\\s+off\\s+([1-9][0-9]*)\\s+coupon$").matcher(line);
+            if(productCoupon.matches()) {
+                var linked=items.stream().filter(item->item.name().equalsIgnoreCase(productCoupon.group(1).trim())).map(ShoppingPlan.Line::id).toList();
+                if(linked.isEmpty())unresolved.add(line+" — select the product for this coupon.");
+                else coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,new BigDecimal(productCoupon.group(2)),Integer.parseInt(productCoupon.group(3)),linked,null));
+                continue;
+            }
+            var participating=pattern("^buy\\s+([1-9][0-9]*)\\s+participating\\s+(.+?)\\s+to\\s+earn\\s+(?:a\\s+)?\\$?"+AMOUNT+"\\s*RR$").matcher(line);
+            if(participating.matches()) {
+                String brand=participating.group(2).split("\\s+")[0];
+                var linked=items.stream().filter(item->item.name().toLowerCase(Locale.ROOT).contains(brand.toLowerCase(Locale.ROOT))).map(ShoppingPlan.Line::id).toList();
+                int count=Integer.parseInt(participating.group(1));
+                if(linked.isEmpty())unresolved.add(line+" — select the products for this promotion.");
+                else {
+                    if(linked.size()==1)for(int index=0;index<items.size();index++)if(items.get(index).id().equals(linked.getFirst())) {
+                        var old=items.get(index);
+                        if(old.quantity()!=1&&old.quantity()!=count)unresolved.add(line+" — purchase calculation and promotion quantities differ; entered purchase quantity was preserved.");
+                        else items.set(index,new ShoppingPlan.Line(old.id(),old.name(),old.sku(),old.regular(),old.sale(),count,old.memberRewardRate(),old.priceRule()));
+                    }
+                    promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,"REGISTER_REWARD",new BigDecimal(participating.group(3)),count,BigDecimal.ZERO,"BEFORE_COUPONS",true,linked));
+                }
+                continue;
+            }
+            var regularProduct=pattern("^(.+?)(?:\\s+deal)?\\s+regular\\s+price\\s+\\$?"+AMOUNT+"$").matcher(line);
+            if(productLine&&regularProduct.matches()) {
+                current=UUID.randomUUID();items.add(new ShoppingPlan.Line(current,regularProduct.group(1).trim(),null,new BigDecimal(regularProduct.group(2)),null,1));continue;
+            }
+            var purchaseMath=pattern("^buy\\s+([1-9][0-9]*)\\s*:\\s*([1-9][0-9]*)\\s*[x×*]\\s*\\$?"+AMOUNT+"\\s*=\\s*\\$?"+AMOUNT+"$").matcher(line);
+            if(purchaseMath.matches()) {
+                int count=Integer.parseInt(purchaseMath.group(1));var unit=new BigDecimal(purchaseMath.group(3));
+                if(current==null||count!=Integer.parseInt(purchaseMath.group(2))||unit.multiply(BigDecimal.valueOf(count)).compareTo(new BigDecimal(purchaseMath.group(4)))!=0)unresolved.add(line+" — resolve the product or conflicting quantity/price calculation.");
+                else {var old=items.removeLast();items.add(new ShoppingPlan.Line(old.id(),old.name(),old.sku(),old.regular(),unit,count,old.memberRewardRate(),null));}
+                continue;
+            }
+            var manufacturerCoupon=pattern("^(?:manufacturer|mfg)\\s+coupon\\s+buy\\s+([1-9][0-9]*)\\s+get\\s+\\$?"+AMOUNT+"\\s+off$").matcher(line);
+            if(manufacturerCoupon.matches()) {
+                if(current==null)unresolved.add(line+" — select the product for this coupon.");
+                else coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,new BigDecimal(manufacturerCoupon.group(2)),Integer.parseInt(manufacturerCoupon.group(1)),List.of(current),null));
+                continue;
+            }
+            var storeCoupon=pattern("^(?:walgreens|store)\\s+coupon\\s+\\$?"+AMOUNT+"\\s+off\\s*[x×*]\\s*([1-9][0-9]*)\\s*=\\s*\\$?"+AMOUNT+"$").matcher(line);
+            if(storeCoupon.matches()) {
+                int count=Integer.parseInt(storeCoupon.group(2));var amount=new BigDecimal(storeCoupon.group(3));
+                if(current==null||new BigDecimal(storeCoupon.group(1)).multiply(BigDecimal.valueOf(count)).compareTo(amount)!=0)unresolved.add(line+" — resolve the product or conflicting coupon calculation.");
+                else coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,amount,count,List.of(current),null,"STORE_COUPON"));
+                continue;
+            }
+            var promoCode=pattern("^(?:online\\s+)?promo\\s+code\\s+(\\S+)\\s+[-−]\\s*\\$?"+AMOUNT+"$").matcher(line);
+            if(promoCode.matches()) {
+                coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),"Online promo code "+promoCode.group(1).toUpperCase(Locale.ROOT),new BigDecimal(promoCode.group(2)),1,List.of(),null,"STORE_COUPON",true));continue;
+            }
+            var earnedCash=pattern("^(?:earn|get|receive)\\s+\\$?"+AMOUNT+"\\s+walgreens\\s+cash$").matcher(line);
+            if(earnedCash.matches()&&!items.isEmpty()) {
+                promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,"WALGREENS_CASH",new BigDecimal(earnedCash.group(1)),0,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(),true));continue;
+            }
+            var fetch=pattern("^fetch\\s+([0-9]+)\\s+points?$").matcher(line);
+            if(fetch.matches()&&!items.isEmpty()) {
+                promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,"FETCH",new BigDecimal(fetch.group(1)),0,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(),true));continue;
+            }
+            var requiredRebate=pattern("^ibotta\\s+\\$?"+AMOUNT+"\\s+must\\s+buy\\s+([1-9][0-9]*)$").matcher(line);
+            if(requiredRebate.matches()) {
+                if(current==null)unresolved.add(line+" — select the product for this rebate.");
+                else promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,"IBOTTA",new BigDecimal(requiredRebate.group(1)),Integer.parseInt(requiredRebate.group(2)),BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(current)));
+                continue;
+            }
+            // OOP is a comparison recorded in the source, never another product or manual override.
+            if(pattern("^(?:oop|out of pocket)\\s*=\\s*\\$?"+AMOUNT+"$").matcher(line).matches())continue;
+            var purchaseSum=pattern("^\\$?"+AMOUNT+"\\s*\\+\\s*\\$?"+AMOUNT+"\\s*=\\s*\\$?"+AMOUNT+"(?:\\s*-\\s*\\$?"+AMOUNT+"\\s*=\\s*\\$?"+AMOUNT+")?\\s*(?:plus\\s+tax|\\+\\s*tax)?$").matcher(line);
+            if(current!=null&&purchaseSum.matches()) {
+                var old=items.getLast();var unit=old.sale()==null?old.regular():old.sale();var total=new BigDecimal(purchaseSum.group(3));
+                try {
+                    int count=total.divide(unit).intValueExact();
+                    if(count<1||old.priceRule()!=null||new BigDecimal(purchaseSum.group(1)).add(new BigDecimal(purchaseSum.group(2))).compareTo(total)!=0)throw new ArithmeticException();
+                    items.set(items.size()-1,new ShoppingPlan.Line(old.id(),old.name(),old.sku(),old.regular(),old.sale(),count,old.memberRewardRate(),old.priceRule()));
+                }catch(ArithmeticException invalid){unresolved.add(line+" — review the purchase quantity; entered product prices were preserved.");}
+                continue;
+            }
+            // Handwritten quantity equations and checkout funding are inputs, not products.
+            var quantityEquation=pattern("^([1-9][0-9]*)\\s+buy\\s+\\$?[0-9].*=.*$").matcher(line);
+            if(current!=null&&quantityEquation.matches()) {
+                var old=items.removeLast();items.add(new ShoppingPlan.Line(old.id(),old.name(),old.sku(),old.regular(),old.sale(),Integer.parseInt(quantityEquation.group(1)),old.memberRewardRate(),old.priceRule()));continue;
+            }
+            var rrUse=pattern("(?:i\\s+can\\s+)?use\\s+\\$?"+AMOUNT+"\\s*(?:(pg|p&g|manufacturer|mfg|store)\\s*)?rr\\b").matcher(line);
+            boolean usedReward=false;
+            while(rrUse.find()) {
+                String label=rrUse.group(2);String type=label==null?"UNKNOWN":label.equalsIgnoreCase("store")?"STORE":"MANUFACTURER";
+                // A P&G RR followed by another RR in the same funding line shares the supplied manufacturer classification.
+                if(label==null&&pattern("\\b(?:pg|p&g|manufacturer|mfg)\\s*rr\\b").matcher(line).find())type="MANUFACTURER";
+                payments.add(new ShoppingPlan.ScenarioPayment(UUID.randomUUID(),"REGISTER_REWARD",new BigDecimal(rrUse.group(1)),type+" RR"+(label==null?"":" · "+label),type,null));usedReward=true;
+            }
+            if(usedReward)continue;
+            var simpleRebate=pattern("^ibotta\\s+(?:get|earn|receive)\\s+\\$?"+AMOUNT+"\\s*$").matcher(line);
+            if(current!=null&&simpleRebate.matches()) {
+                promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,"IBOTTA",new BigDecimal(simpleRebate.group(1)),0,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(current)));continue;
+            }
+            // Retain arithmetic in the source without treating comparison equations as missing fields.
+            if(pattern("^[0-9$][0-9$ .+*/()=−-]*(?:\\+\\s*tax)?$").matcher(line).matches()&&line.contains("="))continue;
+
             if(advertisedBundle) {
                 if(pattern("^\\s*\\$"+AMOUNT+"\\s*\\+\\s*\\$?"+AMOUNT+"\\s*=\\s*\\$?"+AMOUNT+"\\s*$").matcher(line).matches())continue;
                 var deduction=pattern("^[-−–—]\\s*\\$?"+AMOUNT+"\\s*$").matcher(line);
@@ -172,7 +309,7 @@ final class ShoppingNoteInput {
                 continue;
             }
             var standalone=pattern("^([\\p{L}].*?)\\s+\\$"+AMOUNT+"\\s+(?:(each|ea[.]?)|(bogo\\s+50\\s*%\\s+off))\\s*$").matcher(line);
-            if(pending!=null&&pending.matches()&&standalone.matches()){
+            if(pending!=null&&pending.matches()&&productLine&&standalone.matches()){
                 current=UUID.randomUUID();int count=Integer.parseInt(pending.group(1));
                 items.add(new ShoppingPlan.Line(current,standalone.group(1),null,null,new BigDecimal(standalone.group(2)),count,null,standalone.group(4)==null?null:new ShoppingPlan.PriceRule("BOGO_HALF",null)));
                 promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),pendingBuyReward,rewardType(pending.group(3)),new BigDecimal(pending.group(2)),count,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(current)));
@@ -198,14 +335,14 @@ final class ShoppingNoteInput {
                 coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,new BigDecimal(simpleCoupon.group(1)),1,List.of(current),null));continue;
             }
             var saleProduct=pattern("^([\\p{L}].*?)\\s+\\$?"+AMOUNT+"\\s+on\\s+sale\\s+for\\s+\\$?"+AMOUNT+"$").matcher(line);
-            if(saleProduct.matches()) {
+            if(productLine&&saleProduct.matches()) {
                 current=UUID.randomUUID();items.add(new ShoppingPlan.Line(current,saleProduct.group(1),null,new BigDecimal(saleProduct.group(2)),new BigDecimal(saleProduct.group(3)),1));continue;
             }
             var cashUsed=pattern("[-−]\\s*\\$?"+AMOUNT+"\\s+walgreens\\s+cash\\b").matcher(line);
             if(cashUsed.find())walgreensCashUsed=new BigDecimal(cashUsed.group(1));
 
             var atPrice=pattern("^([1-9][0-9]*)\\s+(.+?)\\s*@\\s*\\$?"+AMOUNT+"\\s*(?:ea[.]?|each)\\s+BOGO\\s+50\\s*%(?:\\s+off)?\\s*$").matcher(line);
-            if(atPrice.matches()) {
+            if(productLine&&atPrice.matches()) {
                 current=UUID.randomUUID();items.add(new ShoppingPlan.Line(current,atPrice.group(2).trim(),null,null,new BigDecimal(atPrice.group(3)),Integer.parseInt(atPrice.group(1)),null,new ShoppingPlan.PriceRule("BOGO_HALF",null)));
                 unresolved.add("BOGO half-price arithmetic may include a half cent. Compare the calculated total with the advertised checkout total and your store's rounding.");continue;
             }
@@ -217,7 +354,7 @@ final class ShoppingNoteInput {
             if(trailing.matches()){name=trailing.group(1);price=trailing.group(2);quantity=trailing.group(3);}
             else if(prefix.matches()){quantity=prefix.group(1);name=prefix.group(2);price=prefix.group(3);}
             else if(leading.matches()){quantity=leading.group(1);name=leading.group(2);price=leading.group(3);}
-            if(name!=null){current=UUID.randomUUID();items.add(new ShoppingPlan.Line(current,name.replaceAll("[,;:]+$","").trim(),null,null,new BigDecimal(price),Integer.parseInt(quantity)));
+            if(productLine&&name!=null){current=UUID.randomUUID();items.add(new ShoppingPlan.Line(current,name.replaceAll("[,;:]+$","").trim(),null,null,new BigDecimal(price),Integer.parseInt(quantity)));
                 if(inlineOffer!=null){var offer=BUY_GET.matcher(inlineOffer);if(offer.matches()){
                     var old=items.removeLast();items.add(new ShoppingPlan.Line(old.id(),old.name(),old.sku(),old.regular(),old.sale(),old.quantity(),old.memberRewardRate(),new ShoppingPlan.PriceRule(offer.group(1).equalsIgnoreCase("free")?"BOGO_FREE":"BOGO_HALF",null)));
                     if(old.quantity()==1)unresolved.add("Review mixed-product sale eligibility for "+old.name()+"; a single item does not receive a BOGO discount by itself.");
@@ -247,9 +384,15 @@ final class ShoppingNoteInput {
 
             var spend=SPEND.matcher(line);
             if(current!=null&&spend.matches()) {
-                lastSpend=new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,rewardType(spend.group(3)),new BigDecimal(spend.group(2)),0,new BigDecimal(spend.group(1)),"AFTER_COUPONS",true,items.stream().map(ShoppingPlan.Line::id).toList());
+                boolean beforeCoupons=pattern("before\\s+coupons|sale\\s+subtotal").matcher(normalizedText).find()
+                        || pattern("(?m)^\\s*\\$?"+Pattern.quote(spend.group(1))+"\\s*-\\s*\\$?"+AMOUNT+"\\s*=").matcher(normalizedText).find();
+                boolean afterCoupons=pattern("after\\s+coupons").matcher(normalizedText).find();
+                if(afterCoupons)beforeCoupons=false;
+                boolean storeReduces=pattern("store\\s+rr[^\\n]*(?:reduces?|subtract)|(?:minus|less)[^\\n]*store\\s+rr").matcher(normalizedText).find();
+                String basis=(beforeCoupons?"BEFORE_COUPONS":"AFTER_COUPONS")+(storeReduces?"_AFTER_STORE_RR":"");
+                lastSpend=new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,rewardType(spend.group(3)),new BigDecimal(spend.group(2)),0,new BigDecimal(spend.group(1)),basis,true,items.stream().map(ShoppingPlan.Line::id).toList());
                 promotions.add(lastSpend);
-                unresolved.add("Spend basis is not shown: this imported spend offer uses after-coupon spending until you enter the offer's actual basis.");continue;
+                if(!beforeCoupons&&!afterCoupons)unresolved.add("Spend basis is not shown: this imported spend offer uses after-coupon spending until you enter the offer's actual basis.");continue;
             }
             if(current!=null&&line.matches("(?i)^use\\b.*")&&MFC.matcher(line).find()) {
                 if(!MFC_LIST.matcher(line).matches()) {
@@ -314,8 +457,8 @@ final class ShoppingNoteInput {
                 promotions.add(new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),line,rewardType(unit),amount,0,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(current)));continue;
             }
             var simpleProduct=pattern("^([\\p{L}].*?)\\s+\\$?"+AMOUNT+"$").matcher(line);
-            if(simpleProduct.matches()&&(simpleProduct.group(2).contains(".")||line.contains("$"))&&!pattern("^(?:pay|total|tax|save|earn|get|receive|spend|coupon|use)\\b").matcher(line).find()) {
-                current=UUID.randomUUID();items.add(new ShoppingPlan.Line(current,simpleProduct.group(1),null,null,new BigDecimal(simpleProduct.group(2)),1));continue;
+            if(productLine&&simpleProduct.matches()&&(simpleProduct.group(2).contains(".")||line.contains("$"))&&!pattern("^(?:pay|total|tax|save|earn|get|receive|spend|coupon|use)\\b").matcher(line).find()) {
+                current=UUID.randomUUID();items.add(new ShoppingPlan.Line(current,simpleProduct.group(1),null,new BigDecimal(simpleProduct.group(2)),new BigDecimal(simpleProduct.group(2)),1));continue;
             }
             unresolved.add(line);
         }
@@ -348,9 +491,11 @@ final class ShoppingNoteInput {
         }
         if(pendingBuyReward!=null)unresolved.add(pendingBuyReward);
         if(items.size()>100||coupons.size()>100||promotions.size()>100)throw new IllegalArgumentException("Import at most 100 items, coupons and rewards per plan.");
-        var result=new LinkedHashMap<String,Object>();result.put("advertisedBundle",advertisedBundle);result.put("walgreensCashUsed",walgreensCashUsed);result.put("items",items);result.put("coupons",coupons);result.put("promotions",promotions);result.put("unresolved",unresolved);result.put("source",source);
+        if(purchaseChannel!=null)source=source==null?new ShoppingPlan.PlanningSource(text,null,null,List.of(),purchaseChannel):new ShoppingPlan.PlanningSource(source.text(),source.mediaType(),source.contentBase64(),source.earlier(),purchaseChannel);
+        var result=new LinkedHashMap<String,Object>();result.put("advertisedBundle",advertisedBundle);result.put("walgreensCashUsed",walgreensCashUsed);result.put("payments",payments);result.put("items",items);result.put("coupons",coupons);result.put("promotions",promotions);result.put("unresolved",unresolved);result.put("source",source);
         var store=pattern("(?m)^\\s*(?:in[- ]store\\s+deal\\s+at\\s+)(Walgreens|CVS|Walmart|Target)\\b|^\\s*(Walgreens|CVS|Walmart|Target)\\s+(?:weekly\\s+deals|deals)\\b").matcher(normalizedText);
-        result.put("retailer",store.find()?(store.group(1)==null?store.group(2):store.group(1)):null);
+        result.put("purchaseChannel",purchaseChannel);
+        result.put("retailer",store.find()?(store.group(1)==null?store.group(2):store.group(1)):(pattern("\\bwalgreens\\b").matcher(normalizedText).find()||!payments.isEmpty()||promotions.stream().anyMatch(p->p.rewardType().equals("REGISTER_REWARD"))?"Walgreens":null));
         result.put("notice","Imported amounts are advertised assumptions. Your account offers are unknown until recorded; source notes are preserved.");return result;
     }
 }

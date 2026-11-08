@@ -62,6 +62,37 @@ class PostgresMilestone2RepositoryTest {
     }
 
     @Test
+    void inventoryCategoriesPersistClearAndSurviveLegacyAdjustments() throws Exception {
+        UUID id=UUID.randomUUID(),product=UUID.randomUUID();
+        inventory.save(new InventoryBalance(id,product,2,1),"tester");
+        try(var c=connections.open();var enable=c.prepareStatement("UPDATE inventory_receipt_settings SET enabled=true WHERE singleton=true");var p=c.prepareStatement("INSERT INTO inventory_receipt_products(product_id,product_key,product_name,quantity_confirmed) VALUES(?,?,?,true)")){
+            enable.executeUpdate();p.setObject(1,product);p.setString(2,"test:"+product);p.setString(3,"Laundry");p.executeUpdate();
+        }
+        inventory.adjust(id,1,"DETAILS",0,null,null,"tester",null,40,"Loads","PACKAGE","Household & Pet Essentials > Laundry Care");
+        try(var c=connections.open()){
+            var rows=PostgresInventoryRepository.receiptInventory(c);
+            var row=(java.util.Map<?,?>)rows.getFirst();
+            assertEquals("Household & Pet Essentials > Laundry Care",row.get("category"));
+            assertEquals(40,row.get("unitsPerPackage"));assertEquals("Loads",row.get("unitName"));assertEquals(2,row.get("quantityOnHand"));
+        }
+        inventory.adjust(id,2,"DETAILS",0,null,null,"tester");
+        try(var c=connections.open()){assertEquals("Household & Pet Essentials > Laundry Care",((java.util.Map<?,?>)PostgresInventoryRepository.receiptInventory(c).getFirst()).get("category"));}
+        assertThrows(ConcurrentModificationException.class,()->inventory.adjust(id,2,"DETAILS",0,null,null,"tester",null,40,"Loads","PACKAGE","Other"));
+        inventory.adjust(id,3,"DETAILS",0,null,null,"tester",null,40,"Loads","PACKAGE","");
+        try(var c=connections.open()){assertNull(((java.util.Map<?,?>)PostgresInventoryRepository.receiptInventory(c).getFirst()).get("category"));}
+        inventory.adjust(id,4,"DETAILS",0,null,null,"tester",null,40,"Loads","PACKAGE",null,new BigDecimal("7.5"),"FL_OZ");
+        try(var c=connections.open()){
+            var row=(java.util.Map<?,?>)PostgresInventoryRepository.receiptInventory(c).getFirst();
+            assertEquals(0,new BigDecimal("7.5").compareTo((BigDecimal)row.get("comparisonSize")));assertEquals("FL_OZ",row.get("comparisonUnit"));assertEquals(2,row.get("quantityOnHand"));assertEquals(40,row.get("unitsPerPackage"));
+        }
+        inventory.adjust(id,5,"DETAILS",0,null,null,"tester");
+        try(var c=connections.open()){assertEquals("FL_OZ",((java.util.Map<?,?>)PostgresInventoryRepository.receiptInventory(c).getFirst()).get("comparisonUnit"));}
+        inventory.adjust(id,6,"DETAILS",0,null,null,"tester",null,40,"Loads","PACKAGE",null,null,"");
+        try(var c=connections.open()){var row=(java.util.Map<?,?>)PostgresInventoryRepository.receiptInventory(c).getFirst();assertNull(row.get("comparisonUnit"));assertNull(row.get("comparisonSize"));}
+
+    }
+
+    @Test
     void inventoryPersistsHistoryAndRejectsStaleRevision() throws Exception {
         UUID id = UUID.randomUUID();
         inventory.save(new InventoryBalance(id, UUID.randomUUID(), 5, 1), "tester");

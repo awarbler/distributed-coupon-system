@@ -8,9 +8,10 @@ import java.util.*;
 /** Offer progress only; neither qualifying spend nor approval creates an available gift card. */
 public record GiftCardPromotion(UUID id, String name, BigDecimal threshold, BigDecimal giftCardValue,
         LocalDate start, LocalDate end, Basis basis, String terms, Status status,
-        Map<UUID, Contribution> contributions) implements Serializable {
+        Map<UUID, Contribution> contributions,Map<String,String> planningRules) implements Serializable {
+    public GiftCardPromotion(UUID id,String name,BigDecimal threshold,BigDecimal value,LocalDate start,LocalDate end,Basis basis,String terms,Status status,Map<UUID,Contribution> contributions){this(id,name,threshold,value,start,end,basis,terms,status,contributions,Map.of());}
     public enum Basis { SALE_BEFORE_COUPONS, REVIEWED_ELIGIBLE_AMOUNT }
-    public enum Status { TRACKING, SUBMITTED, APPROVED, RECEIVED }
+    public enum Status { TRACKING, SUBMITTED, APPROVED, RECEIVED, ACTIVE, UPCOMING, EXPIRED, USED, ARCHIVED }
     public record Contribution(UUID receiptId, long reviewedRevision, List<UUID> lineIds,
             BigDecimal reviewedAmount, String note, boolean afterCoupons, boolean submitted, LocalDate submittedOn,
             String submissionReference) implements Serializable {
@@ -31,8 +32,9 @@ public record GiftCardPromotion(UUID id, String name, BigDecimal threshold, BigD
         Objects.requireNonNull(id); Objects.requireNonNull(name); Objects.requireNonNull(threshold);
         Objects.requireNonNull(giftCardValue); Objects.requireNonNull(start); Objects.requireNonNull(end);
         Objects.requireNonNull(basis); Objects.requireNonNull(terms); Objects.requireNonNull(status);
-        if (name.isBlank() || terms.isBlank() || threshold.signum() <= 0 || giftCardValue.signum() <= 0 || end.isBefore(start))
+        if (name.isBlank() || (terms.isBlank() && (planningRules==null || !"SPEND_BOOSTER".equals(planningRules.get("kind")))) || threshold.signum() <= 0 || giftCardValue.signum() <= 0 || end.isBefore(start))
             throw new IllegalArgumentException("Provide offer name, terms, positive amounts and valid dates.");
+        planningRules=planningRules==null?Map.of():Map.copyOf(planningRules);
         contributions = Map.copyOf(contributions);
         contributions.forEach((key, value) -> {
             if (!key.equals(value.receiptId())) throw new IllegalArgumentException("Contribution receipt mismatch.");
@@ -57,7 +59,7 @@ public record GiftCardPromotion(UUID id, String name, BigDecimal threshold, BigD
     }
 
     public String token() {
-        try{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
+        try{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest((id+"|"+name+"|"+threshold+"|"+giftCardValue+"|"+start+"|"+end+"|"+basis+"|"+terms+"|"+status+"|"+new TreeMap<>(contributions)+"|"+new TreeMap<>(planningRules)).getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
         catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
     }
 
@@ -69,9 +71,9 @@ public record GiftCardPromotion(UUID id, String name, BigDecimal threshold, BigD
     public GiftCardPromotion withContribution(Contribution contribution) {
         var values = new HashMap<>(contributions);
         values.put(contribution.receiptId(), contribution); // same receipt replaces, never appends twice
-        return new GiftCardPromotion(id, name, threshold, giftCardValue, start, end, basis, terms, status, values);
+        return new GiftCardPromotion(id, name, threshold, giftCardValue, start, end, basis, terms, status, values,planningRules);
     }
     public GiftCardPromotion withStatus(Status replacement) {
-        return new GiftCardPromotion(id, name, threshold, giftCardValue, start, end, basis, terms, replacement, contributions);
+        return new GiftCardPromotion(id, name, threshold, giftCardValue, start, end, basis, terms, replacement, contributions,planningRules);
     }
 }

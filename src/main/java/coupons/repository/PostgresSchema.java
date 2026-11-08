@@ -63,6 +63,9 @@ public final class PostgresSchema {
             statement.execute("INSERT INTO schema_version(version,description) VALUES(10,'receipt-backed inventory and optional locations') ON CONFLICT DO NOTHING");
             statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS units_per_package INTEGER CHECK(units_per_package>0)");
             statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS unit_name TEXT");
+            statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS category TEXT");
+            statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS comparison_size NUMERIC(16,4) CHECK(comparison_size>0)");
+            statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS comparison_unit TEXT CHECK(comparison_unit IN ('FL_OZ','OZ'))");
             statement.execute("ALTER TABLE inventory_receipt_products ADD COLUMN IF NOT EXISTS count_unit TEXT NOT NULL DEFAULT 'PACKAGE' CHECK(count_unit IN ('PACKAGE','ITEM'))");
             statement.execute("CREATE TABLE IF NOT EXISTS receipt_drafts(draft_id UUID PRIMARY KEY,revision BIGINT NOT NULL CHECK(revision>0),owner_id TEXT NOT NULL,store TEXT,receipt_number TEXT,updated_at TIMESTAMPTZ NOT NULL,payload TEXT NOT NULL)");
             statement.execute("CREATE TABLE IF NOT EXISTS receipt_draft_history(draft_id UUID NOT NULL REFERENCES receipt_drafts(draft_id),revision BIGINT NOT NULL,updated_at TIMESTAMPTZ NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(draft_id,revision))");

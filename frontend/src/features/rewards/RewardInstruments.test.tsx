@@ -1,6 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi } from 'vitest'
+import { workspace, receiptRow } from '../../api/fixtures.test-support'
 import { ApiClient, ApiError } from '../../api/client'
 import type { RewardInstrument } from '../../types/platform'
 import { RewardInstruments } from './RewardInstruments'
@@ -40,3 +41,47 @@ describe('individual reward accounts and gift cards',()=>{
   expect(screen.getByRole('button',{name:'Save observed activity'})).toBeDisabled();expect(screen.getByRole('button',{name:'Retry the same instrument request'})).toBeEnabled();expect(mutate.mock.calls[1]).toEqual(mutate.mock.calls[0]);
  })
 })
+
+it('opens gift-card entry on the gift-card page and saves a separately tracked card',async()=>{
+ const api=new ApiClient('test');vi.spyOn(api,'rewardInstruments').mockResolvedValue({instruments:[]});const mutate=vi.spyOn(api,'mutate').mockResolvedValue({});const user=userEvent.setup();
+ render(<RewardInstruments api={api} writable giftCardsOnly/>);
+ expect(screen.getByText('Add a gift card').closest('details')).not.toHaveAttribute('open');expect(screen.getByLabelText('Instrument type')).toHaveValue('GIFT_CARD');expect(screen.queryByRole('option',{name:'Account-linked reward'})).not.toBeInTheDocument();
+ await user.click(screen.getByText('Add a gift card'));await user.type(screen.getByLabelText('Retailer or reward program'),'Target');await user.type(screen.getByLabelText('Observed opening value (blank if unknown)'),'25');await user.type(screen.getByLabelText('Card last four digits (optional)'),'1234');await user.type(screen.getByLabelText('Opening source or reason'),'New card');await user.click(screen.getByRole('button',{name:'Save account or card'}));
+ expect(mutate).toHaveBeenCalledWith('/reward-instruments','POST',expect.objectContaining({kind:'GIFT_CARD',provider:'Target',opening:'25',lastFour:'1234'}),expect.any(String),undefined);
+});
+
+it('refreshes the active card list immediately after creation and clears the add form',async()=>{
+ const card={...row('new-card','Kitchen card'),kind:'GIFT_CARD' as const,provider:'Walgreens',lastFour:'1234',calculated:'25.00',status:'ACTIVE' as const};
+ const api=new ApiClient('test');vi.spyOn(api,'rewardInstruments').mockResolvedValueOnce({instruments:[]}).mockResolvedValue({instruments:[card]});vi.spyOn(api,'mutate').mockResolvedValue(card);const user=userEvent.setup();
+ render(<RewardInstruments api={api} writable giftCardsOnly/>);await user.click(screen.getByText('Add a gift card'));await user.type(screen.getByLabelText('Retailer or reward program'),'Walgreens');await user.type(screen.getByLabelText('Account or card nickname'),'Kitchen card');await user.type(screen.getByLabelText('Opening source or reason'),'Observed opening');await user.click(screen.getByRole('button',{name:'Save account or card'}));
+ const active=screen.getByRole('region',{name:'Current Active Gift Cards'});expect(await within(active).findByText('Walgreens · Kitchen card · ending 1234')).toBeInTheDocument();expect(within(active).getByText('$25.00')).toBeInTheDocument();expect(screen.getByLabelText('Account or card nickname')).toHaveValue('');expect(screen.getByLabelText('Retailer or reward program')).toHaveValue('');
+});
+it('edits a card and confirms duplicate removal by archiving while retaining its identity',async()=>{
+ const card={...row('card','My card'),kind:'GIFT_CARD' as const,provider:'Walgreens',lastFour:'1234',status:'ACTIVE' as const};const edited={...card,nickname:'Updated card',revision:'2'};const archived={...edited,status:'ARCHIVED' as const,revision:'3'};
+ const api=new ApiClient('test');vi.spyOn(api,'rewardInstruments').mockResolvedValueOnce({instruments:[card]}).mockResolvedValueOnce({instruments:[edited]}).mockResolvedValue({instruments:[archived]});const mutate=vi.spyOn(api,'mutate').mockResolvedValueOnce(edited).mockResolvedValue(archived);const user=userEvent.setup();vi.spyOn(window,'confirm').mockReturnValue(true);
+ render(<RewardInstruments api={api} writable giftCardsOnly/>);await user.click(await screen.findByRole('button',{name:'Edit'}));expect(screen.getByLabelText('Corrected last four digits')).toHaveValue('1234');await user.clear(screen.getByLabelText('Corrected nickname'));await user.type(screen.getByLabelText('Corrected nickname'),'Updated card');await user.type(screen.getByLabelText('Detail correction reason'),'Correct label');await user.click(screen.getByLabelText('Confirm detail correction and retain history'));await user.click(screen.getByRole('button',{name:'Save detail correction'}));expect(mutate).toHaveBeenCalledWith('/reward-instruments/card','PUT',expect.objectContaining({nickname:'Updated card',kind:'GIFT_CARD',lastFour:'1234',confirmed:true}),expect.any(String),'1');
+ await user.click(screen.getByRole('button',{name:'Delete'}));expect(mutate).toHaveBeenCalledWith('/reward-instruments/card','PUT',expect.objectContaining({status:'ARCHIVED',confirmed:true}),expect.any(String),'2');
+ const active=screen.getByRole('region',{name:'Current Active Gift Cards'});expect(await within(active).findByText('No active gift cards recorded.')).toBeInTheDocument();await user.click(screen.getByLabelText('Show archived cards'));expect(within(active).getByText('ARCHIVED')).toBeInTheDocument();
+});
+it('shows an unknown balance separately from its observed opening',async()=>{
+ const card={...row('unknown','Unverified'),kind:'GIFT_CARD' as const,provider:'CVS',opening:'50.00',calculated:null,historyComplete:false};const api=new ApiClient('test');vi.spyOn(api,'rewardInstruments').mockResolvedValue({instruments:[card]});render(<RewardInstruments api={api} writable giftCardsOnly/>);
+ const active=screen.getByRole('region',{name:'Current Active Gift Cards'});expect(await within(active).findByText('Unknown')).toBeInTheDocument();expect(within(active).getByText(/Opening observation:.*50.00/)).toBeInTheDocument();
+});
+
+it('opens selected card history directly and retains its original receipt link',async()=>{
+ const data=workspace(),receipt=receiptRow('linked-receipt','2026-11-07');receipt.metadata={retailer:'Walgreens',receiptNumber:'R-123',purchasedAt:null,storeReference:null,purchaseChannel:'IN_STORE'};data.receipts=[receipt];
+ const card={...row('history-card','Tracked card'),kind:'GIFT_CARD' as const,events:[{id:'event',kind:'REDEMPTION',amount:'5',date:'2026-11-07',reason:'Recorded purchase',active:true,supersedes:null,relatedInstrument:null,exchangeId:null,recordedAt:'2026-11-07T12:00:00Z',recordedBy:'test',sourceReceiptId:'linked-receipt'}]};
+ const api=new ApiClient('test');vi.spyOn(api,'rewardInstruments').mockResolvedValue({instruments:[card]});const onReceipt=vi.fn(),user=userEvent.setup();render(<RewardInstruments api={api} writable giftCardsOnly workspace={data} onReceipt={onReceipt}/>);
+ await user.click(await screen.findByRole('button',{name:'View'}));expect(screen.getByText('Recorded activity and correction history').closest('details')).toHaveAttribute('open');await user.click(screen.getByRole('button',{name:'View receipt R-123'}));expect(onReceipt).toHaveBeenCalledWith('linked-receipt');
+});
+
+it('links a distinct received Visa payout only after explicit confirmation and creates no extra earning',async()=>{
+ const data=workspace(),api=new ApiClient('test'),user=userEvent.setup();data.accountHistory.redemptionHistory=[{redemptionId:'visa-payout',provider:'Fetch',destination:'GIFT_CARD',destinationAccount:'Gift Cards',destinationUsdValue:'50',status:'RECEIVED',completedDate:'2026-11-05',notes:'Brand: Visa Prepaid Card | Number: 4204**** **** 4668'}];
+ vi.spyOn(api,'rewardInstruments').mockResolvedValue({instruments:[]});vi.spyOn(api,'payout').mockResolvedValue({revision:'2',payout:{status:'RECEIVED'}});const mutate=vi.spyOn(api,'mutate').mockResolvedValue({});
+ render(<RewardInstruments api={api} writable giftCardsOnly workspace={data}/>);await user.click(screen.getByRole('button',{name:'Track / link this card'}));expect(mutate).not.toHaveBeenCalled();expect(screen.getByLabelText('Issued card last four digits')).toHaveValue('4668');await user.type(screen.getByLabelText('Link evidence or reason'),'Verified received payout');await user.click(screen.getByLabelText('I confirm this payout belongs to the selected or newly recorded card.'));await user.click(screen.getByRole('button',{name:'Confirm payout link'}));
+ expect(mutate).toHaveBeenCalledWith('/accounts/payouts/visa-payout/gift-card','POST',expect.objectContaining({provider:'Visa Prepaid Card',lastFour:'4668',existingInstrumentId:null,confirmed:true}),expect.any(String),'2');expect(mutate).not.toHaveBeenCalledWith('/accounts/member-rewards',expect.anything(),expect.anything(),expect.anything());
+});
+
+it('keeps incomplete card totals in tracking help without creating a competing account summary',async()=>{
+ const api=new ApiClient('test');vi.spyOn(api,'rewardInstruments').mockResolvedValue({instruments:[],cardSummary:{recordedOpenings:'55',recordedRedemptions:'0',knownRemaining:'5',unknownBalanceCount:1,activeCards:2}});render(<RewardInstruments api={api} writable giftCardsOnly/>);expect(screen.queryByRole('heading',{name:'Account Balances'})).not.toBeInTheDocument();await userEvent.setup().hover(screen.getByRole('button',{name:'About Gift Card Tracking'}));expect(await screen.findByRole('tooltip')).toHaveTextContent('Known remaining subtotal: $5.00');expect(screen.getByRole('tooltip')).toHaveTextContent('Cards with unknown balances: 1');
+});

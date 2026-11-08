@@ -62,7 +62,7 @@ final class Json {
     static String optional(Map<String,Object> f,String key) { Object v=f.get(key); return v==null?null:asText(v); }
     static String asText(Object v) { if (!(v instanceof String s)) throw new IllegalArgumentException("Expected a JSON string."); return s; }
     static long number(Object v) { if (!(v instanceof BigDecimal n)) throw new IllegalArgumentException("Expected an integer."); try{return n.longValueExact();}catch(ArithmeticException e){throw new IllegalArgumentException("Expected an integer.");} }
-    static void known(Map<String,Object> f,String... names) { if(!Set.of(names).containsAll(f.keySet())) throw new IllegalArgumentException("Unknown request field."); }
+    static void known(Map<String,Object> f,String... names) { var allowed=Set.of(names); for(var key:f.keySet()) if(!allowed.contains(key)) throw new IllegalArgumentException("Unknown request field: "+(key.matches("[A-Za-z][A-Za-z0-9_]{0,79}")?key:"unrecognized field")+". Refresh the app and use the current API version."); }
     private static IllegalArgumentException invalid() { return new IllegalArgumentException("Invalid JSON object."); }
     private static final class Parser {
         final String text; int at;

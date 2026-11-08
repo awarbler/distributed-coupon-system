@@ -19,9 +19,12 @@ public record PaymentSnap(
         UUID paymentId,
         PaymentType paymentType,
         BigDecimal amount,
-        String notes, String accountName
+        String notes, String accountName, UUID giftCardId
 ) implements java.io.Serializable {
 
+    public PaymentSnap(UUID paymentId, PaymentType paymentType, BigDecimal amount, String notes, String accountName) {
+        this(paymentId, paymentType, amount, notes, accountName, null);
+    }
     public PaymentSnap(UUID paymentId, PaymentType paymentType, BigDecimal amount, String notes) {
         this(paymentId, paymentType, amount, notes, null);
     }
@@ -44,6 +47,7 @@ public record PaymentSnap(
      * @throws IllegalArgumentException if amount is not positive
      */
     public PaymentSnap {
+        if (giftCardId != null && paymentType != PaymentType.GIFT_CARD) throw new IllegalArgumentException("Assign a gift card only to a gift-card payment.");
         if (accountName != null && (accountName.isBlank() || paymentType != PaymentType.GIFT_CARD && paymentType != PaymentType.OTHER))
             throw new IllegalArgumentException("Named account requires gift-card or other tender.");
         if (notes != null && notes.isBlank()) throw new IllegalArgumentException("Notes must be nonblank or unknown.");
@@ -75,7 +79,7 @@ public record PaymentSnap(
                 payment.getPaymentId(),
                 payment.getPaymentType(),
                 payment.getAmount(),
-                payment.getNotes(), payment.getAccountName()
+                payment.getNotes(), payment.getAccountName(), payment.getGiftCardId()
         );
     }
 }

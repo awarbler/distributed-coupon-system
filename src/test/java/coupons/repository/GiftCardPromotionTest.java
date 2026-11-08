@@ -16,6 +16,11 @@ import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GiftCardPromotionTest {
+    @Test void incompleteBoosterCanBeSavedWithoutOptionalOfferText() {
+        var p=new GiftCardPromotion(UUID.randomUUID(),"Spend 35 Get 7",new BigDecimal("35"),new BigDecimal("7"),LocalDate.of(2026,11,1),LocalDate.of(2026,11,30),GiftCardPromotion.Basis.SALE_BEFORE_COUPONS,"",GiftCardPromotion.Status.ACTIVE,Map.of(),Map.of("kind","SPEND_BOOSTER","verified","false"));
+        assertEquals("",p.terms());
+        assertEquals("false",p.planningRules().get("verified"));
+    }
     private ReceiptWriteRequest request() { return new ReceiptWriteRequest(UUID.randomUUID(), Instant.now()); }
     private final ReceiptChangeContext approval = new ReceiptChangeContext("AJ", "Correction", "AJ", Instant.now());
     private UUID save(InMemoryTransactionRepository repo, String price) {
@@ -167,5 +172,14 @@ class GiftCardPromotionTest {
             assertTrue(repo.findById(id).isPresent());
             assertEquals(1, repo.giftCardPromotions().size());
         }
+    }
+
+    @Test void boosterRulesSurviveContributionStatusChangesAndLocalRefresh(@TempDir Path dir)throws Exception{
+        var rules=Map.of("kind","SPEND_BOOSTER","store","Walgreens","scope","RECEIPT","spendBasis","BEFORE_COUPONS","wcAllowed","NO","rrAllowed","YES","verified","true");
+        var original=offer(GiftCardPromotion.Basis.SALE_BEFORE_COUPONS);var booster=new GiftCardPromotion(original.id(),original.name(),original.threshold(),original.giftCardValue(),original.start(),original.end(),original.basis(),original.terms(),GiftCardPromotion.Status.ACTIVE,Map.of(),rules);
+        assertEquals(rules,booster.withStatus(GiftCardPromotion.Status.USED).planningRules());
+        var contribution=new GiftCardPromotion.Contribution(UUID.randomUUID(),1,List.of(UUID.randomUUID()),BigDecimal.ONE,"Evidence");assertEquals(rules,booster.withContribution(contribution).planningRules());
+        Path file=dir.resolve("booster.bin");try(var repository=InMemoryTransactionRepository.openLocal(file)){repository.saveGiftCardPromotion(booster);}
+        try(var repository=InMemoryTransactionRepository.openLocal(file)){var restored=repository.giftCardPromotions().stream().filter(p->p.id().equals(booster.id())).findFirst().orElseThrow();assertEquals(rules,restored.planningRules());assertEquals(booster.token(),restored.token());}
     }
 }

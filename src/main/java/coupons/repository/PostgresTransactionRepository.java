@@ -141,6 +141,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
                     result, null, after, context, null);
             var promotions = PostgresReceiptState.rules(state).receiptPromotions(state, after, null);
             insertReceipt(connection, candidate, snapshot);
+            RewardInstrumentRepository.syncReceipt(connection,null,candidate,context.requestedBy());
             PostgresReceiptState.promotions(connection, promotions);
             insertEvidence(connection, evidence);
             insertRedemptions(connection, snapshot.registerRewardRedemptions());
@@ -202,6 +203,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
                     beforeSnap, afterSnap, null, context);
             var promotions = PostgresReceiptState.rules(state).receiptPromotions(state, afterSnap, beforeSnap);
             updateReceipt(connection, afterRecord, snapshot);
+            RewardInstrumentRepository.syncReceipt(connection,before,afterRecord,context.requestedBy());
             PostgresReceiptState.promotions(connection, promotions);
             insertEvidence(connection, evidence);
             insertNewRedemptions(connection, before.transaction().getRegisterRewardRedemptions(),
@@ -406,6 +408,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             statement.setObject(3, id); statement.setLong(4, expectedRevision);
             if (statement.executeUpdate() != 1) throw new ConcurrentModificationException("Receipt revision changed.");
         }
+        RewardInstrumentRepository.syncReceipt(connection,before,after,context.requestedBy());
         insertHistory(connection, history);
         insertRequest(connection, request.requestId(), id, serialize(payload), result);
         return result;

@@ -21,3 +21,14 @@ it('disables management controls in read-only mode',()=>{
  expect(screen.getByRole('button',{name:'Edit'})).toBeDisabled()
  expect(screen.getByRole('button',{name:'Delete'})).toBeDisabled()
 })
+
+it('adds, edits and archives Spend Boosters through the existing promotion workflow',async()=>{
+ const booster={...promotion,planningRules:{kind:'SPEND_BOOSTER',store:'Walgreens',rewardType:'WALGREENS_CASH',spendBasis:'BEFORE_COUPONS',scope:'RECEIPT',wcAllowed:'NO',rrAllowed:'YES',usageLimit:'ONCE',verified:'true'},name:'Spend 35 Get 7',status:'ACTIVE',start:'2026-11-01',end:'2026-11-30'};
+ const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue({}),changed=vi.fn(),user=userEvent.setup();vi.spyOn(window,'confirm').mockReturnValue(true);
+ render(<PromotionManager boostersOnly promotions={[booster,promotion]} api={api} writable onChanged={changed}/>);
+ expect(screen.getByRole('heading',{name:'Spend Boosters'})).toBeInTheDocument();await user.selectOptions(screen.getByLabelText('Spend Booster'),'p');await user.click(screen.getByRole('button',{name:'Edit Spend Booster'}));
+ expect(screen.getByLabelText('Walgreens Cash payment')).toHaveValue('NO');await user.selectOptions(screen.getByLabelText('Gift card payment / threshold rule'),'COUNTS');await user.click(screen.getByRole('button',{name:'Save Spend Booster'}));
+ expect(mutate).toHaveBeenLastCalledWith('/rebate-programs/p','PUT',expect.objectContaining({planningRules:expect.objectContaining({kind:'SPEND_BOOSTER',giftCardRule:'COUNTS',wcAllowed:'NO',verified:'true'})}),expect.any(String));
+ await user.click(screen.getByRole('button',{name:'Delete Spend Booster'}));expect(mutate).toHaveBeenLastCalledWith('/rebate-programs/p','DELETE',{expectedToken:'original-token'},expect.any(String));
+ await user.click(screen.getByRole('button',{name:'Add Spend Booster'}));expect(screen.getByRole('dialog',{name:'Add Spend Booster'})).toBeInTheDocument();expect(screen.getByLabelText('Qualifying spend basis')).toHaveValue('');expect(screen.getByLabelText('Walgreens Cash payment')).toHaveValue('NO');
+});

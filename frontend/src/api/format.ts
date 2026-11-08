@@ -64,8 +64,8 @@ function timeKey(row: ReceiptRow): string | null {
   const normalized = twelve ? hour % 12 + (twelve[3].toLowerCase() === 'p' ? 12 : 0) : hour
   return `${String(normalized).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
-export function transactionTime(value: string | null | undefined): string {
-  if (!value?.trim()) return 'Not recorded'
+export function transactionTime(value: string | null | undefined,recordedAt?:string|null,timeOnly=false): string {
+  if (!value?.trim()) {const at=recordedAt?new Date(recordedAt):null;if(timeOnly)return at&&!Number.isNaN(at.getTime())?at.toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'}):'Not recorded';return at&&!Number.isNaN(at.getTime())?`Recorded at ${at.toLocaleString('en-US',{timeZone:'America/Chicago',month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'})} — transaction time unknown`:'Not recorded'}
   const match=/^([01]?[0-9]|2[0-3]):([0-5][0-9])(?::[0-5][0-9](?:[.][0-9]+)?)?$/.exec(value.trim())
   if (!match) return value
   const hour=Number(match[1])
@@ -134,4 +134,12 @@ export function compareRewardValues(left:string|null|undefined,right:string|null
   const a=units(left),b=units(right);return a<b?-1:a>b?1:0
  }
  return left.localeCompare(right,undefined,{sensitivity:'base'})
+}
+
+export function instrumentLastFour(card:{provider:string;lastFour?:string|null}):string|undefined {return card.lastFour||/\bNumber:\s*([^|]+)/i.exec(card.provider)?.[1]?.replace(/\D/g,'').slice(-4)}
+export function instrumentLabel(card: {kind?:string;provider:string;nickname?:string|null;lastFour?:string|null}):string {
+  const brand=/\bBrand:\s*([^|]+)/i.exec(card.provider)?.[1]?.trim()
+  const last=instrumentLastFour(card)
+  const name=brand||(card.kind==='GIFT_CARD'&&card.nickname&&card.nickname!==card.provider?`${card.provider} · ${card.nickname}`:card.nickname||card.provider)
+  return `${name}${last?` · ending ${last}`:''}`
 }

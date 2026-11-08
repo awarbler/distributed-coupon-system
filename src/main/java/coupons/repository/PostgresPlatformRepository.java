@@ -54,10 +54,13 @@ public final class PostgresPlatformRepository implements PlatformRepository {
     private final PostgresConnectionFactory db;
 
     @Override public void savePromotion(UUID id,String name,BigDecimal threshold,BigDecimal value,LocalDate start,LocalDate end,String terms,String status,String expectedToken) {
+        savePromotion(id,name,threshold,value,start,end,terms,status,expectedToken,null);
+    }
+    @Override public void savePromotion(UUID id,String name,BigDecimal threshold,BigDecimal value,LocalDate start,LocalDate end,String terms,String status,String expectedToken,Map<String,String> rules) {
         transaction(db,c->{
             PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);var old=state.giftCardPromotions().get(id);
             if(!(old==null?"new":old.token()).equals(expectedToken))throw new java.util.ConcurrentModificationException("Promotion changed; refresh before editing.");
-            var updated=new GiftCardPromotion(id,name,threshold,value,start,end,old==null?GiftCardPromotion.Basis.REVIEWED_ELIGIBLE_AMOUNT:old.basis(),terms,GiftCardPromotion.Status.valueOf(status),old==null?Map.of():old.contributions());
+            var updated=new GiftCardPromotion(id,name,threshold,value,start,end,old==null?GiftCardPromotion.Basis.REVIEWED_ELIGIBLE_AMOUNT:old.basis(),terms,GiftCardPromotion.Status.valueOf(status),old==null?Map.of():old.contributions(),rules==null?(old==null?Map.of():old.planningRules()):rules);
             PostgresReceiptState.promotions(c,Map.of(id,updated));return null;
         });
     }
@@ -66,6 +69,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             PostgresReceiptState.lock(c);var state=PostgresReceiptState.read(c);var old=state.giftCardPromotions().get(id);
             if(old==null)throw new NoSuchElementException("Promotion not found.");
             if(!old.token().equals(expectedToken))throw new java.util.ConcurrentModificationException("Promotion changed; refresh before deleting.");
+            if("SPEND_BOOSTER".equals(old.planningRules().get("kind"))){PostgresReceiptState.promotions(c,Map.of(id,old.withStatus(GiftCardPromotion.Status.ARCHIVED)));return null;}
             if(state.receipts().values().stream().anyMatch(receipt->receipt.contents().observations().promotionLinks().stream().anyMatch(link->link.promotionId().equals(id))))throw new IllegalArgumentException("Remove this promotion from its linked receipts before deleting it.");
             try(var p=c.prepareStatement("DELETE FROM gift_card_promotions WHERE promotion_id=?")){p.setObject(1,id);p.executeUpdate();}return null;
         });
@@ -94,24 +98,29 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             BigDecimal couponTotal=allocated?discounts.stream().map(coupons.promotions.CouponApplied::getAppliedAmount).reduce(BigDecimal.ZERO,BigDecimal::add):null;
             contributions.put(entry.getKey(),fields("quantity",quantity,"saleTotal",saleTotal,"couponTotal",couponTotal,"receiptDate",receipt==null?null:receipt.transaction().getObservations().purchaseDate(),"receiptId",c.receiptId(),"reviewedRevision",c.reviewedRevision(),"lineIds",c.lineIds(),"reviewedAmount",c.reviewedAmount(),"note",c.note(),"afterCoupons",c.afterCoupons(),"submitted",c.submitted(),"submittedOn",c.submittedOn(),"submissionReference",c.submissionReference(),"token",GiftCardPromotion.contributionToken(c),"needsReview",stale||eligible.isEmpty(),"eligibleAmount",eligible.orElse(null)));
         }
-        return fields("token",rebate.token(),"id",rebate.id(),"name",rebate.name(),"threshold",rebate.threshold(),"giftCardValue",rebate.giftCardValue(),"start",rebate.start(),"end",rebate.end(),"basis",rebate.basis(),"terms",rebate.terms(),"status",rebate.status(),"contributions",contributions,"eligibleTotal",total,"progressComplete",complete);
+        return fields("token",rebate.token(),"id",rebate.id(),"name",rebate.name(),"threshold",rebate.threshold(),"giftCardValue",rebate.giftCardValue(),"start",rebate.start(),"end",rebate.end(),"basis",rebate.basis(),"terms",rebate.terms(),"status",rebate.status(),"planningRules",rebate.planningRules(),"contributions",contributions,"eligibleTotal",total,"progressComplete",complete);
     }
     public PostgresPlatformRepository(PostgresConnectionFactory db) {
         this.db = Objects.requireNonNull(db);
     }
 
     public void correctStandaloneAmount(UUID id,BigDecimal expected,BigDecimal amount){new PostgresReceiptSupplementRepository(db).correctStandaloneAmount(id,expected,amount);}
+    public void correctStandaloneAmount(UUID id,BigDecimal expected,BigDecimal amount,Map<String,Object> metadata){new PostgresReceiptSupplementRepository(db).correctStandaloneAmount(id,expected,amount,metadata);}
     public Map<String,Object> memberReward(UUID id) {return PostgresRepositorySupport.transaction(db,c->memberReward(c,id));}
     private static Map<String,Object> memberReward(Connection c,UUID id)throws SQLException {
         AccountAdjustment old;try(var p=c.prepareStatement("SELECT payload FROM provider_account_adjustments WHERE event_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();old=PostgresRepositorySupport.deserialize(r.getBytes(1),AccountAdjustment.class);}}
         if(!old.reason().startsWith("Member reward:"))throw new IllegalArgumentException("Not a member reward.");
-        BigDecimal usd=old.usdChange(),points=old.unitChange();
-        try(var p=c.prepareStatement("SELECT usd_change,unit_change FROM provider_account_adjustments WHERE reason=?")){p.setString(1,"Member reward correction: "+id);try(var r=p.executeQuery()){while(r.next()){if(r.getBigDecimal(1)!=null)usd=usd==null?r.getBigDecimal(1):usd.add(r.getBigDecimal(1));if(r.getBigDecimal(2)!=null)points=points==null?r.getBigDecimal(2):points.add(r.getBigDecimal(2));}}}
-        return fields("amount",usd,"points",points,"provider",old.provider(),"date",old.date(),"time",old.time());
+        var history=new ArrayList<AccountAdjustment>();try(var p=c.prepareStatement("SELECT payload FROM provider_account_adjustments WHERE reason=?")){p.setString(1,"Member reward correction: "+id);try(var r=p.executeQuery()){while(r.next())history.add(PostgresRepositorySupport.deserialize(r.getBytes(1),AccountAdjustment.class));}}
+        var current=AccountAdjustment.currentMember(old,history);
+        return fields("amount",current.usdChange(),"points",current.unitChange(),"provider",current.provider(),"date",current.date(),"time",current.time(),"description",current.reason().substring("Member reward: ".length()),"expirationDate",current.expirationDate(),"details",current.details(),"recordedAt",old.recordedAt(),"history",java.util.stream.Stream.concat(java.util.stream.Stream.of(old),history.stream().sorted(Comparator.comparing(AccountAdjustment::recordedAt))).toList(),"token",id+":"+history.stream().map(a->a.eventId().toString()).sorted().reduce("",(a,b)->a+"|"+b));
     }
+
     public BigDecimal memberAmount(UUID id) {return (BigDecimal)memberReward(id).get("amount");}
     public void correctMemberAmount(UUID id,UUID correction,BigDecimal expected,BigDecimal amount,String actor) {correctMemberAmount(id,correction,expected,amount,null,null,actor);}
     public void correctMemberAmount(UUID id,UUID correction,BigDecimal expected,BigDecimal amount,BigDecimal expectedPoints,BigDecimal points,String actor) {
+        correctMemberDetails(id,correction,expected,amount,expectedPoints,points,Map.of(),actor);
+    }
+    public void correctMemberDetails(UUID id,UUID correction,BigDecimal expected,BigDecimal amount,BigDecimal expectedPoints,BigDecimal points,Map<String,String> details,String actor) {
         if(amount==null||amount.signum()<0||points!=null&&points.signum()<0)throw new IllegalArgumentException("Enter nonnegative reward amounts.");
         PostgresRepositorySupport.transaction(db,c->{
             try(var p=c.prepareStatement("SELECT payload FROM provider_account_adjustments WHERE event_id=? FOR UPDATE")){p.setObject(1,id);try(var r=p.executeQuery()){
@@ -119,27 +128,53 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                 BigDecimal actual=(BigDecimal)current.get("amount"),actualPoints=(BigDecimal)current.get("points");
                 if(actual.compareTo(expected)!=0||actualPoints!=null&&(expectedPoints==null||actualPoints.compareTo(expectedPoints)!=0))throw new ConcurrentModificationException("Reward changed; reopen its editor.");
                 if(actualPoints!=null&&points==null||actualPoints==null&&points!=null)throw new IllegalArgumentException("Preserve the reward's original points unit.");
+                var changes=new HashMap<>(details);var token=changes.remove("__expectedToken");if(!details.isEmpty()&&!Objects.equals(token,current.get("token")))throw new ConcurrentModificationException("Reward details changed; reopen the editor.");
+                var metadata=new HashMap<String,String>();Object prior=current.get("details");if(prior instanceof Map<?,?> map)map.forEach((k,v)->metadata.put(k.toString(),v.toString()));metadata.putAll(changes);
+                AccountAdjustment.currentMember(new AccountAdjustment(old.eventId(),old.date(),old.provider(),points,amount,old.reason(),old.recordedBy(),old.recordedAt(),old.expirationDate(),old.time(),metadata),List.of());
                 BigDecimal units=points==null?null:points.subtract(actualPoints);
-                var value=new AccountAdjustment(correction,old.date(),old.provider(),units,amount.subtract(actual),"Member reward correction: "+id,actor,java.time.Instant.now(),old.expirationDate());
+                var value=new AccountAdjustment(correction,old.date(),old.provider(),units,amount.subtract(actual),"Member reward correction: "+id,actor,java.time.Instant.now(),null,null,changes);
                 try(var q=c.prepareStatement("INSERT INTO provider_account_adjustments(event_id,provider,event_date,unit_change,usd_change,reason,recorded_by,recorded_at,payload) VALUES(?,?,?,?,?,?,?,?,?)")){q.setObject(1,correction);q.setString(2,old.provider());q.setObject(3,old.date());q.setBigDecimal(4,units);q.setBigDecimal(5,value.usdChange());q.setString(6,value.reason());q.setString(7,actor);q.setTimestamp(8,java.sql.Timestamp.from(value.recordedAt()));q.setBytes(9,PostgresRepositorySupport.serialize(value));q.executeUpdate();}
             }}return null;});
     }
     public void deleteStandaloneReward(UUID id,String actor){new PostgresReceiptSupplementRepository(db).voidRecordedReward(id,"Owner deleted reward",actor);}
     public boolean earningMatched(UUID earning) {return PostgresRepositorySupport.transaction(db,c->PostgresReceiptState.read(c).rrUsageLinks().values().stream().anyMatch(link->link.sourceId().equals(earning)));}
     public void addStandaloneReward(coupons.rewards.RegisterReward reward) {new PostgresReceiptSupplementRepository(db).addStandaloneReward(reward);}
+    private static List<Map<String,Object>> standaloneHistory(RegisterReward current){var rows=new ArrayList<Map<String,Object>>();var reward=current;while(!reward.getPreviousVersions().isEmpty()){var prior=reward.getPreviousVersions().getFirst();rows.add(fields("description",prior.getSourceDescription(),"amount",prior.getFaceValue(),"earnedDate",prior.getEarnedDate(),"expirationDate",prior.getExpirationDate(),"correctedBy",reward.getCorrectedBy(),"correctedAt",reward.getCorrectedAt()));reward=prior;}return List.copyOf(rows);}
     public List<Map<String,Object>> standaloneRewards() {
         return transaction(db,c->{c.setReadOnly(true);var state=PostgresReceiptState.read(c);
-            return state.rewards().values().stream().filter(r->r.getEarnedReceiptId()==null && !state.rewardVoids().containsKey(r.getRewardId())).sorted(Comparator.comparing(coupons.rewards.RegisterReward::getSourceDescription).thenComparing(coupons.rewards.RegisterReward::getRewardId)).map(r->fields("rewardId",r.getRewardId(),"description",r.getSourceDescription(),"amount",r.getFaceValue(),"earnedDate",r.getEarnedDate(),"expirationDate",r.getExpirationDate(),"status",state.rrUsageLinks().containsKey(r.getRewardId())?"MATCHED":state.redemptions().values().stream().anyMatch(use->use.getRewardId().equals(r.getRewardId()))?"REDEEMED":state.balances().adjustments().stream().anyMatch(a->a.unavailable()&&r.getRewardId().equals(a.unavailableSource())&&!a.date().isAfter(LocalDate.now()))?"UNAVAILABLE":"UNUSED")).toList();});
+            return state.rewards().values().stream().filter(r->r.getEarnedReceiptId()==null && !state.rewardVoids().containsKey(r.getRewardId())).sorted(Comparator.comparing(coupons.rewards.RegisterReward::getSourceDescription).thenComparing(coupons.rewards.RegisterReward::getRewardId)).map(r->fields("originProduct",r.getOriginProduct(),"originBrand",r.getOriginBrand(),"originProgram",r.getOriginProgram(),"originPromotion",r.getOriginPromotion(),"registerRewardType",r.getRegisterRewardType(),"history",standaloneHistory(r),"rewardId",r.getRewardId(),"description",r.getSourceDescription(),"amount",r.getFaceValue(),"earnedDate",r.getEarnedDate(),"expirationDate",r.getExpirationDate(),"status",state.rrUsageLinks().containsKey(r.getRewardId())?"MATCHED":state.redemptions().values().stream().anyMatch(use->use.getRewardId().equals(r.getRewardId()))?"REDEEMED":state.balances().adjustments().stream().anyMatch(a->a.unavailable()&&r.getRewardId().equals(a.unavailableSource())&&!a.date().isAfter(LocalDate.now()))?"UNAVAILABLE":"UNUSED")).toList();});
     }
     public RRUsageLink addStandaloneMatch(UUID receipt,long revision,UUID use,UUID reward,String description,LocalDate earned,LocalDate expires,String reason,String actor) {
         return new PostgresReceiptSupplementRepository(db).addStandaloneMatch(receipt,revision,use,reward,description,earned,expires,reason,actor);
     }
     public List<ReceiptRRMatching.Use> rrOptions(UUID id) { return transaction(db,c->{c.setReadOnly(true);return ReceiptRRMatching.options(PostgresReceiptState.read(c),id);}); }
+    public RRUsageLink correctRRMatch(UUID receipt,long revision,UUID use,UUID expectedSource,UUID source,boolean earning,String reason,String actor,boolean unknown){return new PostgresReceiptSupplementRepository(db).correctMatch(receipt,revision,use,expectedSource,source,earning,reason,actor,unknown);}
     public RRUsageLink matchRR(UUID id,long revision,UUID use,UUID source,boolean receiptEarning,String reason,String actor,boolean confirmUnknownHistory) {
         return new PostgresReceiptSupplementRepository(db).matchRR(id,revision,use,source,receiptEarning,reason,actor,confirmUnknownHistory);
     }
+    public Map<String,Object> reconcilePayoutCards(String actor){return new RewardInstrumentRepository(db).reconcileReceivedPayouts(actor);}
     public void savePayout(ProviderRedemption payout){new PostgresProviderAccountRepository(db).saveRedemption(payout);}
-    public Map<String,Object> payout(UUID id){return transaction(db,c->{try(var p=c.prepareStatement("SELECT revision,payload FROM provider_redemptions_current WHERE redemption_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();return fields("revision",r.getLong(1),"payout",PostgresRepositorySupport.deserialize(r.getBytes(2),ProviderRedemption.class));}}});}
+    public Map<String,Object> payout(UUID id){return transaction(db,c->{try(var p=c.prepareStatement("SELECT revision,payload FROM provider_redemptions_current WHERE redemption_id=?")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();return fields("revision",r.getLong(1),"payout",PostgresRepositorySupport.deserialize(r.getBytes(2),ProviderRedemption.class),"history",payoutHistory(c,id));}}});}
+    private static List<ProviderRedemption> payoutHistory(Connection c,UUID id)throws SQLException{var rows=new ArrayList<ProviderRedemption>();try(var p=c.prepareStatement("SELECT payload FROM provider_redemptions_history WHERE redemption_id=? ORDER BY revision")){p.setObject(1,id);try(var r=p.executeQuery()){while(r.next())rows.add(PostgresRepositorySupport.deserialize(r.getBytes(1),ProviderRedemption.class));}}return List.copyOf(rows);}
+    public void correctPayout(UUID id,long revision,Map<String,Object> fields,String actor){transaction(db,c->{
+        PostgresReceiptState.lock(c);ProviderRedemption old;try(var p=c.prepareStatement("SELECT revision,payload FROM provider_redemptions_current WHERE redemption_id=? FOR UPDATE")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();if(r.getLong(1)!=revision)throw new ConcurrentModificationException("Payout changed; reopen it.");old=PostgresRepositorySupport.deserialize(r.getBytes(2),ProviderRedemption.class);}}
+        if(!Boolean.TRUE.equals(fields.get("confirmed")))throw new IllegalArgumentException("Confirm the verified payout correction.");String reason=Objects.toString(fields.get("reason"),"").trim();if(reason.isBlank()||reason.length()>1000)throw new IllegalArgumentException("Enter correction evidence or a reason (up to 1000 characters).");
+        boolean voiding=Boolean.TRUE.equals(fields.get("void"));if(old.status()==ProviderRedemption.Status.CANCELLED)throw new IllegalArgumentException("This payout is already cancelled or voided.");
+        var day=fields.get("date")==null?old.requestedDate():LocalDate.parse(fields.get("date").toString());var completed=fields.get("completedDate")==null?old.completedDate():LocalDate.parse(fields.get("completedDate").toString());
+        BigDecimal source=fields.get("sourceUsdValue")==null?old.sourceUsdValue():new BigDecimal(fields.get("sourceUsdValue").toString()),destination=fields.get("destinationUsdValue")==null?old.destinationUsdValue():new BigDecimal(fields.get("destinationUsdValue").toString()),points=fields.get("originalUnitsUsed")==null?old.originalUnitsUsed():new BigDecimal(fields.get("originalUnitsUsed").toString());
+        if(java.util.stream.Stream.of(source,destination,points).filter(Objects::nonNull).anyMatch(value->value.precision()>40||Math.abs(value.scale())>20))throw new IllegalArgumentException("Payout amount precision is too large.");
+        if(voiding)completed=LocalDate.now(java.time.ZoneId.of("America/Chicago"));
+        var next=new ProviderRedemption(id,old.provider(),day,old.requestedTime(),points,source,old.destination(),old.destinationAccount(),destination,voiding?ProviderRedemption.Status.CANCELLED:old.status(),completed,voiding?null:old.completedTime(),old.sourceEarningIds(),Objects.toString(fields.get("reference"),old.reference()),Objects.toString(old.notes(),"")+" | Correction by "+actor+": "+reason);
+        boolean financial=voiding||!old.requestedDate().equals(day)||!Objects.equals(old.completedDate(),completed)||old.sourceUsdValue().compareTo(source)!=0||old.destinationUsdValue().compareTo(destination)!=0||!Objects.equals(old.originalUnitsUsed(),points);
+        var linked=RewardInstrumentRepository.list(c).stream().filter(card->("PAYOUT:"+id).equals(card.get("evidenceReference"))).toList();
+        if(financial){for(var card:linked)if(!voiding||((List<?>)card.get("events")).stream().anyMatch(raw->Boolean.TRUE.equals(((Map<?,?>)raw).get("active"))))throw new IllegalArgumentException("Review linked card activity before changing or voiding this payout. No balances were changed.");
+            if(old.destination()==ProviderRedemption.Destination.GIFT_CARD)for(var receipt:PostgresReceiptState.read(c).receipts().values())if(receipt.status()==ReceiptStatus.ACTIVE&&(receipt.contents().observations().purchaseDate()==null||!receipt.contents().observations().purchaseDate().isBefore(old.requestedDate()))&&receipt.contents().payments().stream().anyMatch(payment->payment.paymentType()==PaymentType.GIFT_CARD))throw new IllegalArgumentException("Reconcile recorded gift-card spending before changing or voiding this payout. No spending will be assigned by guesswork.");
+        }
+        byte[] payload=PostgresRepositorySupport.serialize(next);Instant now=Instant.now();try(var p=c.prepareStatement("UPDATE provider_redemptions_current SET revision=revision+1,status=?,payload=?,recorded_at=? WHERE redemption_id=?")){p.setString(1,next.status().name());p.setBytes(2,payload);p.setTimestamp(3,java.sql.Timestamp.from(now));p.setObject(4,id);p.executeUpdate();}
+        try(var p=c.prepareStatement("INSERT INTO provider_redemptions_history(redemption_id,revision,provider,status,payload,recorded_at) VALUES(?,?,?,?,?,?)")){p.setObject(1,id);p.setLong(2,revision+1);p.setString(3,next.provider());p.setString(4,next.status().name());p.setBytes(5,payload);p.setTimestamp(6,java.sql.Timestamp.from(now));p.executeUpdate();}
+        if(voiding)for(var card:linked){try(var p=c.prepareStatement("UPDATE reward_instruments SET status='ARCHIVED',revision=revision+1,reason=?,recorded_by=?,recorded_at=? WHERE id=?")){p.setString(1,"Payout void: "+reason);p.setString(2,actor);p.setTimestamp(3,java.sql.Timestamp.from(now));p.setObject(4,card.get("id"));p.executeUpdate();}try(var p=c.prepareStatement("INSERT INTO reward_instrument_history SELECT * FROM reward_instruments WHERE id=?")){p.setObject(1,card.get("id"));p.executeUpdate();}}
+        return null;
+    });}
     public void finishPayout(UUID id,long revision,ProviderRedemption.Status status,LocalDate date){
         var repo=new PostgresProviderAccountRepository(db);var old=repo.findRedemption(id).orElseThrow();
         if(old.status()!=ProviderRedemption.Status.REQUESTED||status==ProviderRedemption.Status.REQUESTED)throw new IllegalArgumentException("Only a requested payout can be completed or cancelled.");
@@ -193,9 +228,9 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             c.setReadOnly(true);
             var state=PostgresReceiptState.read(c);
             var records=state.receipts().values().stream().map(r->new ReceiptRecord(r.transactionId(),r.status(),r.revision(),r.contents().toTransaction(),r.metadata(),r.evidenceIds())).toList();
-            var summary=new ProviderBalanceSummary(PostgresReceiptState.rules(state));
+            var summary=accountSummary(state,records,RewardInstrumentRepository.list(c));
             String name=ProviderBalanceSummary.accountName(provider);
-            var activity=AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards()).stream().filter(a->a.movement().provider().equals(name) && (a.movement().date()==null || !a.movement().date().isBefore(from) && !a.movement().date().isAfter(to))).toList();
+            var activity=withRecordedTimes(c,state,AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards())).stream().filter(a->a.movement().provider().equals(name) && (a.movement().date()==null || !a.movement().date().isBefore(from) && !a.movement().date().isAfter(to))).toList();
             var start=summary.balance(from,name,records); var end=summary.balance(to,name,records);
             BigDecimal earned=BigDecimal.ZERO,spent=BigDecimal.ZERO,pe=BigDecimal.ZERO,ps=BigDecimal.ZERO,unavailable=BigDecimal.ZERO,unavailablePoints=BigDecimal.ZERO;
             boolean complete=true,unavailableUsdComplete=true;
@@ -229,6 +264,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         for(String table:List.of("receipt_draft_history","receipt_drafts"))try(var p=c.prepareStatement("DELETE FROM "+table+" WHERE draft_id=?")){p.setObject(1,id);p.executeUpdate();}
     }
 
+    public Map<String,Object> linkPayoutCard(UUID id,long expected,Map<String,Object> fields,String actor){return new RewardInstrumentRepository(db).linkPayout(id,expected,fields,actor);}
     public List<Map<String,Object>> rewardInstruments(){return new RewardInstrumentRepository(db).list();}
     public Map<String,Object> rewardInstrument(UUID id){return new RewardInstrumentRepository(db).get(id);}
     public Map<String,Object> createRewardInstrument(Map<String,Object> f,String actor){return new RewardInstrumentRepository(db).create(f,actor);}
@@ -237,7 +273,9 @@ public final class PostgresPlatformRepository implements PlatformRepository {
     public Map<String,Object> exchangeRewardInstrument(UUID id,long expected,Map<String,Object> f,String actor){return new RewardInstrumentRepository(db).exchange(id,expected,f,actor);}
 
     public Map<String,Object> importReceiptInventory(String actor){return new PostgresInventoryRepository(db).importReceipts(actor);}
+    public void adjustReceiptInventory(UUID id,long expected,String action,int quantity,String location,String note,String actor,Integer lowStockLevel,Integer unitsPerPackage,String unitName,String countUnit,String category,java.math.BigDecimal comparisonSize,String comparisonUnit){new PostgresInventoryRepository(db).adjust(id,expected,action,quantity,location,note,actor,lowStockLevel,unitsPerPackage,unitName,countUnit,category,comparisonSize,comparisonUnit);}
     public void adjustReceiptInventory(UUID id,long expected,String action,int quantity,String location,String note,String actor,Integer lowStockLevel,Integer unitsPerPackage,String unitName,String countUnit){new PostgresInventoryRepository(db).adjust(id,expected,action,quantity,location,note,actor,lowStockLevel,unitsPerPackage,unitName,countUnit);}
+    public void adjustReceiptInventory(UUID id,long expected,String action,int quantity,String location,String note,String actor,Integer lowStockLevel,Integer unitsPerPackage,String unitName,String countUnit,String category){new PostgresInventoryRepository(db).adjust(id,expected,action,quantity,location,note,actor,lowStockLevel,unitsPerPackage,unitName,countUnit,category);}
 
     public Map<String, Object> workspace() { return workspace(null); }
 
@@ -250,7 +288,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             var records = state.receipts().values().stream().map(r -> new ReceiptRecord(r.transactionId(), r.status(), r.revision(), r.contents().toTransaction(), r.metadata(), r.evidenceIds()))
                     .sorted(Comparator.comparing((ReceiptRecord r) -> r.transaction().getObservations().purchaseDate(), Comparator.nullsLast(Comparator.reverseOrder()))
                             .thenComparing(r -> ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).orElse(LocalTime.MIN), Comparator.reverseOrder())).toList();
-            var summary = new ProviderBalanceSummary(PostgresReceiptState.rules(state));
+            var summary = accountSummary(state,records,RewardInstrumentRepository.list(c));
             LocalDate day = asOf != null ? asOf : LocalDate.now(java.time.ZoneId.of("America/Chicago"));
             List<Object> balances = new ArrayList<>();
             var balanceProviders=new ArrayList<String>();
@@ -311,7 +349,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                     reported.add(fields("transactionId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "date", r.transaction().getObservations().purchaseDate(), "status", r.status(), "values", r.transaction().getObservations().walgreensCash()));
                 }
             }
-            return fields("expiringRewards", expiringRewards(state,records,day), "rewardInstruments", RewardInstrumentRepository.list(c), "rewardsOverview", rewardsOverview(summary,records,day,balanceProviders),"productLookup", productLookup(records), "accountActivity", AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards()), "receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", historicalRewardOffers(records), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "sortTime", ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).map(LocalTime::toString).orElse(null), "totals", totals(r))).toList(),
+            return fields("manualRewards",state.balances().adjustments().stream().filter(a->a.reason().startsWith("Member reward:")).map(a->AccountAdjustment.currentMember(a,state.balances().adjustments())).map(a->fields("id",a.eventId(),"provider",a.provider(),"description",a.reason().substring("Member reward: ".length()),"amount",a.usdChange(),"date",a.date(),"expirationDate",a.expirationDate(),"status",a.usdChange()!=null&&a.usdChange().signum()==0?"VOID":"ACTIVE")).toList(),"expiringRewards", expiringRewards(state,records,day), "rewardInstruments", RewardInstrumentRepository.list(c), "rewardsOverview", rewardsOverview(summary,records,day,balanceProviders),"productLookup", productLookup(records), "accountActivity", withRecordedTimes(c,state,AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards())), "receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", historicalRewardOffers(records), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "sortTime", ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).map(LocalTime::toString).orElse(null), "totals", totals(r))).toList(),
                     "receiptPeriods", receiptPeriods(records), "summaries", fields("all", savings(records), "day", savings(SavingsReport.day(records, day)), "week", savings(ReceiptWorksheetReport.week(records, day)), "month", savings(SavingsReport.month(records, YearMonth.from(day)))), "plans", planRows, "coupons", coupons, "deals", deals, "rebates", rebates, "inventory", inventory, "balances", balances, "reportedBalances", reported,
                     "unavailableRewardSources",state.balances().adjustments().stream().filter(AccountAdjustment::unavailable).filter(a->a.unavailableSource()!=null).map(a->fields("sourceId",a.unavailableSource(),"date",a.date(),"reason",a.reason())).toList(),"accountHistory", state.balances(), "movements", summary.movements(records), "promotions", state.giftCardPromotions().values().stream().map(p->rebateProgress(p,state.history().values())).toList(), "rrMatches", state.rrUsageLinks().values(), "rewardRemovals", state.rewardVoids().values());
         });
@@ -350,6 +388,14 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         return ReceiptViews.discountBreakdown(tx);
     }
 
+    static ProviderBalanceSummary accountSummary(InMemoryStore.State state,List<ReceiptRecord> records,List<Map<String,Object>> cards){var rules=PostgresReceiptState.rules(state);var recorded=new ProviderBalanceSummary(rules);return new ProviderBalanceSummary(rules,RewardInstrumentRepository.accountMovements(cards,recorded.movements(records)));}
+    private static List<AccountActivityView.Activity> withRecordedTimes(Connection c,InMemoryStore.State state,List<AccountActivityView.Activity> rows)throws SQLException{
+        var receiptTimes=new HashMap<UUID,Instant>();for(var h:state.history().values())if(h.before()==null)receiptTimes.merge(h.after().transactionId(),h.result().committedAt(),(a,b)->a.isBefore(b)?a:b);
+        var entered=new HashMap<UUID,Instant>();for(var a:state.balances().adjustments())entered.put(a.eventId(),a.recordedAt());
+        try(var p=c.prepareStatement("SELECT redemption_id,min(recorded_at) FROM provider_redemptions_history WHERE recorded_at IS NOT NULL GROUP BY redemption_id");var r=p.executeQuery()){while(r.next())entered.put(r.getObject(1,UUID.class),r.getTimestamp(2).toInstant());}
+        try(var p=c.prepareStatement("SELECT id,min(recorded_at) FROM reward_instrument_history GROUP BY id UNION ALL SELECT id,recorded_at FROM reward_instrument_events");var r=p.executeQuery()){while(r.next())if(r.getTimestamp(2)!=null)entered.put(r.getObject(1,UUID.class),r.getTimestamp(2).toInstant());}
+        return rows.stream().map(row->{var m=row.movement();Instant at=m.receiptId()==null?entered.get(m.eventId()):receiptTimes.get(m.receiptId());if(at==null&&m.source().startsWith("Redemption "))try{at=entered.get(UUID.fromString(m.source().split(" ")[1]));}catch(IllegalArgumentException ignored){}return new AccountActivityView.Activity(m,row.receiptNumber(),row.description(),row.rewards(),row.beforeUsd(),row.afterUsd(),row.beforePoints(),row.afterPoints(),row.orderKnown(),row.valuationBasis(),at);}).toList();
+    }
     static List<Object> expiringRewards(InMemoryStore.State state,List<ReceiptRecord> records,LocalDate day) {
         var used=new HashSet<UUID>(state.rrUsageLinks().keySet());
         state.redemptions().values().forEach(r->used.add(r.getRewardId()));
@@ -367,11 +413,9 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         }
         for(var r:state.rewards().values())if(r.getEarnedReceiptId()==null&&!used.contains(r.getRewardId())&&r.getExpirationDate()!=null&&!r.getExpirationDate().isBefore(day))
             rows.put(r.getRewardId(),fields("id",r.getRewardId(),"provider","Register Rewards","description",r.getSourceDescription(),"amount",r.getFaceValue(),"expirationDate",r.getExpirationDate(),"receiptId",null));
-        for(var a:state.balances().adjustments())if(a.expirationDate()!=null&&!a.date().isAfter(day)&&!a.expirationDate().isBefore(day)&&!used.contains(a.eventId())&&!a.unavailable()&&a.reason().startsWith("Member reward:")&&a.usdChange()!=null&&a.usdChange().signum()>0)
-        {
-            var amount=a.usdChange();
-            for(var correction:state.balances().adjustments())if(correction.reason().equals("Member reward correction: "+a.eventId())&&!correction.date().isAfter(day)&&correction.usdChange()!=null)amount=amount.add(correction.usdChange());
-            if(amount.signum()>0)rows.put(a.eventId(),fields("id",a.eventId(),"provider",a.provider(),"description",a.reason().substring("Member reward: ".length()),"amount",amount,"expirationDate",a.expirationDate(),"receiptId",null));
+        for(var original:state.balances().adjustments())if(original.reason().startsWith("Member reward:")) {
+            var a=AccountAdjustment.currentMember(original,state.balances().adjustments());
+            if(a.expirationDate()!=null&&!a.date().isAfter(day)&&!a.expirationDate().isBefore(day)&&!used.contains(a.eventId())&&a.usdChange()!=null&&a.usdChange().signum()>0)rows.put(a.eventId(),fields("id",a.eventId(),"provider",a.provider(),"description",a.reason().substring("Member reward: ".length()),"amount",a.usdChange(),"expirationDate",a.expirationDate(),"receiptId",null));
         }
         return List.copyOf(rows.values());
     }
@@ -397,7 +441,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             if(movement.usd()==null)monthlyComplete=false;
             else if(movement.usd().signum()>0)monthlyEarning=monthlyEarning.add(movement.usd());
         }
-        return fields("asOf",day,"monthlyEarning",monthlyComplete?monthlyEarning:null,"available",availableComplete?available:null,"expected",expectedComplete?expected:null,"total",availableComplete&&expectedComplete?available.add(expected):null,"knownAvailable",available,"knownExpected",expected,"expectedCount",expectedCount,"missingBalances",missingBalances,"missingValuations",missingValuations);
+        return fields("asOf",day,"periodStart",day.withDayOfMonth(1),"totalUsed",summary.totalUsed(day.withDayOfMonth(1),day,records),"monthlyEarning",monthlyComplete?monthlyEarning:null,"available",availableComplete?available:null,"expected",expectedComplete?expected:null,"total",availableComplete&&expectedComplete?available.add(expected):null,"knownAvailable",available,"knownExpected",expected,"expectedCount",expectedCount,"missingBalances",missingBalances,"missingValuations",missingValuations);
     }
 
     /** Receipt history is a product reference, never an on-hand quantity import. */
@@ -706,7 +750,11 @@ public final class PostgresPlatformRepository implements PlatformRepository {
 /** Available sources for existing RR deductions; selecting a source never posts another amount. */
 public static final class ReceiptRRMatching {
     public record Option(UUID sourceId,boolean receiptEarning,BigDecimal amount,String promotion,UUID sourceReceiptId,String sourceReceiptNumber,LocalDate earnedDate,LocalDate expires,boolean historyUnknown) { }
-    public record Use(UUID eventId,BigDecimal amount,String description,boolean matched,boolean needsReview,List<Option> options) { }
+    public record Use(UUID eventId,BigDecimal amount,String description,boolean matched,boolean needsReview,List<Option> options,UUID currentSourceId,List<RRUsageLink> previousMatches,List<Option> correctionOptions) {
+        public Use(UUID eventId,BigDecimal amount,String description,boolean matched,boolean review,List<Option> options){this(eventId,amount,description,matched,review,options,null,List.of(),List.of());}
+    }
+    private static InMemoryStore.State withoutUsage(InMemoryStore.State state,UUID use){var links=new HashMap<>(state.rrUsageLinks());links.values().removeIf(link->link.usageEventId().equals(use));return new InMemoryStore.State(state.receipts(),state.rewards(),state.redemptions(),state.evidence(),state.history(),state.requests(),state.rewardVoids(),state.giftCardPromotions(),state.balances(),links);}
+
     static List<Use> options(InMemoryStore.State state,UUID id) {
         var spent=state.receipts().get(id);
         if(spent==null || spent.status()!=ReceiptStatus.ACTIVE) throw new IllegalArgumentException("Open an active receipt before matching RR.");
@@ -714,21 +762,22 @@ public static final class ReceiptRRMatching {
         for(var use:spent.contents().observations().unidentifiedRR()) {
             boolean matched=state.rrUsageLinks().values().stream().anyMatch(l->l.usageEventId().equals(use.eventId()));
             var options=new ArrayList<Option>();
-            if(!matched) {
+            var availableState=matched?withoutUsage(state,use.eventId()):state;
+            {
                 for(var source:state.receipts().values()) for(var earning:source.contents().observations().earnings()) {
                     if(earning.kind()!=ReceiptObservations.EarningKind.REGISTER_REWARD || earning.confirmed()==null)continue;
                     var option=new Option(earning.earningId(),true,earning.confirmed().amount(),RegisterRewardLabel.offer(source.contents().toTransaction(),earning).replace(" — buy "," — Buy ").replace(", get $",", Get $"),source.transactionId(),source.metadata()==null?null:source.metadata().receiptNumber(),source.contents().observations().purchaseDate(),earning.expirationDate(),false);
-                    if(eligible(state,spent,use,option))options.add(option);
+                    if(eligible(availableState,spent,use,option))options.add(option);
                 }
                 for(var source:state.rewards().values()) {
                     var origin=source.getEarnedReceiptId()==null?null:state.receipts().get(source.getEarnedReceiptId());
                     var option=new Option(source.getRewardId(),false,source.getFaceValue(),source.getSourceDescription(),source.getEarnedReceiptId(),origin==null||origin.metadata()==null?null:origin.metadata().receiptNumber(),source.getEarnedDate(),source.getExpirationDate(),source.getEarnedReceiptId()==null && (source.getEarnedDate()==null || source.getEarnedDate().equals(spent.contents().observations().purchaseDate())));
-                    if(eligible(state,spent,use,option))options.add(option);
+                    if(eligible(availableState,spent,use,option))options.add(option);
                 }
             }
             options.sort(Comparator.comparing(Option::earnedDate,Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(Option::sourceId));
             boolean needsReview=state.rrUsageLinks().values().stream().filter(l->l.usageEventId().equals(use.eventId())).anyMatch(l->PostgresReceiptState.rules(state).rrUsageNeedsReview(l));
-            rows.add(new Use(use.eventId(),use.amount(),use.recordedDescription(),matched,needsReview,List.copyOf(options)));
+            rows.add(new Use(use.eventId(),use.amount(),use.recordedDescription(),matched,needsReview,matched?List.of():List.copyOf(options),state.rrUsageLinks().values().stream().filter(link->link.usageEventId().equals(use.eventId())).map(RRUsageLink::sourceId).findFirst().orElse(null),state.rrUsageLinks().values().stream().filter(link->link.usageEventId().equals(use.eventId())).flatMap(link->link.previousMatches().stream()).toList(),matched?List.copyOf(options):List.of()));
         }
         return List.copyOf(rows);
     }

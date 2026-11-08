@@ -23,6 +23,18 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ReceiptInputTest {
+    @Test void registerRewardTypeSurvivesConfirmationAndUnknownRemainsUnknown() {
+        for(String type:List.of("MANUFACTURER","STORE","UNKNOWN")) {
+            var fields=new LinkedHashMap<String,Object>(Map.of("earningId",UUID.randomUUID(),"kind","REGISTER_REWARD","form","STORE_COUPON","amount","5","status","EXPECTED","registerRewardType",type));
+            var expected=EarningInput.read(Json.parseObject(Json.object(fields)));assertEquals(type,expected.details().registerRewardType());
+            var confirmed=ReceiptEarningStatusUpdate.apply(expected,RebateStatus.PAID,"5","USD",true,null);
+            assertEquals(type,confirmed.details().registerRewardType());assertEquals(RebateStatus.PAID,confirmed.status());
+            var linked=ReceiptEarningStatusUpdate.source(confirmed,UUID.randomUUID(),UUID.randomUUID());assertEquals(type,linked.details().registerRewardType());
+        }
+        var legacy=EarningInput.read(new LinkedHashMap<>(Map.of("earningId",UUID.randomUUID().toString(),"kind","REGISTER_REWARD","form","STORE_COUPON","amount","5","status","EXPECTED")));
+        assertNull(legacy.details().registerRewardType());
+    }
+
     @Test void dollarAmountsAcceptWholeNumbersAndTrailingDecimalPoints() {
         for(String value:List.of("5","5.","5.00",".50","0."))
             assertEquals(0,new BigDecimal(value).compareTo(ReceiptInput.decimal(Map.of("amount",value),"amount",false)));
@@ -84,6 +96,18 @@ class ReceiptInputTest {
         assertEquals(2,payments.size());assertEquals("ECB",payments.getFirst().getAccountName());assertEquals("Beauty ECB",payments.getFirst().getNotes());assertEquals("Weekly ECB",payments.getLast().getNotes());
     }
 
+    @Test void packageDetailsRemainSeparateFromPurchasedQuantityAndSurviveCorrectionAndSerialization()throws Exception {
+        var fields=draft(UUID.randomUUID());var items=new ArrayList<Map<String,Object>>();
+        @SuppressWarnings("unchecked") var line=new LinkedHashMap<>((Map<String,Object>)((List<?>)fields.get("items")).getFirst());
+        line.put("quantity",2);line.put("packageDetails",Map.of("size","80","unit","fl oz","itemCount",1,"itemUnit","items","secondarySize","80","secondaryUnit","loads"));items.add(line);fields.put("items",items);
+        var original=read(fields).record();var id=original.transaction().getPurchaseItems().getFirst().getLineItemId();
+        var details=original.transaction().getObservations().worksheet().packageDetails().get(id);assertEquals(new BigDecimal("80"),details.size());assertEquals("fl oz",details.unit());assertEquals(2,original.transaction().getPurchaseItems().getFirst().getQuantity());
+        var corrected=ReceiptCorrection.read(original,Map.of("reason","Correct store reference","storeReference","New reference")).transaction();assertEquals(details,corrected.getObservations().worksheet().packageDetails().get(id));
+        var bytes=new java.io.ByteArrayOutputStream();try(var out=coupons.serialization.LegacyObjectStreams.output(bytes)){out.writeObject(ReceiptSnapshot.from(corrected));}
+        try(var input=coupons.serialization.LegacyObjectStreams.input(new java.io.ByteArrayInputStream(bytes.toByteArray()))){assertEquals(details,((ReceiptSnapshot)input.readObject()).observations().worksheet().packageDetails().get(id));}
+        assertThrows(IllegalArgumentException.class,()->ReceiptInput.packageDetails(Map.of("size","80")));
+        assertThrows(IllegalArgumentException.class,()->ReceiptInput.packageDetails(Map.of("size","-1","unit","fl oz")));
+    }
     static Map<String,Object> draft(UUID id) {
         UUID line=UUID.randomUUID();var input=new LinkedHashMap<String,Object>();
         input.put("transactionId",id.toString());input.put("retailer","Synthetic store");input.put("receiptNumber","web-"+id);input.put("purchaseDate","2026-10-19");input.put("printedTime","09:00");input.put("purchaseChannel","IN_STORE");input.put("tax","0.27");input.put("reportedTotal","7.28");

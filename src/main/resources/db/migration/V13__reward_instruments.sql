@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS reward_instruments (
  CHECK(last_four IS NULL OR (kind='GIFT_CARD' AND last_four ~ '^[0-9]{4}$')),
  CHECK(kind<>'GIFT_CARD' OR unit='USD')
 );
+ALTER TABLE reward_instruments ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','ARCHIVED'));
 CREATE TABLE IF NOT EXISTS reward_instrument_history (LIKE reward_instruments INCLUDING CONSTRAINTS);
+ALTER TABLE reward_instrument_history ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(status IN ('ACTIVE','ARCHIVED'));
 CREATE UNIQUE INDEX IF NOT EXISTS reward_instrument_history_identity ON reward_instrument_history(id,revision);
 CREATE TABLE IF NOT EXISTS reward_instrument_events (
  id UUID PRIMARY KEY, instrument_id UUID NOT NULL REFERENCES reward_instruments(id),

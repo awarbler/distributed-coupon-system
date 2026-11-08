@@ -16,7 +16,7 @@ import static coupons.api.ReceiptInput.*;
 /** Shared new-earning input during creation and post-save additions. No payout event is generated. */
 final class EarningInput {
     static Earning read(Map<String,Object> e) {
-            known(e,"originalReceiptId","originalEarningId","requirement","qualifyingQuantities","payoutDestination","submittedOn","submissionReference","confirmationReference","evidenceIds","earningId","kind","provider","offer","form","amount","status","confirmedAmount","unit","confirmAmountAndUnit","valuation","valuationBasis","expirationDate","lineItemIds","rejectionReason");
+            known(e,"originProduct","originBrand","originProgram","originPromotion","registerRewardType","originalReceiptId","originalEarningId","requirement","qualifyingQuantities","payoutDestination","submittedOn","submissionReference","confirmationReference","evidenceIds","earningId","kind","provider","offer","form","amount","status","confirmedAmount","unit","confirmAmountAndUnit","valuation","valuationBasis","expirationDate","lineItemIds","rejectionReason");
             var kind=EarningKind.valueOf(required(e,"kind"));var form=BenefitKind.valueOf(required(e,"form"));
             if(kind==EarningKind.REGISTER_REWARD&&form!=BenefitKind.STORE_COUPON||kind==EarningKind.WALGREENS_CASH&&form!=BenefitKind.STORE_REWARD)throw new IllegalArgumentException("Reward form must match its program.");
             String provider=kind==EarningKind.THIRD_PARTY_REBATE?required(e,"provider"):"Walgreens";
@@ -48,6 +48,6 @@ final class EarningInput {
     }
     private static EarningDetails details(Map<String,Object> e){
         var quantities=quantities(e);
-        var day=optional(e,"submittedOn");return new EarningDetails(quantities,optional(e,"payoutDestination"),day==null?null:LocalDate.parse(day),optional(e,"submissionReference"),optional(e,"confirmationReference"),null,null,null,optional(e,"originalReceiptId")==null?null:UUID.fromString(required(e,"originalReceiptId")),optional(e,"originalEarningId")==null?null:UUID.fromString(required(e,"originalEarningId")));
+        var day=optional(e,"submittedOn");return new EarningDetails(quantities,optional(e,"payoutDestination"),day==null?null:LocalDate.parse(day),optional(e,"submissionReference"),optional(e,"confirmationReference"),null,null,null,optional(e,"originalReceiptId")==null?null:UUID.fromString(required(e,"originalReceiptId")),optional(e,"originalEarningId")==null?null:UUID.fromString(required(e,"originalEarningId")),optional(e,"registerRewardType"),optional(e,"originProduct"),optional(e,"originBrand"),optional(e,"originProgram"),optional(e,"originPromotion"));
     }
 }

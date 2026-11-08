@@ -22,6 +22,16 @@ public final class RegisterReward implements java.io.Serializable {
     private final LocalDate earnedDate;
     private final LocalDate expirationDate;
     private final UUID earnedReceiptId;
+    private final String registerRewardType;
+    private final String originProduct,originBrand,originProgram,originPromotion;
+
+    private java.util.List<RegisterReward> previousVersions;
+    private String correctedBy;
+    private java.time.Instant correctedAt;
+    public java.util.List<RegisterReward> getPreviousVersions(){return previousVersions==null?java.util.List.of():java.util.List.copyOf(previousVersions);}
+    public String getCorrectedBy(){return correctedBy;}
+    public java.time.Instant getCorrectedAt(){return correctedAt;}
+    public RegisterReward retainingHistory(RegisterReward previous,String actor){var copy=new RegisterReward(rewardId,sourceDescription,faceValue,earnedDate,expirationDate,earnedReceiptId,registerRewardType,originProduct,originBrand,originProgram,originPromotion);copy.previousVersions=java.util.List.of(previous);copy.correctedBy=actor;copy.correctedAt=java.time.Instant.now();return copy;}
 
     /**
      * Creates a newly recorded reward with a generated identifier.
@@ -57,7 +67,13 @@ public final class RegisterReward implements java.io.Serializable {
             LocalDate earnedDate,
             LocalDate expirationDate,
             UUID earnedReceiptId) {
-
+        this(rewardId,sourceDescription,faceValue,earnedDate,expirationDate,earnedReceiptId,null);
+    }
+    public RegisterReward(UUID rewardId,String sourceDescription,BigDecimal faceValue,LocalDate earnedDate,LocalDate expirationDate,UUID earnedReceiptId,String registerRewardType) {this(rewardId,sourceDescription,faceValue,earnedDate,expirationDate,earnedReceiptId,registerRewardType,null,null,null,null);}
+    public RegisterReward(UUID rewardId,String sourceDescription,BigDecimal faceValue,LocalDate earnedDate,LocalDate expirationDate,UUID earnedReceiptId,String registerRewardType,String originProduct,String originBrand,String originProgram,String originPromotion) {
+        this.originProduct=originProduct;this.originBrand=originBrand;this.originProgram=originProgram;this.originPromotion=originPromotion;
+        if(registerRewardType!=null&&!java.util.Set.of("MANUFACTURER","STORE","UNKNOWN").contains(registerRewardType))throw new IllegalArgumentException("Unknown Register Reward type.");
+        this.registerRewardType=registerRewardType;
         this.rewardId = Objects.requireNonNull(
                 rewardId,
                 "Reward ID cannot be null."
@@ -98,6 +114,12 @@ public final class RegisterReward implements java.io.Serializable {
         this.expirationDate = expirationDate;
         this.earnedReceiptId = earnedReceiptId;
     }
+
+    public String getOriginProduct(){return originProduct;}
+    public String getOriginBrand(){return originBrand;}
+    public String getOriginProgram(){return originProgram;}
+    public String getOriginPromotion(){return originPromotion;}
+    public String getRegisterRewardType() { return registerRewardType; }
 
     public UUID getRewardId() {
         return rewardId;

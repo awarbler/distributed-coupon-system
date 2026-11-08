@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { RewardExpirationAlerts } from './RewardExpirationAlerts'
 import { tomorrowFor, rewardExpirationDay } from './rewardExpirationDates'
@@ -27,3 +27,12 @@ it('sends one browser notification the day before expiration across remounts',()
  expect(notification).toHaveBeenCalledTimes(1)
  expect(notification).toHaveBeenCalledWith('ECB reward expires tomorrow',expect.objectContaining({body:expect.stringContaining('$5.00')}))
 })
+
+it('shows every reward in the 48-hour date window and can collapse and expand',()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-06T18:00:00Z'));
+ const rewards=Array.from({length:8},(_,i)=>({...reward,id:`soon-${i}`,description:`Soon ${i}`,expirationDate:i%2?'2026-11-07':'2026-11-08'}));
+ render(<RewardExpirationAlerts visible rewards={[...rewards,{...reward,id:'later',description:'Later reward',expirationDate:'2026-11-27'}]} onReceipt={vi.fn()} onRewards={vi.fn()}/>);
+ expect(screen.getByRole('button',{name:'Hide reward expirations'})).toHaveAttribute('aria-expanded','true');expect(screen.queryByText('Collapse')).not.toBeInTheDocument();expect(screen.getAllByText(/^Soon /)).toHaveLength(8);expect(screen.queryByText('Later reward')).not.toBeInTheDocument();
+ fireEvent.click(screen.getByRole('button',{name:'Hide reward expirations'}));expect(screen.queryByText('Soon 0')).not.toBeInTheDocument();expect(screen.getByRole('button',{name:'Show reward expirations'})).toHaveAttribute('aria-expanded','false');
+ fireEvent.click(screen.getByRole('button',{name:'Show reward expirations'}));expect(screen.getByText('Soon 0')).toBeVisible();
+});

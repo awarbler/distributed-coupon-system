@@ -14,6 +14,106 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ShoppingNotebookTest {
+    static final String ADIDAS="""
+        Addidas Gift Package 10.00
+        Buy One Get One 50% Off
+        $4.00 Off 2
+        3 Buy 10 + (10/2) + 10=25
+        25 - 4 = 21 + Tax
+        I Can Use 10 Pg Rr , Use 6 Rr
+        21 -10-6=5
+        Ibotta Get 9.00
+        Spend 25 Get 5 Rr
+        """;
+    static final String QTIPS="""
+        Qtips Deal Regular Price 4. 99
+        Store Promotion .99
+        Buy 3 : 3 X 4 = 12.00
+        Manufacturer Coupon Buy 3 Get $5.00 Off
+        Walgreens Coupon 1.00 Off X 3 = 3.00
+        Online Promo Code Wag10 -.40
+        Oop = 3.60
+        Earn .12 Walgreens Cash
+        Fetch 2500 Points
+        Ibotta 4.00 Must Buy 3
+
+        Online Only
+        """;
+    static final String PAMPERS="""
+        Pampers Diapers Unscented reg
+        Regular Price 2/$23.00  Current Sale Price Is 2/$22.00
+        Pampers Diapers Unscented $3.00 Off 2 Coupon
+        22 + 11 = 33 - 3= 30 Plus Tax
+        Use 6 Rr Use 5 Rr Use 4 Rr Total 15 Rr
+        Buy 3 Participating Pampers Packs To Earn A $10 Register Reward
+        P&G Spend 30 Get 10 Rr
+        """;
+    @Test @SuppressWarnings("unchecked") void pampersMultiUnitPricesCouponUsesAndDistinctOffersCalculateWithoutDoubleDiscounting() {
+        var source=new ShoppingPlan.PlanningSource(PAMPERS,null,null);var imported=ShoppingNoteInput.parse(PAMPERS,source);
+        var items=(List<ShoppingPlan.Line>)imported.get("items");var coupons=(List<ShoppingPlan.ScenarioCoupon>)imported.get("coupons");var payments=(List<ShoppingPlan.ScenarioPayment>)imported.get("payments");var promotions=(List<ShoppingPlan.ScenarioPromotion>)imported.get("promotions");
+        assertEquals(1,items.size());var product=items.getFirst();assertEquals("Pampers Diapers Unscented",product.name());assertEquals(3,product.quantity());assertEquals(0,n("11.50").compareTo(product.regular()));assertEquals(0,n("11.00").compareTo(product.sale()));
+        assertEquals(1,coupons.size());assertEquals("MANUFACTURER",coupons.getFirst().kind());assertEquals(2,coupons.getFirst().requiredQuantity());assertEquals(n("3.00"),coupons.getFirst().amount());assertEquals(List.of(product.id()),coupons.getFirst().lineIds());
+        assertEquals(3,payments.size());assertEquals(List.of(n("6"),n("5"),n("4")),payments.stream().map(ShoppingPlan.ScenarioPayment::amount).toList());assertTrue(payments.stream().allMatch(p->"UNKNOWN".equals(p.registerRewardType())&&p.rewardSourceId()==null));
+        assertEquals(2,promotions.size());assertNotEquals(promotions.get(0).id(),promotions.get(1).id());assertEquals(3,promotions.get(0).requiredQuantity());assertEquals(n("30"),promotions.get(1).requiredSpend());assertEquals("AFTER_COUPONS",promotions.get(1).spendBasis());assertTrue(promotions.stream().allMatch(p->"REGISTER_REWARD".equals(p.rewardType())&&p.rewardAmount().compareTo(n("10"))==0));
+        assertEquals(source,imported.get("source"));assertEquals("Walgreens",imported.get("retailer"));var issues=(List<String>)imported.get("unresolved");assertEquals(1,issues.size());assertTrue(issues.getFirst().startsWith("Spend basis is not shown"));
+        var scenario=new ShoppingPlan.Scenario(items,coupons,promotions,n("0"),n("0"),n("0"),n("0"),null,"CASH","",null,payments,source);var estimate=scenario.estimate();
+        for(var field:Map.of("regularTotal","34.50","saleTotal","33","couponTotal","3","merchandiseAfterCoupons","30","registerRewardsUsed","15","calculatedOop","15","potentialRewards","20","storePromotionTotal","1.50","totalDiscounts","4.50").entrySet())assertEquals(0,n(field.getValue()).compareTo((BigDecimal)estimate.get(field.getKey())),field.getKey());
+        assertEquals(BigDecimal.ZERO,estimate.get("tax"));assertNull(scenario.taxRate());var savings=(List<Map<String,Object>>)estimate.get("storePromotions");assertEquals(1,savings.size());assertEquals("SALE_PROMOTION",savings.getFirst().get("kind"));assertEquals(product.id(),savings.getFirst().get("id"));assertEquals(1,((List<?>)estimate.get("coupons")).size());
+    }
+    @Test @SuppressWarnings("unchecked") void multiUnitPricingSupportsOtherCountsAndKeepsUnrepresentableUnitPricesEditable() {
+        var imported=ShoppingNoteInput.parse("Pampers reg\nRegular Price 4/$46.00 Current Sale Price Is 3/$33.00\nBuy 3 Participating Pampers Packs To Earn A $10 Register Reward",null);
+        var product=((List<ShoppingPlan.Line>)imported.get("items")).getFirst();assertEquals(0,n("11.50").compareTo(product.regular()));assertEquals(0,n("11").compareTo(product.sale()));assertEquals(3,product.quantity());
+        var unresolved=ShoppingNoteInput.parse("Pampers reg\nRegular Price 3/$10.00 Current Sale Price Is 3/$8.00",null);assertTrue(((List<?>)unresolved.get("items")).isEmpty());assertFalse(((List<?>)unresolved.get("unresolved")).isEmpty());
+    }
+
+    @Test @SuppressWarnings("unchecked") void qtipsClassifiesMathCouponsRewardsAndOnlineChannelBeforeProducts() {
+        var original=new ShoppingPlan.PlanningSource(QTIPS,"image/png","AQID");
+        var imported=ShoppingNoteInput.parse(QTIPS,original);
+        var items=(List<ShoppingPlan.Line>)imported.get("items");var coupons=(List<ShoppingPlan.ScenarioCoupon>)imported.get("coupons");var promotions=(List<ShoppingPlan.ScenarioPromotion>)imported.get("promotions");
+        assertEquals(1,items.size());var item=items.getFirst();assertEquals("Qtips",item.name());assertEquals(3,item.quantity());assertEquals(n("4.99"),item.regular());assertEquals(0,n("4").compareTo(item.sale()));
+        assertEquals(3,coupons.size());assertEquals("MANUFACTURER",coupons.get(0).kind());assertEquals(3,coupons.get(0).requiredQuantity());assertEquals(0,n("5").compareTo(coupons.get(0).amount()));assertEquals(List.of(item.id()),coupons.get(0).lineIds());
+        assertEquals("STORE_COUPON",coupons.get(1).kind());assertEquals(0,n("3").compareTo(coupons.get(1).amount()));assertEquals(List.of(item.id()),coupons.get(1).lineIds());
+        assertEquals("Online promo code WAG10",coupons.get(2).description());assertEquals(n(".40"),coupons.get(2).amount());assertTrue(coupons.get(2).wholeReceipt());
+        assertEquals(3,promotions.size());assertEquals("WALGREENS_CASH",promotions.get(0).rewardType());assertEquals(n(".12"),promotions.get(0).rewardAmount());assertEquals("FETCH",promotions.get(1).rewardType());assertEquals(n("2500"),promotions.get(1).rewardAmount());assertEquals("IBOTTA",promotions.get(2).rewardType());assertEquals(n("4.00"),promotions.get(2).rewardAmount());assertEquals(3,promotions.get(2).requiredQuantity());
+        var source=(ShoppingPlan.PlanningSource)imported.get("source");assertEquals(QTIPS,source.text());assertEquals("AQID",source.contentBase64());assertEquals("ONLINE",source.purchaseChannel());assertEquals("ONLINE",imported.get("purchaseChannel"));assertEquals("Walgreens",imported.get("retailer"));
+        var unresolved=(List<String>)imported.get("unresolved");assertEquals(1,unresolved.size());assertTrue(unresolved.getFirst().startsWith("Store Promotion .99"));
+        var scenario=new ShoppingPlan.Scenario(items,coupons,promotions,n("0"),n("0"),n("0"),n("0"),null,"CASH","",null,List.of(),source);var estimate=scenario.estimate();
+        assertEquals(0,n("12").compareTo((BigDecimal)estimate.get("saleTotal")));assertEquals(0,n("8.40").compareTo((BigDecimal)estimate.get("couponTotal")));assertEquals(0,n("3.60").compareTo((BigDecimal)estimate.get("calculatedOop")));assertEquals(0,n("6.62").compareTo((BigDecimal)estimate.get("potentialRewards")));assertEquals(0,n("2.97").compareTo((BigDecimal)estimate.get("storePromotionTotal")));assertEquals(0,n("11.37").compareTo((BigDecimal)estimate.get("totalDiscounts")));assertEquals(BigDecimal.ZERO,estimate.get("tax"));assertNull(scenario.manualOop());assertEquals(List.of(),imported.get("payments"));
+    }
+    @Test @SuppressWarnings("unchecked") void unrecognizedCouponRewardPaymentAndCalculationLinesNeverBecomeProducts() {
+        var result=ShoppingNoteInput.parse("Qtips $4.99\nManufacturer Coupon unknown 2.00\nWalgreens Coupon unknown 1.00\nOnline Promo Code unknown 0.40\nOop unknown 3.60\nEarn unknown 0.12\nFetch unknown 2500.00\nBuy 3 : unknown = 12.00",null);
+        assertEquals(1,((List<ShoppingPlan.Line>)result.get("items")).size());assertEquals(7,((List<String>)result.get("unresolved")).size());
+    }
+
+    @Test @SuppressWarnings("unchecked") void handwrittenAdidasImportsAndCalculatesWithEditableQuantityAndCoupon() {
+        for(int quantity:new int[]{3,4})for(String coupon:new String[]{"4","5"}) {
+            String text=ADIDAS.replace("3 Buy",quantity+" Buy").replace("$4.00 Off","$"+coupon+".00 Off");
+            var source=new ShoppingPlan.PlanningSource(text,null,null);
+            var imported=ShoppingNoteInput.parse(text,source);
+            var items=(List<ShoppingPlan.Line>)imported.get("items");
+            var coupons=(List<ShoppingPlan.ScenarioCoupon>)imported.get("coupons");
+            var promotions=(List<ShoppingPlan.ScenarioPromotion>)imported.get("promotions");
+            var payments=(List<ShoppingPlan.ScenarioPayment>)imported.get("payments");
+            assertEquals(List.of(),imported.get("unresolved"));assertEquals(source,imported.get("source"));assertEquals("Walgreens",imported.get("retailer"));
+            assertEquals(1,items.size());assertEquals("Addidas Gift Package",items.getFirst().name());
+            assertEquals(quantity,items.getFirst().quantity());assertEquals(n("10.00"),items.getFirst().regular());
+            assertEquals("BOGO_HALF",items.getFirst().priceRule().type());
+            assertEquals(1,coupons.size());assertEquals(2,coupons.getFirst().requiredQuantity());assertEquals(0,n(coupon).compareTo(coupons.getFirst().amount()));
+            assertEquals(2,payments.size());assertTrue(payments.stream().allMatch(p->"MANUFACTURER".equals(p.registerRewardType())));
+            assertEquals(2,promotions.size());assertEquals("BEFORE_COUPONS",promotions.getLast().spendBasis());
+            var plan=new ShoppingPlan.Scenario(items,coupons,promotions,n("0"),n("0"),n("0"),n("0"),null,"CASH","",null,payments,source);
+            var estimate=plan.estimate();String sale=quantity==3?"25":"30";
+            assertEquals(0,n(Integer.toString(quantity*10)).compareTo((BigDecimal)estimate.get("regularTotal")));
+            assertEquals(0,n(sale).compareTo((BigDecimal)estimate.get("saleTotal")));assertEquals(0,n(Integer.toString(quantity*10)).subtract(n(sale)).compareTo((BigDecimal)estimate.get("storePromotionTotal")));
+            assertEquals(0,n(sale).subtract(n(coupon)).compareTo((BigDecimal)estimate.get("merchandiseAfterCoupons")));
+            assertEquals(0,n(sale).subtract(n(coupon)).subtract(n("16")).compareTo((BigDecimal)estimate.get("calculatedOop")));
+            assertEquals(0,n("9").compareTo((BigDecimal)estimate.get("cashRebates")));assertEquals(0,n("14").compareTo((BigDecimal)estimate.get("potentialRewards")));
+            assertEquals(BigDecimal.ZERO,estimate.get("tax"));
+            var rows=(List<Map<String,Object>>)estimate.get("promotions");assertEquals(true,rows.getLast().get("eligible"));assertEquals(0,n(sale).compareTo((BigDecimal)rows.getLast().get("qualifyingSpend")));
+            assertEquals(source,plan.source());assertEquals(2,plan.payments().size());
+        }
+    }
+
     @Test void kotexAtPricePosterImportsBogoAndUsesDQSummaryOnce() {
         String text="3 Kotex @$7.49 ea BOGO 50%\ntotal $18.72\n-4 DQ\npay $14.72\nget 7 WC\nfinal price $2.57 each";
         var result=ShoppingNoteInput.parse(text,null);

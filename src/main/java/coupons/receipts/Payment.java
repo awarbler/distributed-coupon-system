@@ -13,6 +13,7 @@ public class Payment { // Define the data and rules for one payment record.
     private final PaymentType paymentType; // Store the type of payment or reward redemption.
     private final String notes;
     private final String accountName;
+    private final UUID giftCardId;
     private final BigDecimal amount; // Store the monetary amount applied to the transaction.
 
     /**
@@ -43,6 +44,11 @@ public class Payment { // Define the data and rules for one payment record.
     }
 
     public Payment(UUID paymentId, PaymentType paymentType, BigDecimal amount, String notes, String accountName) {
+        this(paymentId, paymentType, amount, notes, accountName, null);
+    }
+    public Payment(UUID paymentId, PaymentType paymentType, BigDecimal amount, String notes, String accountName, UUID giftCardId) {
+        if (giftCardId != null && paymentType != PaymentType.GIFT_CARD) throw new IllegalArgumentException("Assign a gift card only to a gift-card payment.");
+        this.giftCardId = giftCardId;
         if (accountName != null && (accountName.isBlank() || paymentType != PaymentType.GIFT_CARD && paymentType != PaymentType.OTHER))
             throw new IllegalArgumentException("A named redeemed account requires gift-card or other tender.");
         this.accountName = accountName;
@@ -70,6 +76,8 @@ public class Payment { // Define the data and rules for one payment record.
 
     /** Recorded tender or redemption explanation; null means unknown. */
     public String getNotes() { return notes; }
+    public UUID getGiftCardId() { return giftCardId; }
+
     public String getAccountName() { return accountName; }
 
     /** Returns the stable payment event identifier. */

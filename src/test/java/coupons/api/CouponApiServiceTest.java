@@ -45,6 +45,60 @@ class CouponApiServiceTest {
         b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));
         return client.send(b.build(),HttpResponse.BodyHandlers.ofString());
     }
+    @Test void giftCardPayoutRequiresItsRecordedFaceValueRatherThanInferringItFromPoints()throws Exception{
+        server.stop(0);var saved=new ArrayList<Object>();PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{if(method.getName().equals("savePayout")){saved.add(args[0]);return null;}throw new AssertionError(method.getName());});server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var input=new LinkedHashMap<String,Object>(Map.of("payoutId",UUID.randomUUID(),"provider","Fetch","date","2026-11-05","points","55000","destination","GIFT_CARD","brand","Walmart Gift Card","status","RECEIVED"));var response=call("POST","/accounts/payouts","owner",Json.object(input),UUID.randomUUID().toString(),null);assertEquals(400,response.statusCode());assertTrue(saved.isEmpty());input.put("amount","50");response=call("POST","/accounts/payouts","owner",Json.object(input),UUID.randomUUID().toString(),null);assertEquals(201,response.statusCode(),response.body());var payout=(ProviderRedemption)saved.getFirst();assertEquals(new BigDecimal("50"),payout.destinationUsdValue());assertEquals(new BigDecimal("55000"),payout.originalUnitsUsed());
+    }
+    @Test void receivedGiftCardIdentityUsesRecordedBrandAndLastFourWithoutInventingRetailer(){
+        var day=LocalDate.of(2026,11,5);var id=UUID.randomUUID();var payout=new ProviderRedemption(id,"Fetch",day,null,new BigDecimal("63500"),new BigDecimal("50"),ProviderRedemption.Destination.GIFT_CARD,"Gift Cards",new BigDecimal("50"),ProviderRedemption.Status.RECEIVED,day,null,List.of(),"reference","Brand: Visa Prepaid Card | Number: 4204**** **** 4668");
+        var card=RewardInstrumentRepository.issuedCard(payout);assertEquals("Visa Prepaid Card",card.retailer());assertEquals("4668",card.lastFour());
+        var unknown=new ProviderRedemption(id,"Fetch",day,null,null,new BigDecimal("50"),ProviderRedemption.Destination.GIFT_CARD,"Gift Cards",new BigDecimal("50"),ProviderRedemption.Status.RECEIVED,day,null,List.of(),"reference",null);assertEquals("Gift card from Fetch",RewardInstrumentRepository.issuedCard(unknown).retailer());assertNull(RewardInstrumentRepository.issuedCard(unknown).lastFour());
+    }
+    @Test void manualRewardAccountCorrectionUsesTheSelectedProgramsExistingPointsValuation()throws Exception{
+        server.stop(0);var calls=new ArrayList<Object[]>();var id=UUID.randomUUID();PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->switch(method.getName()){case "memberReward"->Map.of("amount",BigDecimal.ONE,"points",new BigDecimal("1000"),"provider","Fetch","token","original");case "correctMemberDetails"->{calls.add(args);yield null;}default->throw new AssertionError(method.getName());});
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var response=call("PUT","/accounts/member-rewards/"+id,"owner",Json.object(Map.of("amount","10","expectedAmount","1","points","1500","expectedPoints","1000","correctionId",UUID.randomUUID(),"expectedToken","original","details",Map.of("provider","P&G Brand","description","Verified account correction"))),UUID.randomUUID().toString(),null);
+        assertEquals(200,response.statusCode(),response.body());assertEquals(0,new BigDecimal("10").compareTo((BigDecimal)calls.getFirst()[3]));assertEquals(id,calls.getFirst()[0]);
+    }
+    @Test void cardSummarySeparatesObservedOpeningsSpendingAndUnknownCurrentBalances(){
+        var cards=List.of(Map.<String,Object>of("kind","GIFT_CARD","status","ACTIVE","opening",new BigDecimal("50"),"calculated",new BigDecimal("43.50"),"events",List.of(Map.of("active",true,"kind","REDEMPTION","amount",new BigDecimal("6.50")))),Map.<String,Object>of("kind","GIFT_CARD","status","ACTIVE","opening",new BigDecimal("50"),"calculated",new BigDecimal("29.77"),"events",List.of(Map.of("active",true,"kind","REDEMPTION","amount",new BigDecimal("20.23")))),Map.<String,Object>of("kind","GIFT_CARD","status","ACTIVE","opening",new BigDecimal("50"),"events",List.of()),Map.<String,Object>of("kind","GIFT_CARD","status","ARCHIVED","opening",new BigDecimal("50"),"events",List.of()));
+        var summary=RewardInstrumentRepository.cardSummary(cards);assertEquals(new BigDecimal("150"),summary.get("recordedOpenings"));assertEquals(new BigDecimal("26.73"),summary.get("recordedRedemptions"));assertEquals(new BigDecimal("73.27"),summary.get("knownRemaining"));assertEquals(1,summary.get("unknownBalanceCount"));
+    }
+    @Test void explicitPayoutLinkUsesTheOriginalPayoutAndRequiresWriteAuthorization()throws Exception {
+        server.stop(0);var calls=new ArrayList<Object[]>();var payout=UUID.randomUUID();PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{if(method.getName().equals("linkPayoutCard")){calls.add(args);return Map.of("id",UUID.randomUUID());}throw new AssertionError(method.getName());});
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();var body=Json.object(Map.of("id",UUID.randomUUID(),"provider","Visa Prepaid Card","lastFour","4668","confirmed",true,"reason","Verified received payout"));
+        assertEquals(403,call("POST","/accounts/payouts/"+payout+"/gift-card","reader",body,UUID.randomUUID().toString(),"2").statusCode());assertTrue(calls.isEmpty());assertEquals(201,call("POST","/accounts/payouts/"+payout+"/gift-card","owner",body,UUID.randomUUID().toString(),"2").statusCode());assertEquals(payout,calls.getFirst()[0]);assertEquals(2L,calls.getFirst()[1]);assertEquals(1,calls.size());
+    }
+    @Test void unknownRequestFieldsIdentifyTheRejectedFieldWithoutEchoingValues() {
+        var error=org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,()->Json.known(Map.of("obsoleteFlag","private value"),"accepted"));
+        assertTrue(error.getMessage().contains("obsoleteFlag"));
+        assertFalse(error.getMessage().contains("private value"));
+    }
+    @Test @SuppressWarnings("unchecked") void pastedDealsUseTextParserAndSaveNotesFundingAndChannel()throws Exception {
+        for(String name:List.of("Addidas","Qtips","Pampers")) {
+            boolean online=name.equals("Qtips"),pampers=name.equals("Pampers");
+            String text=pampers?ShoppingNotebookTest.PAMPERS:online?ShoppingNotebookTest.QTIPS:ShoppingNotebookTest.ADIDAS;
+            var imported=call("POST","/shopping-plans/import-preview","owner",Json.object(Map.of("text",text)),null,null);
+            assertEquals(200,imported.statusCode(),imported.body());var draft=Json.parseObject(imported.body());
+            assertEquals("local",draft.get("reader"));assertEquals(text,((Map<String,Object>)draft.get("source")).get("text"));
+            // The browser keeps monetary response lexemes as strings, then sends quantities as integers.
+            for(String group:List.of("items","coupons","promotions","payments"))for(var row:(List<Map<String,Object>>)draft.get(group))
+                for(String field:List.of("regular","sale","amount","rewardAmount","requiredSpend"))if(row.get(field) instanceof BigDecimal amount)row.put(field,amount.toPlainString());
+            var scenario=new LinkedHashMap<String,Object>();for(String field:List.of("items","coupons","promotions","payments","source"))scenario.put(field,draft.get(field));
+            for(String field:List.of("tax","walgreensCashUsed","registerRewardsUsed","giftCardUsed"))scenario.put(field,"0");
+            scenario.put("paymentMethod","CASH");scenario.put("fundingNotes","");
+            var estimate=call("POST","/shopping-plans/scenario/preview","owner",Json.object(Map.of("scenario",scenario,"retailer","Walgreens")),null,null);
+            assertEquals(200,estimate.statusCode(),estimate.body());assertEquals(0,new BigDecimal(pampers?"15":online?"3.60":"5").compareTo(new BigDecimal(Json.parseObject(estimate.body()).get("calculatedOop").toString())));
+            UUID id=UUID.randomUUID();var saved=call("POST","/shopping-plans","owner",Json.object(Map.of("planId",id,"name",name,"retailer","Walgreens","scenario",scenario)),name+"-plan",null);
+            assertEquals(201,saved.statusCode(),saved.body());var loaded=plans.findById(id).orElseThrow();
+            assertEquals(text,loaded.scenario().source().text());assertEquals(name,loaded.name());if(online){assertEquals(1,loaded.scenario().items().size());assertEquals("ONLINE",loaded.scenario().source().purchaseChannel());}else if(pampers){
+                assertEquals(1,loaded.scenario().items().size());assertEquals(3,loaded.scenario().payments().size());assertEquals(2,loaded.scenario().promotions().size());assertEquals("UNKNOWN",loaded.scenario().payments().getFirst().registerRewardType());
+                var report=loaded.scenario().estimate();assertEquals(0,new BigDecimal("15").compareTo((BigDecimal)report.get("calculatedOop")));assertEquals(0,new BigDecimal("20").compareTo((BigDecimal)report.get("potentialRewards")));assertEquals(0,new BigDecimal("1.50").compareTo((BigDecimal)report.get("storePromotionTotal")));
+            }else assertEquals("MANUFACTURER",loaded.scenario().payments().getFirst().registerRewardType());
+            assertTrue(receipts.findById(id).isEmpty());
+        }
+    }
+
     @Test void splitManagerCreditsLinkToRejectedRewardWithoutDuplicatingItAndKeepFetch()throws Exception {
         UUID originalId=UUID.randomUUID(),originalEarning=UUID.randomUUID();var originalFields=ReceiptInputTest.draft(originalId);
         originalFields.put("receiptNumber","original-manager-test");originalFields.put("earnings",List.of(Map.of("earningId",originalEarning,"kind","WALGREENS_CASH","provider","Walgreens","form","STORE_REWARD","amount","15","status","REJECTED","rejectionReason","Manager override")));
@@ -107,6 +161,26 @@ class CouponApiServiceTest {
         assertEquals(2,receipts.history().findByReceiptId(id).size());
     }
 
+
+
+    @Test void weeklyPreviewPreservesRequiredQuantityAndReturnsBudgetShortfall()throws Exception {
+        var candidate=WeeklyDealPlannerTest.deal("required","10","1");var line=candidate.scenario().items().getFirst();
+        var clientScenario=Map.of("items",List.of(Map.of("id",line.id(),"name",line.name(),"sale","10","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+        var body=Json.object(Map.of("candidates",List.of(Map.of("id",candidate.id(),"name",candidate.name(),"store",candidate.store(),"scenario",clientScenario)),"rewards",List.of(),"walgreensCash","0","budget","5","mode","LOWEST_OOP","day","2026-11-06","requiredItems",List.of(Map.of("candidateId",candidate.id(),"lineId",line.id(),"quantity",2)),"includeOptional",false));
+        var response=call("POST","/shopping-plans/weekly-preview","owner",body,null,null);assertEquals(200,response.statusCode(),response.body());
+        var result=Json.parseObject(response.body());assertEquals(true,result.get("requirementsMet"));assertEquals(false,result.get("affordable"));assertEquals(0,new BigDecimal("15").compareTo((BigDecimal)result.get("additionalCashNeeded")));
+    }
+    @Test void correctsOriginalRrMetadataWithoutDuplicatingOrChangingEarnedAmount()throws Exception {
+        UUID receipt=UUID.randomUUID(),earningId=UUID.randomUUID();
+        var earning=EarningInput.read(Map.of("earningId",earningId.toString(),"kind","REGISTER_REWARD","provider","Walgreens","form","STORE_COUPON","amount","6","status","PAID","confirmedAmount","6","unit","USD","confirmAmountAndUnit",true));
+        var tx=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,BigDecimal.ONE));tx.addPurchaseItem(new PurchaseItem("Synthetic",null,BigDecimal.ONE,BigDecimal.ONE,1));tx.setObservations(new ReceiptObservations(LocalDate.of(2026,11,1),"10:00",List.of(earning),List.of(),null,List.of(),Map.of()));
+        receipts.save(receipt,tx,new ReceiptMeta("Walgreens","Metadata test",null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),Instant.now()),new ReceiptCreateCtx("test"));
+        String path="/receipts/"+receipt+"/earnings/"+earningId+"/associations";
+        String body=Json.object(Map.of("offer","Verified source","registerRewardType","MANUFACTURER","originProgram","Recorded program","originPromotion","Recorded offer","expirationDate","2026-11-19"));
+        var result=call("PUT",path,"owner",body,"metadata-save","1");assertEquals(200,result.statusCode(),result.body());assertEquals(result.body(),call("PUT",path,"owner",body,"metadata-save","1").body());
+        var changed=receipts.findById(receipt).orElseThrow();assertEquals(2,changed.revision());assertEquals(1,changed.transaction().getObservations().earnings().size());
+        var restored=changed.transaction().getObservations().earnings().getFirst();assertEquals(earningId,restored.earningId());assertEquals(earning.confirmed(),restored.confirmed());assertEquals("Recorded program",restored.details().originProgram());assertEquals("MANUFACTURER",restored.details().registerRewardType());assertEquals("Verified source",restored.offerReference());assertEquals(LocalDate.of(2026,11,19),restored.expirationDate());
+    }
     @Test void correctsRewardAmountWithRevisionAuditAndIdempotentRetry()throws Exception {
         UUID receipt=UUID.randomUUID(),earningId=UUID.randomUUID();
         var earning=EarningInput.read(Map.of("earningId",earningId.toString(),"kind","THIRD_PARTY_REBATE","provider","Fetch","form","POINTS","amount","25","status","CREDITED","confirmedAmount","25","unit","points","confirmAmountAndUnit",true));
@@ -166,6 +240,75 @@ class CouponApiServiceTest {
         assertEquals(403,call("POST",path,"reader",body,key,"3").statusCode());assertEquals(0,calls.get());
         assertEquals(200,call("POST",path,"owner",body,key,"3").statusCode());assertEquals(200,call("POST",path,"owner",body,key,"3").statusCode());assertEquals(1,calls.get());
     }
+
+    @Test @SuppressWarnings("unchecked") void weeklyPreviewUsesVerifiedCardSnapshotAndDoesNotDoubleSpendConvertedAccountFunds()throws Exception{
+        server.stop(0);UUID cardId=UUID.randomUUID();
+        var card=new HashMap<String,Object>(Map.of("id",cardId,"kind","GIFT_CARD","provider","Walgreens","nickname","Safe card","lastFour","1234","unit","USD","historyComplete",true,"calculated",new BigDecimal("5"),"status","ACTIVE"));
+        var unknown=new HashMap<>(card);unknown.put("id",UUID.randomUUID());unknown.put("calculated",null);
+        var archived=new HashMap<>(card);archived.put("id",UUID.randomUUID());archived.put("status","ARCHIVED");
+        var unrelated=new HashMap<>(card);unrelated.put("id",UUID.randomUUID());unrelated.put("provider","CVS");
+        var account=Map.<String,Object>of("id",UUID.randomUUID(),"kind","ACCOUNT_REWARD","provider","Walgreens Cash","unit","USD","historyComplete",true,"calculated",BigDecimal.ZERO,"status","ACTIVE","events",List.of(Map.of("kind","EXCHANGE")));
+        var snapshot=new HashMap<String,Object>(Map.<String,Object>of("rewardInstruments",List.of(card,unknown,archived,unrelated,account),"balances",List.of(Map.of("provider","Walgreens Cash","balance",Map.of("endUsd",new BigDecimal("10"))))));
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{if(method.getName().equals("workspace"))return snapshot;throw new AssertionError(method.getName());});
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var candidates=new ArrayList<Object>();var required=new ArrayList<Object>();for(String name:List.of("a","b")){
+            UUID line=UUID.randomUUID();var scenario=Map.of("items",List.of(Map.of("id",line,"name",name,"sale","5","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+            candidates.add(Map.of("id",name,"name",name,"store","Walgreens","scenario",scenario));required.add(Map.of("candidateId",name,"lineId",line,"quantity",1));
+        }
+        var input=new LinkedHashMap<String,Object>(Map.of("candidates",candidates,"rewards",List.of(),"walgreensCash","10","budget","10","mode","WC_FIRST","day","2026-11-07","requiredItems",required,"includeOptional",false));input.put("useGiftCards",true);
+        var response=call("POST","/shopping-plans/weekly-preview","owner",Json.object(input),null,null);assertEquals(200,response.statusCode(),response.body());var result=Json.parseObject(response.body());assertEquals(0,new BigDecimal("5").compareTo((BigDecimal)result.get("cash")));
+        for(var step:(List<Map<String,Object>>)result.get("steps"))for(var payment:(List<Map<String,Object>>)((Map<String,Object>)step.get("scenario")).get("payments"))assertEquals(cardId.toString(),payment.get("rewardSourceId"));
+        input.put("useGiftCards",false);response=call("POST","/shopping-plans/weekly-preview","owner",Json.object(input),null,null);assertEquals(0,new BigDecimal("10").compareTo((BigDecimal)Json.parseObject(response.body()).get("cash")));
+        snapshot.put("rewardInstruments",List.of());snapshot.put("balances",List.of(Map.of("provider","Walgreens Cash","balance",new coupons.rewards.ProviderBalanceSummary.Balance(BigDecimal.ZERO,BigDecimal.ZERO,new BigDecimal("10"),null,null,null))));
+        response=call("POST","/shopping-plans/weekly-preview","owner",Json.object(input),null,null);assertEquals(200,response.statusCode(),response.body());assertEquals(0,((BigDecimal)Json.parseObject(response.body()).get("cash")).signum());
+
+    }
+    @Test void targetedSpendBoosterDoesNotUseWalgreensCash()throws Exception {
+        server.stop(0);var id=UUID.randomUUID();
+        var rules=Map.of("kind","SPEND_BOOSTER","verified","true","scope","RECEIPT","wcAllowed","YES","rrAllowed","YES","usageLimit","ONCE","spendBasis","BEFORE_COUPONS");
+        var booster=Map.<String,Object>of("id",id,"name","Spend 35 Get 7","threshold",new BigDecimal("35"),"giftCardValue",new BigDecimal("7"),"start",LocalDate.of(2026,11,1),"end",LocalDate.of(2026,11,30),"status","ACTIVE","planningRules",rules);
+        var snapshot=Map.<String,Object>of("promotions",List.of(booster),"balances",List.of(Map.of("provider","Walgreens Cash","balance",new coupons.rewards.ProviderBalanceSummary.Balance(BigDecimal.ZERO,BigDecimal.ZERO,new BigDecimal("35"),null,null,null))));
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{if(method.getName().equals("workspace"))return snapshot;throw new AssertionError(method.getName());});
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var scenario=Map.of("items",List.of(Map.of("id",UUID.randomUUID(),"name","Required goods","sale","35","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+        var input=Map.of("candidates",List.of(Map.of("id","goods","name","Goods","store","Walgreens","scenario",scenario)),"rewards",List.of(),"walgreensCash","35","budget","40","mode","WC_FIRST","day","2026-11-07","boosterId",id);
+        var response=call("POST","/shopping-plans/weekly-preview","owner",Json.object(input),null,null);assertEquals(200,response.statusCode(),response.body());
+        assertEquals(0,new BigDecimal("35").compareTo((BigDecimal)Json.parseObject(response.body()).get("cash")));
+    }
+
+    @Test void boosterCrudUsesExistingPromotionApiAndUnverifiedTargetsAreRejected()throws Exception{
+        server.stop(0);UUID id=UUID.randomUUID();var calls=new ArrayList<Object[]>();var rules=Map.of("kind","SPEND_BOOSTER","verified","false");
+        var booster=Map.<String,Object>of("id",id,"name","Spend 35 Get 7","threshold",new BigDecimal("35"),"giftCardValue",new BigDecimal("7"),"start",LocalDate.of(2026,11,1),"end",LocalDate.of(2026,11,30),"status","ACTIVE","planningRules",rules);
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->switch(method.getName()){case "savePromotion","deletePromotion"->{calls.add(args);yield null;}case "workspace"->Map.of("promotions",List.of(booster));default->throw new AssertionError(method.getName());});
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var body=Json.object(Map.of("name","Spend 35 Get 7","threshold","35","giftCardValue","7","start","2026-11-01","end","2026-11-30","terms","User-recorded terms","status","ACTIVE","expectedToken","new","planningRules",rules));
+        var response=call("PUT","/rebate-programs/"+id,"owner",body,UUID.randomUUID().toString(),null);assertEquals(200,response.statusCode(),response.body());assertEquals(rules,calls.getFirst()[9]);
+        response=call("DELETE","/rebate-programs/"+id,"owner",Json.object(Map.of("expectedToken","token")),UUID.randomUUID().toString(),null);assertEquals(200,response.statusCode());
+        var target=Json.object(Map.of("candidates",List.of(),"rewards",List.of(),"walgreensCash","0","budget","20","mode","LOWEST_OOP","day","2026-11-07","boosterId",id));
+        response=call("POST","/shopping-plans/weekly-preview","owner",target,null,null);assertEquals(400,response.statusCode());assertTrue(response.body().contains("Needs Review"));
+    }
+
+    @Test void inventoryUpdateAcceptsCategoryAndPackageFields() throws Exception {
+        server.stop(0);
+        var calls=new ArrayList<Object[]>();
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{
+            if(method.getName().equals("adjustReceiptInventory")){calls.add(args);return null;}
+            throw new AssertionError("Unexpected operation: "+method.getName());
+        });
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);
+        base="http://127.0.0.1:"+server.getAddress().getPort();
+        UUID id=UUID.randomUUID();
+        String body="{\"action\":\"DETAILS\",\"quantity\":0,\"location\":null,\"note\":null,\"lowStockLevel\":null,\"unitsPerPackage\":80,\"unitName\":\"Loads\",\"countUnit\":\"PACKAGE\",\"category\":\"Household & Pet Essentials > Laundry Care\"}";
+        var response=call("PUT","/inventory/"+id,"owner",body,UUID.randomUUID().toString(),"2");
+        assertEquals(200,response.statusCode(),response.body());assertEquals(1,calls.size());
+        assertEquals(id,calls.getFirst()[0]);assertEquals(80,calls.getFirst()[8]);assertEquals("Loads",calls.getFirst()[9]);assertEquals("Household & Pet Essentials > Laundry Care",calls.getFirst()[11]);
+        var clear=call("PUT","/inventory/"+id,"owner",body.replace("\"Household & Pet Essentials > Laundry Care\"","null"),UUID.randomUUID().toString(),"3");
+        assertEquals(200,clear.statusCode(),clear.body());assertEquals("",calls.getLast()[11]);
+        var ounces=call("PUT","/inventory/"+id,"owner",body.replace("\"category\":", "\"comparisonSize\":\"7.5\",\"comparisonUnit\":\"FL_OZ\",\"category\":"),UUID.randomUUID().toString(),"4");
+        assertEquals(200,ounces.statusCode(),ounces.body());assertEquals(new BigDecimal("7.5"),calls.getLast()[12]);assertEquals("FL_OZ",calls.getLast()[13]);
+
+    }
+
     @Test void platformWorkspaceAccountsAndPayoutsUseInjectedInterfaceWithoutPostgres() throws Exception {
         server.stop(0);
         var payouts = new HashMap<UUID, ProviderRedemption>();
@@ -208,7 +351,7 @@ class CouponApiServiceTest {
         assertEquals(new BigDecimal("10.00"), Json.parseObject(activity.body()).get("availableUsd"));
         UUID id = UUID.randomUUID();
         var created = call("POST", "/accounts/payouts", "owner", Json.object(Map.of(
-                "payoutId", id, "provider", "Fetch", "date", "2026-10-27", "points", "3000",
+                "payoutId", id, "provider", "Fetch", "date", "2026-10-27", "points", "3000", "amount", "3.000",
                 "description", "Synthetic payout", "destination", "GIFT_CARD", "status", "REQUESTED")),
                 "interface-payout", null);
         assertEquals(201, created.statusCode(), created.body());

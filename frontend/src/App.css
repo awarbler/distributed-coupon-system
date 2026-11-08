@@ -812,3 +812,67 @@ label[data-placeholder-field="true"] > textarea::placeholder { color:#647467; op
 }
 
 .deal-scenario-form .scenario-rebate-conditions { align-items:start; }
+
+.reward-details-heading{display:grid;grid-template-columns:minmax(0,2fr) minmax(150px,1fr);gap:12px;align-items:end}.reward-origin-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.reward-origin-row label,.reward-details-heading label{min-width:0}.reward-origin-row input,.reward-details-heading input,.reward-details-heading select{width:100%;min-width:0}@media(max-width:600px){.reward-details-heading,.reward-origin-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.promotion-origin-row{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.promotion-origin-row label,.promotion-origin-row input{min-width:0;width:100%}@media(max-width:700px){.promotion-origin-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.deal-scenario-form .scenario-rebate-main{grid-template-columns:minmax(125px,1fr) minmax(180px,2fr) minmax(90px,.8fr) minmax(80px,.7fr);gap:10px}.deal-scenario-form .scenario-rebate-conditions{grid-template-columns:minmax(100px,.7fr) minmax(180px,1.4fr) minmax(190px,1.2fr);gap:10px}.deal-scenario-form .rebate-scope .product-scope-options{display:flex;flex-wrap:wrap;gap:8px 14px}.promotion-footer-row,.promotion-rule-checks{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}.promotion-footer-row>label.check,.promotion-rule-checks>label.check{margin:0}.promotion-footer-row>details{min-width:0}.promotion-footer-row>details[open]{flex-basis:100%}.promotion-footer-row>button{margin-left:auto}.promotion-footer-row .promotion-origin-row{margin-top:10px}@media(max-width:700px){.deal-scenario-form .scenario-rebate-main,.deal-scenario-form .scenario-rebate-conditions{grid-template-columns:repeat(2,minmax(0,1fr))}.deal-scenario-form .rebate-scope{grid-column:1/-1}}@media(max-width:400px){.deal-scenario-form .scenario-rebate-main,.deal-scenario-form .scenario-rebate-conditions{grid-template-columns:minmax(0,1fr)}}
+
+.must-buy-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin:10px 0}.must-buy-row>label.check{flex:1;min-width:180px}.must-buy-row>label:not(.check){max-width:100px}.must-buy-row input[type=number]{width:100%}
+
+/* Register Rewards: balance, spendable coupons, then financial history. */
+.rr-account-page,.rr-account-page button,.rr-account-page input,.rr-account-page select,.rr-account-page summary,.rr-account-page th{text-transform:none}
+.rr-account-page .page-header{margin-bottom:18px}
+.account-section-menu{display:flex;flex-wrap:wrap;gap:6px;padding:6px;background:#edf3ee;border:1px solid #dce5df;border-radius:12px;margin:0 0 22px}
+.account-section-menu a{padding:8px 14px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;color:#345744}
+.account-section-menu a:hover,.account-section-menu a:focus-visible{background:#28654f;color:#fff}
+.rr-account-page .panel{margin-bottom:22px}
+.rr-account-page table{width:100%;border-collapse:collapse}
+.rr-account-page thead th{background:#f5f8f6;color:#64766b;font-size:11px;letter-spacing:.02em;border-bottom:1px solid #dce5df}
+.rr-account-page th,.rr-account-page td{padding:13px var(--panel-content-inset);vertical-align:top}
+.rr-account-page tbody td{border-bottom:1px solid #edf0ed;font-size:12px;line-height:1.55}
+.rr-account-page tbody tr:last-child td{border-bottom:0}
+.rr-account-page tbody tr:hover{background:#fafcfb}
+.rr-account-page .numeric{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+.rr-inventory-table td:first-child{width:42%}.rr-inventory-table td:first-child strong{font-weight:600;color:#2b4536}
+.rr-inventory-table td:nth-child(2){font-size:15px;font-weight:650}.rr-inventory-table td:last-child{white-space:nowrap}
+.rr-account-page .table-wrap .text-button{padding:0;font-size:12px;line-height:1.55}
+.rr-missing-date{display:inline-block;color:#8b6422;background:#fbf3df;border-radius:5px;padding:2px 7px;font-size:11px}
+.rr-inventory-note{margin-top:14px}.rr-empty{padding:20px 0;color:#64766b}
+.account-activity-filters{display:grid;grid-template-columns:repeat(3,minmax(100px,1fr)) minmax(170px,1.7fr) minmax(130px,1.2fr);gap:12px;align-items:end}
+.account-activity-filters>label{margin:0;font-size:12px}
+.account-activity-filters input,.account-activity-filters select{padding:9px 10px;min-height:40px;font-size:12px}
+.account-activity-filters>button{justify-self:start;padding:8px 13px;font-size:12px}
+.rr-account-page .account-activity-panel table{min-width:1020px;table-layout:fixed}
+.rr-account-page .account-activity-panel th:nth-child(1){width:100px}.rr-account-page .account-activity-panel th:nth-child(2){width:85px}.rr-account-page .account-activity-panel th:nth-child(3){width:185px}.rr-account-page .account-activity-panel th:nth-child(4){width:110px}.rr-account-page .account-activity-panel th:nth-child(5){width:235px}.rr-account-page .account-activity-panel th:nth-child(6){width:90px}.rr-account-page .account-activity-panel th:nth-child(7){width:100px}.rr-account-page .account-activity-panel th:nth-child(8),.rr-account-page .account-activity-panel th:nth-child(9){width:100px;text-align:right}
+.rr-account-page .account-activity-panel th>button{font-size:11px;line-height:1.4;color:#607568}
+.rr-account-page .account-activity-panel td:nth-child(6),.rr-account-page .account-activity-panel td:nth-child(8),.rr-account-page .account-activity-panel td:nth-child(9){font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.rr-account-page .account-activity-panel details>summary{line-height:1.55;color:#304c3b}
+.rr-account-page .account-activity-panel details[open]{background:#f3f7f4;border-radius:7px;padding:9px}
+.rr-account-page .account-activity-panel details[open]>summary{margin-bottom:9px;font-weight:600}
+.rr-history-actions{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}.rr-history-actions:empty{display:none}
+.rr-account-page .rr-amount-spent{color:#99513f}.rr-account-page .rr-amount-earned{color:#276347}
+.rr-secondary-section{margin:12px 0;border:1px solid #dce5df;border-radius:11px;background:#fff}
+.rr-secondary-section>summary{padding:16px 18px;font-size:13px;font-weight:600;color:#3d5948}
+.rr-secondary-section[open]>summary{border-bottom:1px solid #e4ebe6}
+.rr-secondary-section>.panel{margin:0;border:0;box-shadow:none}
+.account-payouts-open>summary{display:none}
+@media(max-width:1000px){.account-activity-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.rr-inventory-table{min-width:650px}}
+@media(max-width:600px){.rr-account-page .rr-balance-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.rr-balance-metrics>div{padding:13px}.rr-balance-metrics>div>strong{font-size:23px}.account-activity-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.rr-inventory-summary{align-items:flex-start;flex-direction:column;gap:8px}.account-section-menu{gap:2px}.account-section-menu a{padding:7px 9px;font-size:12px}}
+
+.rr-account-page .account-activity-panel th>button{white-space:normal;text-align:left;overflow-wrap:normal}.rr-mobile-sort{display:none}
+@media(max-width:600px){
+ .rr-mobile-sort{display:flex;gap:10px;align-items:end;padding:0 16px 14px}.rr-mobile-sort>label{flex:1;margin:0;font-size:12px}.rr-mobile-sort select{padding:8px;min-height:38px}.rr-mobile-sort>button{padding:9px 11px;font-size:12px}
+ .rr-account-page .rr-inventory-table,.rr-account-page .account-activity-panel table{min-width:0;table-layout:auto}.rr-account-page .rr-inventory-table thead,.rr-account-page .account-activity-panel thead{display:none}
+ .rr-inventory-table tbody,.rr-account-page .account-activity-panel tbody{display:block}
+ .rr-inventory-table tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;padding:14px 16px;border-bottom:1px solid #e5ece7}
+ .rr-account-page .rr-inventory-table td{display:block;padding:0;border:0;width:auto;min-width:0}.rr-inventory-table td:first-child{grid-column:1;grid-row:1}.rr-account-page .rr-inventory-table td:nth-child(2){grid-column:2;grid-row:1;font-size:18px}.rr-inventory-table td:nth-child(3){grid-column:1;grid-row:2;font-size:11px}.rr-inventory-table td:nth-child(3)::before{content:'Expires ';color:#718176}.rr-inventory-table td:nth-child(4){grid-column:2;grid-row:2;max-width:155px}.rr-account-page .rr-inventory-table td:last-child{white-space:normal}.rr-inventory-table .text-button{font-size:11px!important}
+ .rr-account-page .account-activity-panel tbody>tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:'date amount' 'reward reward' 'receipt receipt' 'expiry time' 'before after' 'type type';gap:9px 14px;padding:16px;border-bottom:1px solid #dce5df}
+ .rr-account-page .account-activity-panel tbody>tr>td{display:block;padding:0;border:0;width:auto;min-width:0;white-space:normal;text-align:left;font-size:12px}.rr-account-page .account-activity-panel td:nth-child(1){grid-area:date}.rr-account-page .account-activity-panel td:nth-child(2){grid-area:time}.rr-account-page .account-activity-panel td:nth-child(3){grid-area:receipt;overflow-wrap:anywhere}.rr-account-page .account-activity-panel td:nth-child(4){grid-area:expiry}.rr-account-page .account-activity-panel td:nth-child(5){grid-area:reward;font-weight:600}.rr-account-page .account-activity-panel td:nth-child(6){grid-area:amount;text-align:right;font-size:20px;font-weight:650}.rr-account-page .account-activity-panel td:nth-child(7){grid-area:type;color:#718176;font-size:11px}.rr-account-page .account-activity-panel td:nth-child(8){grid-area:before}.rr-account-page .account-activity-panel td:nth-child(9){grid-area:after;text-align:right}
+ .rr-account-page .account-activity-panel td:nth-child(1)::before{content:'Date';display:block;color:#718176;font-size:10px}.rr-account-page .account-activity-panel td:nth-child(2)::before{content:'Time';display:block;color:#718176;font-size:10px}.rr-account-page .account-activity-panel td:nth-child(3)::before{content:'Receipt';display:block;color:#718176;font-size:10px}.rr-account-page .account-activity-panel td:nth-child(4)::before{content:'Expires';display:block;color:#718176;font-size:10px}.rr-account-page .account-activity-panel td:nth-child(8)::before{content:'Balance before';display:block;color:#718176;font-size:10px}.rr-account-page .account-activity-panel td:nth-child(9)::before{content:'Balance after';display:block;color:#718176;font-size:10px}
+}
+
+.account-filter-panel .panel-head,.account-detail-panel .panel-head,.account-activity-panel .panel-head,.rr-available-panel .panel-head{padding-inline:var(--panel-content-inset)}
+.account-filter-panel>.account-activity-filters{margin-inline:var(--panel-content-inset);margin-bottom:var(--panel-content-inset);width:auto}
+@media(max-width:600px){.account-filter-panel,.account-detail-panel,.account-activity-panel,.rr-available-panel{--panel-content-inset:16px}.rr-inventory-summary{padding-inline:var(--panel-content-inset)}}

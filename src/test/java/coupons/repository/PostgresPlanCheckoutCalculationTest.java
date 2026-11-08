@@ -319,7 +319,7 @@ class ReceiptRRMatchingTest {
         var state=store.state;var options=ReceiptRRMatching.options(state,spent);
         assertSame(state,store.state);assertTrue(repo.rrUsageLinks().isEmpty());assertEquals(1,options.getFirst().options().size());assertEquals(valid.earningId(),options.getFirst().options().getFirst().sourceId());
         repo.linkRRUsage(new RRUsageLink(valid.earningId(),true,use.eventId(),spent,use.amount(),"Matched","owner",Instant.now()));
-        var after=ReceiptRRMatching.options(store.state,spent).getFirst();assertTrue(after.matched());assertTrue(after.options().isEmpty());
+        var after=ReceiptRRMatching.options(store.state,spent).getFirst();assertTrue(after.matched());assertTrue(after.options().isEmpty());assertEquals(valid.earningId(),after.currentSourceId());assertTrue(after.correctionOptions().stream().anyMatch(option->option.sourceId().equals(valid.earningId())));
         var next=save(day,"6 PM",List.of(),List.of(new UnidentifiedRR(UUID.randomUUID(),new BigDecimal("5"),"Another RR")));
         assertTrue(ReceiptRRMatching.options(store.state,next).getFirst().options().stream().noneMatch(o->o.sourceId().equals(valid.earningId())));
     }

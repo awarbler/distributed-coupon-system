@@ -343,7 +343,8 @@ class TransactionCalculatorTest {
         assertEquals(1,movements.size());assertEquals("Target Gift Card",movements.getFirst().provider());assertEquals(new BigDecimal("-8.10"),movements.getFirst().usd());
         var view=ReceiptViews.totals(new ReceiptRecord(UUID.randomUUID(),ReceiptStatus.ACTIVE,1,tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,ReceiptMeta.PaymentEntryStatus.UNKNOWN),List.of()));
         assertEquals(Map.of("Target Gift Card",new BigDecimal("8.10")),view.get("giftCardPayments"));
-        assertNull(calculator.reconcilePayments(tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.UNKNOWN,ReceiptMeta.PaymentEntryStatus.UNKNOWN)).recordedCashCardPaid());
+        assertEquals(0,calculator.reconcilePayments(tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.UNKNOWN,ReceiptMeta.PaymentEntryStatus.UNKNOWN)).recordedCashCardPaid().signum());
+        assertNull(calculator.reconcilePayments(tx,paymentMetadata(ReceiptMeta.PrintedTotalBasis.UNKNOWN,ReceiptMeta.PaymentEntryStatus.PARTIAL)).recordedCashCardPaid());
         var partial=new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO,new BigDecimal("10")));
         partial.addPayment(new Payment(PaymentType.GIFT_CARD,new BigDecimal("8.10")));
         assertNull(calculator.reconcilePayments(partial,paymentMetadata(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING,ReceiptMeta.PaymentEntryStatus.UNKNOWN)).recordedCashCardPaid());

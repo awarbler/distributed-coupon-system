@@ -25,9 +25,11 @@ public final class ProviderBalanceSummary {
             "PayPal", "Gift Cards", "Returns", "Target", "Target Gift Card", "Target Circle", "Merryfield", "Makeena", "Shopmium", "Rakuten");
     private static final Currency USD = Currency.getInstance("USD");
     private final InMemoryTransactionRepository repository;
+    private final List<Movement> supplemental;
     private AccountBalanceState local = AccountBalanceState.empty();
-    public ProviderBalanceSummary() { repository = null; }
-    public ProviderBalanceSummary(InMemoryTransactionRepository repository) { this.repository = Objects.requireNonNull(repository); }
+    public ProviderBalanceSummary() { repository = null; supplemental=List.of(); }
+    public ProviderBalanceSummary(InMemoryTransactionRepository repository) { this(repository,List.of()); }
+    public ProviderBalanceSummary(InMemoryTransactionRepository repository,List<Movement> supplemental) { this.repository=Objects.requireNonNull(repository);this.supplemental=List.copyOf(supplemental); }
     private AccountBalanceState state() { return repository == null ? local : repository.accountBalances(); }
     public void recordOpening(LocalDate date, String provider, BigDecimal value, boolean monthStart) {
         Objects.requireNonNull(value);
@@ -54,7 +56,7 @@ public final class ProviderBalanceSummary {
     public List<String> programs(List<ReceiptRecord> records) {
         var names = new LinkedHashSet<>(PROGRAMS);
         state().openings().forEach(o -> names.add(o.provider()));
-        state().adjustments().forEach(a -> names.add(a.provider()));
+        state().adjustments().forEach(a -> names.add(AccountAdjustment.currentMember(a,state().adjustments()).provider()));
         records.forEach(r -> r.transaction().getObservations().earnings().forEach(e -> names.add(program(e.kind(), e.provider()))));
         for(var r:redemptions()) { names.add(canonical(r.provider())); if(r.status()==ProviderRedemption.Status.RECEIVED && r.destination()!=ProviderRedemption.Destination.PURCHASE) names.add(canonical(r.destinationAccount())); }
         return List.copyOf(names);
@@ -67,7 +69,7 @@ public final class ProviderBalanceSummary {
     public List<Movement> movements(List<ReceiptRecord> records) {
         Map<UUID, ReceiptRecord> latest = new LinkedHashMap<>();
         records.forEach(r -> latest.merge(r.transactionId(), r, (a,b) -> a.revision() >= b.revision() ? a : b));
-        var result = new ArrayList<Movement>();
+        var result = new ArrayList<Movement>(supplemental);
         for (var r : latest.values()) {
             if (r.status() != ReceiptStatus.ACTIVE) continue;
             var tx = r.transaction(); var date = tx.getObservations().purchaseDate();
@@ -76,7 +78,8 @@ public final class ProviderBalanceSummary {
             for (var p : tx.getPayments()) {
                 String provider = p.getPaymentType() == PaymentType.WALGREENS_CASH ? "Walgreens Cash"
                         : p.getPaymentType() == PaymentType.GIFT_CARD ? "Gift Cards" : null;
-                if (p.getAccountName() != null) provider = canonical(p.getAccountName());
+                if (p.getPaymentType() == PaymentType.GIFT_CARD) provider = giftCardAccount(p.getAccountName());
+                else if (p.getAccountName() != null) provider = canonical(p.getAccountName());
                 if (provider != null) {
                     var use=tx.getObservations().worksheet().uses().get(p.getPaymentId());
                     result.add(new Movement(date,provider,use==null || use.originalUnits()==null?null:use.originalUnits().negate(),p.getAmount().negate(),source+" | payment "+p.getPaymentId(), ReceiptTimeInput.parse(tx.getObservations().printedTime()).orElse(null), r.transactionId(), p.getPaymentId()));
@@ -98,13 +101,9 @@ public final class ProviderBalanceSummary {
         var adjustments=state().adjustments();
         for(var a:adjustments) {
             if(a.reason().startsWith("Member reward correction: "))continue;
-            BigDecimal dollars=a.usdChange(),units=a.unitChange();
-            if(a.reason().startsWith("Member reward:"))for(var correction:adjustments)if(correction.reason().equals("Member reward correction: "+a.eventId())) {
-                if(correction.usdChange()!=null)dollars=dollars==null?correction.usdChange():dollars.add(correction.usdChange());
-                if(correction.unitChange()!=null)units=units==null?correction.unitChange():units.add(correction.unitChange());
-            }
+            var current=AccountAdjustment.currentMember(a,adjustments);BigDecimal dollars=current.usdChange(),units=current.unitChange();
             if(a.reason().startsWith("Member reward:")&&dollars!=null&&dollars.signum()==0&&(units==null||units.signum()==0))continue;
-            result.add(new Movement(a.date(),a.provider(),units,dollars,"Adjustment "+a.eventId()+" | "+a.reason()+(a.expirationDate()==null?"":" | Expires "+a.expirationDate())+" | "+a.recordedBy(),a.time(),null,a.eventId()));
+            result.add(new Movement(current.date(),current.provider(),units,dollars,"Adjustment "+a.eventId()+" | "+current.reason()+(current.expirationDate()==null?"":" | Expires "+current.expirationDate())+" | "+a.recordedBy(),current.time(),null,a.eventId()));
         }
         for(var r:redemptions()) {
             result.add(new Movement(r.requestedDate(),canonical(r.provider()),r.originalUnitsUsed()==null?null:r.originalUnitsUsed().negate(),r.sourceUsdValue().negate(),"Redemption "+r.redemptionId()+" | reserved",r.requestedTime()));
@@ -115,8 +114,31 @@ public final class ProviderBalanceSummary {
         }
         return List.copyOf(result);
     }
+    /** Rewards spent on purchases, excluding payouts, transfers, openings and losses. */
+    public BigDecimal totalUsed(LocalDate from, LocalDate through, List<ReceiptRecord> records) {
+        BigDecimal used = BigDecimal.ZERO;
+        for (var movement : movements(records)) {
+            if (movement.receiptId() == null || movement.date() == null || movement.date().isBefore(from)
+                    || movement.date().isAfter(through) || movement.usd() == null || movement.usd().signum() >= 0
+                    || "Cash".equalsIgnoreCase(movement.provider())) continue;
+            if (movement.source().contains(" | payment ") || movement.source().contains(" | redemption ")
+                    || movement.source().contains(" | RR used ")) used = used.subtract(movement.usd());
+        }
+        for (var redemption : redemptions()) {
+            if (redemption.destination() == ProviderRedemption.Destination.PURCHASE
+                    && redemption.status() == ProviderRedemption.Status.RECEIVED
+                    && !redemption.completedDate().isBefore(from) && !redemption.completedDate().isAfter(through)
+                    && !"Cash".equalsIgnoreCase(redemption.provider())) used = used.add(redemption.sourceUsdValue());
+        }
+        return used;
+    }
+
     private List<ProviderRedemption> redemptions() {
         var latest=new LinkedHashMap<UUID,ProviderRedemption>(); state().redemptionHistory().forEach(r->latest.put(r.redemptionId(),r)); return List.copyOf(latest.values());
+    }
+    // Individual card labels identify the instrument, not a separate provider ledger.
+    private static String giftCardAccount(String name) {
+        return name != null && canonical(name).equals("Target Gift Card") ? "Target Gift Card" : "Gift Cards";
     }
     public static String accountName(String name) { return canonical(name); }
     public static boolean supportsAccount(String name){return PROGRAMS.contains(canonical(name));}
@@ -125,7 +147,8 @@ public final class ProviderBalanceSummary {
         var providers = new LinkedHashSet<String>();
         var tx = receipt.transaction();
         for (var payment : tx.getPayments()) {
-            if (payment.getAccountName() != null) providers.add(canonical(payment.getAccountName()));
+            if (payment.getPaymentType() == PaymentType.GIFT_CARD) providers.add(giftCardAccount(payment.getAccountName()));
+            else if (payment.getAccountName() != null) providers.add(canonical(payment.getAccountName()));
             else if (payment.getPaymentType() == PaymentType.WALGREENS_CASH) providers.add("Walgreens Cash");
             else if (payment.getPaymentType() == PaymentType.GIFT_CARD) providers.add("Gift Cards");
         }
@@ -375,7 +398,9 @@ public final class ProviderBalanceSummary {
 /** Read-only account projection. Associations describe existing movements and never add money. */
 public static final class AccountActivityView {
     public record Activity(ProviderBalanceSummary.Movement movement,String receiptNumber,String description,
-            List<RewardLink> rewards,BigDecimal beforeUsd,BigDecimal afterUsd,BigDecimal beforePoints,BigDecimal afterPoints,boolean orderKnown,String valuationBasis) { }
+            List<RewardLink> rewards,BigDecimal beforeUsd,BigDecimal afterUsd,BigDecimal beforePoints,BigDecimal afterPoints,boolean orderKnown,String valuationBasis,Instant recordedAt) {
+        public Activity(ProviderBalanceSummary.Movement movement,String number,String description,List<RewardLink> rewards,BigDecimal before,BigDecimal after,BigDecimal beforePoints,BigDecimal afterPoints,boolean ordered,String basis){this(movement,number,description,rewards,before,after,beforePoints,afterPoints,ordered,basis,null);}
+    }
     public record RewardLink(UUID earningId,UUID receiptId,String receiptNumber,LocalDate date,String time,String promotion,
             BigDecimal amount,UUID spentReceiptId,String spentReceiptNumber,BigDecimal usedAmount,String status,List<String> products) { }
     public static List<RewardLink> links(List<ReceiptRecord> records,Collection<RRUsageLink> links,UUID usedEvent) {
@@ -424,7 +449,7 @@ public static final class AccountActivityView {
     }
     public static List<Activity> project(ProviderBalanceSummary summary,List<ReceiptRecord> records,Collection<RRUsageLink> links,Map<UUID,RegisterReward> instruments) {
         var movements=new ArrayList<>(summary.movements(records));
-        movements.sort(Comparator.comparing(ProviderBalanceSummary.Movement::date,Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(ProviderBalanceSummary.Movement::time,Comparator.nullsLast(Comparator.naturalOrder())));
+        movements.sort(Comparator.comparing(ProviderBalanceSummary.Movement::date,Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(ProviderBalanceSummary.Movement::time,Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(m->Objects.toString(m.receiptId(),Objects.toString(m.eventId(),""))).thenComparingInt(m->m.usd()!=null&&m.usd().signum()<0?0:1).thenComparing(m->Objects.toString(m.eventId(),m.source())));
         var result=new ArrayList<Activity>();
         Map<String,BigDecimal> dollars=new HashMap<>(),points=new HashMap<>(); Map<String,LocalDate> days=new HashMap<>();
         for(var m:movements) {
@@ -437,11 +462,10 @@ public static final class AccountActivityView {
             String valuationBasis=null;
             if(!matches.isEmpty()) description="Used "+matches.stream().map(RewardLink::promotion).distinct().reduce((a,b)->a+"; "+b).orElseThrow();
             else if("Register Rewards".equals(m.provider()) && m.usd()!=null && m.usd().signum()<0 && !m.source().contains(" | Reward unavailable: ")) description="Source RR Not Yet Linked";
-            if(receipt!=null) for(var e:receipt.transaction().getObservations().earnings()) if(e.earningId().equals(m.eventId())) { description=e.kind()==ReceiptObservations.EarningKind.REGISTER_REWARD?RegisterRewardLabel.offer(receipt.transaction(),e).replace(" — buy "," — Buy ").replace(", get $",", Get $"):Objects.toString(e.offerReference(),e.provider()+" Reward");
+            if(receipt!=null) for(var e:receipt.transaction().getObservations().earnings()) if(e.earningId().equals(m.eventId())) { description=e.kind()==ReceiptObservations.EarningKind.REGISTER_REWARD?Objects.toString(e.offerReference(),RegisterRewardLabel.offer(receipt.transaction(),e)).replace(" — buy "," — Buy ").replace(", get $",", Get $"):Objects.toString(e.offerReference(),e.provider()+" Reward");
                 valuationBasis=SavingsReport.effectiveValuation(e)==null?null:SavingsReport.effectiveValuation(e).basis();
                 matches=links.stream().filter(l->l.sourceId().equals(e.earningId())).flatMap(l->links(records,links,l.usageEventId(),instruments).stream()).distinct().toList(); }
-            boolean ordered=m.date()!=null && movements.stream().filter(x->Objects.equals(x.date(),m.date()) && x.provider().equals(m.provider())).allMatch(x->x.time()!=null)
-                && movements.stream().noneMatch(x->x!=m && Objects.equals(x.date(),m.date()) && x.provider().equals(m.provider()) && (!Objects.equals(x.receiptId(),m.receiptId()) || m.receiptId()==null&&!Objects.equals(x.eventId(),m.eventId())) && Objects.equals(x.time(),m.time()));
+            boolean ordered=m.date()!=null && movements.stream().filter(x->Objects.equals(x.date(),m.date()) && x.provider().equals(m.provider())).allMatch(x->x.time()!=null);
             if(m.date()!=null && !m.date().equals(days.get(m.provider()))) {
                 var b=summary.balance(m.date(),m.provider(),records); dollars.put(m.provider(),b.startUsd());points.put(m.provider(),b.startPoints()); days.put(m.provider(),m.date());
             }

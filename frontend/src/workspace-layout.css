@@ -305,7 +305,7 @@
 .receipt-total-saved-heading { margin-top:40px !important; padding-top:24px; border-top:1px solid #dce3dd; margin-bottom:20px !important; }
 .reward-fields-grid .reward-row:empty { display:none; }
 @media(min-width:801px) {
- .reward-fields-grid .reward-program-wc-row { grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .reward-fields-grid .reward-program-type-row { grid-template-columns:repeat(3,minmax(0,1fr)); }
  .receipt-selection-compact .product-choice { display:flex; align-items:center; gap:16px; }
  .receipt-selection-compact .product-choice-label { flex:1; min-width:0; }
  .receipt-selection-compact .product-choice-copy { display:flex; flex:1; align-items:center; gap:16px; min-width:0; }
@@ -335,3 +335,173 @@
 .weekly-planner > summary { font-size:18px; font-weight:650; margin-bottom:16px; }
 .weekly-planner p { margin:12px 0; }
 .weekly-planner details { margin-top:20px; }
+
+/* Compact receipt and deal rows; controls retain readable sizes on narrow screens. */
+@media(min-width:801px) {
+ .modal .receipt-fields-row.receipt-product-identity { grid-template-columns:minmax(0,2fr) minmax(0,1.2fr) minmax(60px,.55fr) repeat(2,minmax(0,.85fr)); }
+ .modal .receipt-fields-row.receipt-rr-use-row { grid-template-columns:minmax(100px,.7fr) minmax(0,2fr) auto; }
+ .modal .receipt-fields-row.receipt-cash-balances { grid-template-columns:repeat(5,minmax(0,1fr)); }
+ .modal .payment-entry .payment-fields { grid-template-columns:minmax(0,1.2fr) minmax(100px,.8fr) auto minmax(0,1.5fr); }
+ .modal .payment-entry .payment-fields.payment-with-account { grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .modal .payment-fields > .field-full { grid-column:auto; }
+ .deal-scenario-form .scenario-row.scenario-payment-origin { grid-template-columns:minmax(0,1.5fr) repeat(4,minmax(0,1fr)); }
+}
+.modal .receipt-rr-use-row > button { align-self:end; min-height:44px; }
+@media(min-width:601px) and (max-width:800px) {
+ .modal .receipt-fields-row.receipt-product-identity { grid-template-columns:repeat(3,minmax(0,1fr)); }
+ .modal .receipt-fields-row.receipt-cash-balances { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media(max-width:600px) {
+ .modal .receipt-fields-row.receipt-cash-balances,
+ .modal .receipt-fields-row.receipt-rr-use-row { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .modal .receipt-fields-row.receipt-rr-use-row > button { grid-column:1/-1; justify-self:start; }
+}
+
+/* Account balance cards and available-reward totals share the workspace layout. */
+.rr-account-page .rr-balance-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 var(--panel-content-inset) 16px}
+.rr-balance-metrics>div{display:flex;flex-direction:column;gap:10px;padding:18px;border:1px solid #e0e7e2;border-radius:12px;background:#fafcfb}
+.rr-balance-metrics>div>span{font-size:12px;color:#64766b;font-weight:600}
+.rr-balance-metrics>div>strong{font-size:27px;line-height:1.2;font-variant-numeric:tabular-nums;letter-spacing:-.6px}
+.rr-balance-metrics>div:last-child{background:#edf6ef;border-color:#bad2c1;color:#20553b}
+.rr-account-page .rr-balance-settings{margin:12px var(--panel-content-inset) 18px;font-size:12px;color:#5f7468}
+.rr-balance-settings>summary{font-weight:600;padding:6px 0}
+.rr-balance-settings[open]{padding:12px;border:1px solid #dce5df;border-radius:9px}
+.rr-inventory-summary{display:flex;justify-content:space-between;gap:16px;align-items:center;padding:4px var(--panel-content-inset) 18px;color:#63766b;font-size:13px}
+.rr-inventory-summary>span:last-child strong{font-size:23px;color:#20553b;margin-left:10px;font-variant-numeric:tabular-nums}
+
+@media(max-width:600px){.rr-account-page .rr-balance-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.rr-balance-metrics>div{padding:13px}.rr-balance-metrics>div>strong{font-size:23px}.rr-inventory-summary{align-items:flex-start;flex-direction:column;gap:8px}}
+
+/* Consistent gutters and vertical spacing across reward account sections. */
+.account-filter-panel,
+.account-detail-panel,
+.account-activity-panel,
+.rr-available-panel { --panel-content-inset:24px; }
+:is(.account-filter-panel,.account-detail-panel,.account-activity-panel,.rr-available-panel) > .panel-head {
+ padding:24px var(--panel-content-inset) 20px;
+}
+.account-filter-panel > .account-activity-filters {
+ margin:0 var(--panel-content-inset) 24px;
+ gap:16px;
+}
+.account-detail-panel > :is(.key-values,p,button,form,section),
+.account-activity-panel > p,
+.rr-available-panel > :is(p,.notice) {
+ margin:0 var(--panel-content-inset) 20px;
+}
+.rr-account-page .panel { margin-bottom:24px; }
+.rr-account-page .rr-balance-metrics { margin:0 var(--panel-content-inset) 20px; }
+.rr-account-page .rr-balance-settings { margin:0 var(--panel-content-inset) 24px; }
+.rr-inventory-summary { padding:0 var(--panel-content-inset) 20px; }
+.rr-inventory-summary > span { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; }
+.rr-inventory-summary > span:last-child strong { margin-left:0; }
+.rr-account-page .rr-secondary-section { margin:0 0 16px; }
+.rr-account-page .rr-secondary-section > summary { padding:20px 24px; }
+@media(min-width:601px) {
+ .rr-account-page :is(th,td) { padding:14px 12px; }
+ .rr-account-page tr > :is(th,td):first-child { padding-left:var(--panel-content-inset); }
+ .rr-account-page tr > :is(th,td):last-child { padding-right:var(--panel-content-inset); }
+}
+@media(max-width:600px) {
+ .account-filter-panel,.account-detail-panel,.account-activity-panel,.rr-available-panel { --panel-content-inset:16px; }
+ :is(.account-filter-panel,.account-detail-panel,.account-activity-panel,.rr-available-panel) > .panel-head { padding-top:20px; padding-bottom:16px; }
+ .rr-account-page .panel { margin-bottom:20px; }
+ .rr-account-page .rr-secondary-section > summary { padding:16px; }
+}
+
+.inventory-filters { grid-template-columns:minmax(180px,1.5fr) minmax(140px,1fr) minmax(180px,1.5fr) auto; }
+@media(max-width:900px){.inventory-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.inventory-filters{grid-template-columns:minmax(0,1fr)}}
+.inventory-products-table { width:100%; min-width:960px; table-layout:fixed; }
+.inventory-products-table :is(th,td) { white-space:normal; overflow-wrap:anywhere; font-size:13px; padding:16px 12px; }
+.inventory-products-table :is(th,td):first-child { width:20%; padding-left:24px; }
+.inventory-products-table :is(th,td):nth-child(2) { width:10%; }
+.inventory-products-table :is(th,td):nth-child(3) { width:22%; }
+.inventory-products-table :is(th,td):nth-child(4) { width:11%; }
+.inventory-products-table :is(th,td):nth-child(5) { width:12%; }
+.inventory-products-table :is(th,td):nth-child(6) { width:11%; }
+.inventory-products-table :is(th,td):last-child { width:14%; padding-right:24px; }
+.inventory-products-table th > button { text-align:left; white-space:normal; }
+.inventory-products-table td > button { width:100%; white-space:normal; }
+.inventory-result-count { margin:16px 24px 24px; }
+.inventory-list-actions { display:flex; justify-content:flex-end; padding:0 24px 8px; }
+#inventory-products[hidden],#inventory-filters[hidden] { display:none; }
+.inventory-receipt-links { margin-top:10px; }
+.inventory-receipt-links > button { display:block; width:100%; text-align:left; white-space:normal; }
+.inventory-receipt-links > summary { cursor:pointer; font-weight:600; }
+.inventory-filters { grid-template-columns:minmax(180px,1.4fr) minmax(140px,1fr) minmax(180px,1.4fr) minmax(170px,1.2fr); }
+@media(max-width:1000px){.inventory-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.inventory-filters{grid-template-columns:minmax(0,1fr)}}
+
+/* Keep individual-card records within the existing account panel gutters. */
+.reward-instruments-content { grid-template-columns:minmax(0,1fr); }
+.reward-instruments-content > * { min-width:0; max-width:100%; }
+.gift-card-list > h3 { margin:0 0 16px; }
+.gift-card-list > p { margin-bottom:16px; }
+.gift-card-list-table { width:100%; min-width:760px; table-layout:fixed; }
+.gift-card-list-table :is(th,td) { white-space:normal; overflow-wrap:anywhere; padding:14px 12px; }
+.gift-card-list-table :is(th,td):first-child { width:21%; }
+.gift-card-list-table :is(th,td):nth-child(2) { width:14%; }
+.gift-card-list-table :is(th,td):nth-child(3) { width:18%; }
+.gift-card-list-table :is(th,td):nth-child(4) { width:10%; }
+.gift-card-list-table :is(th,td):nth-child(5) { width:14%; }
+.gift-card-list-table :is(th,td):last-child { width:23%; }
+.gift-card-row-actions { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+.gift-card-row-actions button { white-space:normal; text-align:left; }
+.gift-card-list > .check { margin-top:16px; }
+.weekly-planner .spend-booster-management { margin-top:20px; }
+.spend-booster-management .form-grid > .form-actions { grid-column:1/-1; justify-content:flex-start; }
+
+/* Keep card entry and booster controls compact without overflowing small screens. */
+.gift-card-add-section { border-top:1px solid var(--color-border,#dce3dc); padding-top:16px; scroll-margin-top:24px; }
+.gift-card-add-fields { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); align-items:end; }
+.gift-card-add-fields > * { min-width:0; }
+.spend-booster-management > .form-grid { grid-template-columns:minmax(130px,1fr) minmax(180px,2fr) auto; align-items:end; }
+.spend-booster-management .form-grid > .form-actions { grid-column:auto; flex-wrap:wrap; }
+.weekly-planner > summary { display:list-item; cursor:pointer; list-style:disclosure-closed; }
+.weekly-planner[open] > summary { list-style:disclosure-open; }
+@media(max-width:700px) { .spend-booster-management > .form-grid { grid-template-columns:1fr; } }
+
+.booster-editor-fields { grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); }
+.booster-editor-fields .field-full { grid-column:auto; }
+
+.field-with-help { position:relative; min-width:0; padding-right:28px; }
+.field-with-help > .help-trigger { position:absolute; right:0; top:0; }
+
+/* Receipt metadata and tender fields share compact, responsive rows. */
+.modal .receipt-details-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px 18px; align-items:end; margin-top:16px; }
+.modal .receipt-details-grid > label { min-width:0; margin:0; }
+.modal .receipt-entry-form .payment-entry .payment-fields,
+.modal .receipt-entry-form .payment-entry .payment-fields.payment-with-account { grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); align-items:end; gap:12px; }
+.modal .receipt-entry-form .payment-fields > .field-full { grid-column:auto; }
+.modal .receipt-entry-form .payment-fields > button { order:1; }
+@media(max-width:700px) { .modal .receipt-details-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:420px) { .modal .receipt-details-grid { grid-template-columns:minmax(0,1fr); } }
+
+.panel-heading-line { display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:wrap; }
+.panel-heading-line h2 { margin:0; }
+.section-disclosure > summary { justify-content:flex-start; gap:6px; }
+.section-disclosure > summary > .disclosure-title { flex:0 1 auto; }
+.rr-balance-metrics { justify-content:center; text-align:center; }
+.gift-card-add-fields { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.gift-card-row-actions { flex-wrap:nowrap; }
+@media(max-width:650px) { .gift-card-add-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:420px) { .gift-card-add-fields { grid-template-columns:1fr; } }
+
+.section-disclosure > summary > svg { transform:rotate(-90deg); }
+.section-disclosure[open] > summary > svg { transform:rotate(0deg); }
+
+.section-disclosure > summary .disclosure-arrow::before { content:'▸'; }
+.section-disclosure[open] > summary .disclosure-arrow::before { content:'▾'; }
+.field-with-help { display:grid; grid-template-columns:fit-content(90%) auto; align-items:center; column-gap:4px; padding-right:0; }
+.field-with-help > label { display:contents; }
+.field-with-help > label > :is(input,select,textarea) { grid-column:1/-1; grid-row:2; }
+.field-with-help > .help-trigger { position:static; grid-column:2; grid-row:1; justify-self:start; }
+
+/* All account summaries share the same four-column layout. */
+.rr-balance-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:0 var(--panel-content-inset) 20px; }
+.gift-card-row-actions { flex-direction:row; align-items:center; gap:12px; }
+.gift-card-add-fields :is(input:not([type=checkbox]),select) { min-height:44px; height:44px; }
+@media(max-width:650px) { .rr-balance-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+
+.activity-detail-options { display:flex; flex-direction:column; align-items:stretch; gap:12px; }
+.activity-detail-options > button { align-self:flex-start; text-align:left; }

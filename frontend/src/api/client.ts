@@ -31,9 +31,9 @@ export class ApiClient {
     return response
   }
   private async get<T>(path: string, signal?: AbortSignal): Promise<T> { return decode(await (await this.request(path, { signal })).text()) as T }
-  async rewardInstruments(signal?:AbortSignal){const result=await this.get<{instruments:import("../types/platform").RewardInstrument[]}>("/reward-instruments",signal);if(!result||!Array.isArray(result.instruments))throw new ApiError(502,"The API returned an incompatible instrument response.");return result}
-  payout(id:string){return this.get<{revision:string;payout:{status:string}}>(`/accounts/payouts/${encodeURIComponent(id)}`)}
-  memberReward(id:string){return this.get<{amount:string;points:string|null;provider:string}>(`/accounts/member-rewards/${encodeURIComponent(id)}`)}
+  async rewardInstruments(signal?:AbortSignal){const result=await this.get<{instruments:import("../types/platform").RewardInstrument[];cardSummary?:{recordedOpenings:string;knownRemaining:string;recordedRedemptions:string;unknownBalanceCount:number;activeCards:number}}>("/reward-instruments",signal);if(!result||!Array.isArray(result.instruments))throw new ApiError(502,"The API returned an incompatible instrument response.");return result}
+  payout(id:string){return this.get<{revision:string;payout:{status:string;provider?:string;requestedDate?:string;completedDate?:string|null;sourceUsdValue?:string;destinationUsdValue?:string;originalUnitsUsed?:string|null;reference?:string;destination?:string};history?:{status:string;requestedDate:string;sourceUsdValue:string;destinationUsdValue:string}[]}>(`/accounts/payouts/${encodeURIComponent(id)}`)}
+  memberReward(id:string){return this.get<{amount:string;points:string|null;provider:string;description?:string;date?:string;time?:string|null;expirationDate?:string|null;details?:Record<string,string>;recordedAt?:string;token?:string;history?:{eventId:string;usdChange:string|null;unitChange:string|null;reason:string;recordedBy:string;recordedAt:string}[]}>(`/accounts/member-rewards/${encodeURIComponent(id)}`)}
   async workspace(signal?: AbortSignal) {
     const value = await this.get<Workspace>('/workspace', signal)
     if (!value || typeof value.canWrite !== 'boolean' || !value.summaries ||

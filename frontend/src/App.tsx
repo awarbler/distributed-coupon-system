@@ -36,6 +36,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [page, setPage] = useState<Page>(currentPage)
+  const [rewardsNavigationKey,setRewardsNavigationKey]=useState(0)
   const [mobileMenu, setMobileMenu] = useState(false)
   const [edit, setEdit] = useState<Edit | null>(null)
   const [checkoutPlan, setCheckoutPlan] = useState<Plan | null>(null)
@@ -67,7 +68,7 @@ export default function App() {
     setRefreshing(true); setError('')
     try { setData(await api.workspace()) } catch (e) { setError((e as Error).message) } finally { setRefreshing(false) }
   }, [api])
-  function navigate(requested: Page) { const p=requested==='rebates'?'deals':requested; setPage(p); window.history.pushState(null, '', `#${p}`); setMobileMenu(false) }
+  function navigate(requested: Page) { if(requested==='rewards')setRewardsNavigationKey(value=>value+1); const p=requested==='rebates'?'deals':requested; setPage(p); window.history.pushState(null, '', `#${p}`); setMobileMenu(false) }
   const closeEdit = useCallback(() => setEdit(null), [])
   function openNestedEditor(next: Edit) {
     if (edit?.kind === 'plan' && edit.plan) {
@@ -103,7 +104,7 @@ export default function App() {
         {error && <div className="error" role="alert">{error} Showing previously loaded data.<button className="text-button" onClick={() => void refresh()}>Try refresh</button></div>}
         {message && <div className="success" role="status">{message}<button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage('')}><X size={16} /></button></div>}
         {page!=='dashboard'&&<RewardExpirationAlerts rewards={data.expiringRewards} visible={false} onReceipt={setReceipt} onRewards={()=>navigate('rewards')}/>}
-        {refreshing && !data ? <Loading /> : <WorkspacePages
+        {refreshing && !data ? <Loading /> : <WorkspacePages rewardsNavigationKey={rewardsNavigationKey}
           data={data}
           api={api}
           onChanged={() => void refresh()}

@@ -457,8 +457,6 @@
 .gift-card-add-fields > * { min-width:0; }
 .spend-booster-management > .form-grid { grid-template-columns:minmax(130px,1fr) minmax(180px,2fr) auto; align-items:end; }
 .spend-booster-management .form-grid > .form-actions { grid-column:auto; flex-wrap:wrap; }
-.weekly-planner > summary { display:list-item; cursor:pointer; list-style:disclosure-closed; }
-.weekly-planner[open] > summary { list-style:disclosure-open; }
 @media(max-width:700px) { .spend-booster-management > .form-grid { grid-template-columns:1fr; } }
 
 .booster-editor-fields { grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); }
@@ -490,8 +488,6 @@
 .section-disclosure > summary > svg { transform:rotate(-90deg); }
 .section-disclosure[open] > summary > svg { transform:rotate(0deg); }
 
-.section-disclosure > summary .disclosure-arrow::before { content:'▸'; }
-.section-disclosure[open] > summary .disclosure-arrow::before { content:'▾'; }
 .field-with-help { display:grid; grid-template-columns:fit-content(90%) auto; align-items:center; column-gap:4px; padding-right:0; }
 .field-with-help > label { display:contents; }
 .field-with-help > label > :is(input,select,textarea) { grid-column:1/-1; grid-row:2; }
@@ -505,3 +501,221 @@
 
 .activity-detail-options { display:flex; flex-direction:column; align-items:stretch; gap:12px; }
 .activity-detail-options > button { align-self:flex-start; text-align:left; }
+
+/* Shared coupon library and Walgreens review, scoped to avoid account-menu changes. */
+.coupon-tabs { display:flex; flex-wrap:wrap; gap:1rem; border-bottom:1px solid var(--border, #dce4df); margin-bottom:1rem; }
+.coupon-tabs button { border:0; border-bottom:3px solid transparent; border-radius:0; background:transparent; color:inherit; padding:.6rem .15rem; }
+.coupon-tabs button[aria-current="page"] { border-bottom-color:var(--accent, #34735e); font-weight:700; }
+.coupon-search { display:block; margin:1rem 0; }
+.coupon-list { display:grid; gap:.5rem; }
+.coupon-row { border:1px solid var(--border, #dce4df); border-radius:.6rem; background:var(--surface, #fff); padding:.6rem .9rem; min-width:0; }
+.coupon-row-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.4rem 1rem; }
+.coupon-row-heading>strong { overflow-wrap:anywhere; }
+.coupon-row-actions { display:flex; flex-wrap:wrap; align-items:center; gap:.35rem; }
+.coupon-row-actions button { width:auto; padding:.3rem .5rem; min-height:2rem; }
+.coupon-row-details { border-top:1px solid var(--border, #dce4df); margin-top:.6rem; padding-top:.4rem; overflow-wrap:anywhere; }
+.coupon-original { white-space:pre-wrap; overflow-wrap:anywhere; font-family:inherit; }
+.coupon-import-row { border-bottom:1px solid var(--border, #dce4df); padding:1rem 0; min-width:0; }
+.paper-coupon-filters { margin-block:1rem .5rem; }
+.paper-coupon-section { margin-block:1.25rem; min-width:0; }
+.paper-coupon-section>h2 { margin-bottom:.5rem; overflow-wrap:anywhere; }
+.paper-copy-count { font-weight:400; color:var(--color-text-muted); }
+.paper-copy-list { list-style:none; padding:0; margin:.75rem 0 0; }
+.paper-copy-list>li { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem 1rem; padding:.6rem 0; border-top:1px solid var(--border, #dce4df); }
+.paper-copy-list>li>div { min-width:0; overflow-wrap:anywhere; }
+
+/* Coupon controls share one row; offer details and import edits open on demand. */
+.coupon-filter-bar { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr); gap:.75rem; align-items:end; margin:.75rem 0; }
+.coupon-filter-bar label,.coupon-filter-bar .coupon-search { margin:0; }
+.app-shell .coupon-filter-bar input,.app-shell .coupon-filter-bar select { height:44px; min-height:44px; }
+.coupon-control-label { display:flex; align-items:center; gap:.25rem; min-height:26px; }
+.coupon-control-label .help-trigger { width:26px; height:26px; padding:0; }
+.coupon-group-control { min-width:0; }
+.paper-section-toggle { display:inline-flex; align-items:center; gap:.4rem; background:transparent; color:inherit; font:inherit; padding:.25rem 0; min-height:36px; text-align:left; }
+.paper-coupon-section { margin-block:.75rem; }
+.paper-coupon-section>h2 { margin-bottom:.25rem; }
+.coupon-row-heading>strong { flex:1 1 22rem; }
+.coupon-row-actions { flex-shrink:0; }
+.coupon-row-actions .help-trigger { min-width:28px; }
+.coupon-tabs button[aria-pressed="true"] { border-bottom-color:var(--accent,#34735e); font-weight:700; }
+.modal:has(.coupon-import-toolbar) { width:min(1100px,calc(100vw - 32px)); max-width:1100px; }
+.coupon-import-toolbar { display:flex; align-items:center; gap:.5rem; margin-bottom:.5rem; }
+.coupon-import-toolbar>label { flex:1; margin:0; min-width:0; }
+.coupon-import-toolbar input[type="file"] { padding:.5rem; }
+.coupon-import-summary { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem 1.25rem; margin:.75rem 0; }
+.coupon-import-list { max-height:55vh; overflow-y:auto; overflow-x:hidden; border:1px solid var(--border,#dce4df); border-radius:.5rem; }
+.coupon-import-entry { min-width:0; border-bottom:1px solid var(--border,#dce4df); }
+.coupon-import-entry:last-child { border-bottom:0; }
+.coupon-import-row-summary { display:grid; grid-template-columns:minmax(12rem,1fr) minmax(7rem,auto) minmax(6rem,auto) auto; gap:.5rem .75rem; align-items:center; padding:.5rem .75rem; }
+.coupon-import-row-summary>strong { overflow-wrap:anywhere; }
+.coupon-import-row-summary>button,.coupon-review-actions>button { padding:.4rem .6rem; min-height:36px; color:var(--color-text,#263c31); border:1px solid var(--border,#dce4df); border-radius:.4rem; background:var(--surface,#fff); }
+.coupon-import-status { font-size:.85rem; font-weight:600; }
+.coupon-import-status.review { color:#80500b; }
+.coupon-import-status.ready { color:#28654f; }
+.coupon-import-details { padding:.5rem .75rem .75rem; border-top:1px solid var(--border,#dce4df); }
+.coupon-import-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.5rem .75rem; }
+.coupon-import-fields label { margin:0; }
+.coupon-review-reasons ul { padding-left:1.2rem; margin:.25rem 0 .75rem; }
+.coupon-review-actions,.coupon-import-footer { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; margin-top:.75rem; }
+.coupon-import-advanced { margin-top:.75rem; }
+.coupon-import-advanced>summary { margin-bottom:.5rem; }
+@media(max-width:760px) {
+ .coupon-filter-bar { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .coupon-filter-bar>.coupon-search { grid-column:1/-1; }
+ .coupon-import-row-summary { grid-template-columns:minmax(0,1fr) auto; }
+ .coupon-import-row-summary>strong { grid-column:1/-1; }
+ .coupon-import-fields { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .coupon-import-row-summary>button { grid-column:2; grid-row:2/4; }
+}
+@media(max-width:440px) {
+ .coupon-filter-bar,.coupon-import-fields { grid-template-columns:minmax(0,1fr); }
+ .coupon-filter-bar>.coupon-search { grid-column:auto; }
+ .coupon-row-actions { gap:.25rem; }
+ .coupon-import-summary { gap:.4rem .75rem; }
+}
+.coupon-retailer-tools { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-block:.5rem; }
+.coupon-retailer-tools>button:not(.help-trigger) { padding:.5rem .75rem; border:1px solid var(--border,#dce4df); border-radius:.4rem; background:white; color:inherit; min-height:36px; }
+.paper-coupon-section>.coupon-list[hidden] { display:none; }
+.modal:has(.coupon-import-toolbar) { display:flex; flex-direction:column; max-height:calc(100dvh - 24px); }
+.modal:has(.coupon-import-toolbar)>:not(.coupon-import-list) { flex-shrink:0; }
+.modal:has(.coupon-import-toolbar)>.coupon-import-list { flex:0 1 55vh; min-height:100px; }
+.coupon-page-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:.5rem; }
+.coupon-import-source-controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.75rem; margin-bottom:.5rem; }
+.coupon-import-source-controls label { margin:0; }
+.coupon-import-account-state { display:block; }
+@media(max-width:600px) { .coupon-import-source-controls { grid-template-columns:minmax(0,1fr); } }
+
+.coupon-row-heading>strong>small { display:block; font-weight:400; font-size:.85em; }
+.coupon-picker { margin:.6rem 0; border:1px solid var(--border); border-radius:.6rem; padding:.6rem; }
+.coupon-picker-row { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem .8rem; }
+.coupon-picker-row>strong { flex:1 1 16rem; min-width:0; overflow-wrap:anywhere; }
+.coupon-picker-row>label { max-width:17rem; }
+.coupon-picker button { width:auto; }
+.coupon-picker summary { cursor:pointer; font-weight:600; }
+
+.coupon-picker-results { max-height:22rem; overflow:auto; overscroll-behavior:contain; }
+
+.coupon-picker > summary > .coupon-picker-arrow { flex-shrink:0; transform:rotate(-90deg); }
+.coupon-picker[open] > summary > .coupon-picker-arrow { transform:rotate(0deg); }
+.scenario-whole-discounts > summary > .disclosure-arrow,
+.scenario-coupon > summary > .disclosure-arrow { font-size:1rem; width:1rem; flex-shrink:0; }
+
+.coupon-picker > summary { display:flex; align-items:center; gap:.4rem; list-style:none; }
+.coupon-picker > summary::-webkit-details-marker { display:none; }
+
+/* Weekly advertisement review and the shared trip selector. */
+.weekly-offer-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-4,1rem); margin-block:1rem; }
+.weekly-offer-card,.weekly-offer-review { min-width:0; padding:1rem; border:1px solid var(--border,#dce4de); border-radius:var(--radius-md,10px); }
+.weekly-offer-card h3 { margin-top:0; }
+.weekly-offer-card p { white-space:pre-line; overflow-wrap:anywhere; }
+.weekly-offer-review { margin-block:1rem; }
+.weekly-offer-review fieldset { border:0; padding:0; min-width:0; }
+.weekly-offer-editor details,.weekly-offer-benefit { margin-block:.75rem; }
+.weekly-deals-selector { margin-block:1rem; }
+.weekly-deals-selector > summary { display:flex; align-items:center; gap:.4rem; list-style:none; cursor:pointer; }
+.weekly-deals-selector > summary::-webkit-details-marker { display:none; }
+.weekly-deals-selector:not([open]) > summary svg { transform:rotate(-90deg); }
+@media (max-width:1000px) { .weekly-offer-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:640px) { .weekly-offer-grid { grid-template-columns:minmax(0,1fr); } }
+
+.weekly-offer-summary { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; white-space:pre-line; margin-block:.4rem; }
+
+/* Shopping page: consistent card insets and a single section rhythm. */
+.shopping-week { gap:24px; margin-block:24px; min-width:0; }
+.shopping-week-summary{margin:0;color:var(--color-text-muted,#657268)}
+.shopping-section-nav{display:flex;align-items:center;gap:8px;overflow-x:auto;max-width:100%;padding:2px 0 8px;scrollbar-width:thin;white-space:nowrap}
+.shopping-section-nav a{flex:0 0 auto;color:var(--color-primary,#276f53);font-weight:700;text-decoration:none;border:1px solid #dce4d9;border-radius:10px;padding:9px 13px;background:var(--color-surface,#fff)}
+.shopping-section-nav a:hover,.shopping-section-nav a:focus-visible{background:#edf6ef;color:#174d39;outline:none}
+.shopping-week>section{min-width:0;scroll-margin-top:18px}
+.shopping-week > .panel,.shopping-week > .weekly-planner { margin-block:0; }
+.shopping-week-toolbar { padding:20px; border:1px solid #e1e6dc; border-radius:14px; background:var(--color-surface,#fff); grid-template-columns:minmax(300px,1fr) minmax(0,1.5fr); align-items:end; }
+.shopping-week-toolbar > p { margin:0; }
+.shopping-week-toolbar .shopping-week-controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.shopping-week-toolbar .shopping-week-controls > label { min-width:0; margin:0; }
+.shopping-week-toolbar .shopping-week-controls :is(input,select) { width:100%; }
+.shopping-week-toolbar .product-entry-actions { justify-content:flex-end; gap:10px; }
+.shopping-week-toolbar .product-entry-actions > button { margin:0; }
+.weekly-deals-panel { --panel-content-inset:20px; }
+.weekly-deals-panel > .panel-head { align-items:center; flex-wrap:wrap; }
+.weekly-deals-panel > .panel-head > div:first-child { flex:1; min-width:0; }
+.weekly-deals-toggle { display:inline-flex; align-items:center; gap:6px; padding:0; border:0; background:transparent; color:inherit; font:inherit; font-weight:inherit; text-align:left; }
+.weekly-deals-toggle:focus-visible { outline:3px solid var(--color-focus); outline-offset:4px; border-radius:4px; }
+.weekly-deals-body { padding:0 20px 20px; min-width:0; }
+.weekly-deals-body > .form-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin:0 0 20px; }
+.weekly-deals-body > .form-grid > label { min-width:0; margin:0; }
+.weekly-deals-body .weekly-offer-grid { margin:0; gap:16px; }
+.weekly-selection-toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px; padding:12px 16px; border:1px solid #dce4de; border-radius:10px; background:#f6faf7; }
+.weekly-selection-toolbar span { font-weight:600; margin-right:auto; }
+.weekly-deals-body > .weekly-offer-grid + :is(p,button) { margin-top:16px; }
+.weekly-deals-selector > .weekly-deals-body { padding:16px; margin-top:12px; border:1px solid #dce4de; border-radius:10px; background:#fafcf9; }
+.weekly-planner > summary { margin-bottom:0; }
+.weekly-planner[open] > summary { margin-bottom:20px; }
+.weekly-planner > .form-grid { margin-block:16px; }
+.weekly-planner > .promotion-rule-checks { display:flex; flex-wrap:wrap; gap:12px 20px; margin-block:16px; }
+.shopping-week-overview { gap:0; }
+.shopping-plan-columns > div:first-child:empty { display:none; }
+@media(max-width:1100px) {
+ .shopping-week-toolbar { grid-template-columns:minmax(0,1fr); }
+ .shopping-week-toolbar .product-entry-actions { justify-content:flex-start; }
+}
+@media(max-width:800px) {
+ .weekly-deals-body > .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .weekly-deals-body > .form-grid > label:last-child { grid-column:1/-1; }
+}
+@media(max-width:600px) {
+ .shopping-week { gap:20px; margin-block:20px; }
+ .shopping-week-toolbar,.shopping-week > .weekly-planner { padding:16px; }
+ .weekly-deals-panel { --panel-content-inset:16px; }
+ .weekly-deals-body { padding:0 16px 16px; }
+ .weekly-deals-body > .form-grid { grid-template-columns:minmax(0,1fr); }
+ .shopping-week-toolbar .product-entry-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .shopping-week-toolbar .product-entry-actions > button { width:100%; }
+ .weekly-deals-panel .panel-actions { width:100%; }
+ .weekly-deals-panel .panel-actions > button { width:100%; }
+}
+
+.weekly-deals-toggle[aria-expanded="false"] > svg { transform:rotate(-90deg); }
+.weekly-deals-toggle > svg { flex-shrink:0; transition:transform .15s; }
+.weekly-deals-body[hidden] { display:none; }
+
+.weekly-card-header{display:flex;align-items:flex-start;gap:8px}.weekly-card-header>input{flex-shrink:0;margin-top:7px}.weekly-card-toggle{display:flex;align-items:flex-start;gap:6px;background:transparent;color:inherit;border:0;padding:4px 0;text-align:left;min-width:0;font:inherit;line-height:1.4}.weekly-card-toggle svg{flex-shrink:0;margin-top:2px}.weekly-card-toggle[aria-expanded="false"] svg{transform:rotate(-90deg)}.weekly-card-actions{display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:10px}.weekly-card-details{border-top:1px solid #dce4de;margin-top:12px;padding-top:12px}.weekly-card-details small{display:block;margin-block:6px}.weekly-review-status{color:#825a17}.weekly-selection-toolbar{position:sticky;top:12px;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px;background:var(--color-surface,#fff);border:1px solid #dce4de;border-radius:10px;margin-bottom:16px}.weekly-planner>summary::marker{font-size:16px}.weekly-planner>summary{line-height:1.4}
+
+.weekly-source-preview{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-block:12px}.weekly-source-preview img{max-width:180px;max-height:140px;object-fit:contain;border:1px solid #dce4de;border-radius:8px}
+
+.weekly-original-image {display:block;max-width:100%;height:auto;margin-top:12px}
+
+.weekly-offer-grid {align-items:start}
+.shopping-search-filters {background:var(--color-surface,#fff);border:1px solid #e2e7e1;border-radius:16px;padding:20px;margin-block:20px}
+.shopping-search-filters>.filters {margin-top:16px}
+/* Shared compact plan filters; controls keep readable widths in Safari. */
+.filters.shopping-plan-filters {display:grid;grid-template-columns:minmax(200px,2fr) repeat(3,minmax(150px,1fr)) auto;align-items:end;gap:12px}
+.shopping-plan-filters>* {min-width:0}.shopping-plan-filters select{width:100%;min-width:0}
+.shopping-plan-filter-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.shopping-plan-filter-actions small{white-space:nowrap}
+.weekly-plan-options{border:0;padding:0;min-width:0}.weekly-plan-options [role=radiogroup]{max-height:min(40vh,320px);overflow:auto;border:1px solid #dce4de;border-radius:8px;padding:8px;margin-block:8px}
+.weekly-plan-options label{padding:8px;display:flex;gap:8px;align-items:flex-start}.weekly-plan-options input{width:auto;flex:none}.weekly-plan-options span{overflow-wrap:anywhere;min-width:0}
+.modal{max-width:calc(100vw - 32px);max-height:calc(100dvh - 32px);min-width:0}.modal input,.modal select,.modal textarea{max-width:100%;min-width:0}
+.weekly-planner>.disclosure-body{padding:16px 20px}.weekly-planner>.disclosure-body>.form-grid{margin-block:12px}
+.spend-booster-compact.panel{border:0;padding:0;margin:0;background:transparent;box-shadow:none}.spend-booster-compact>.form-grid{display:grid;grid-template-columns:minmax(150px,1fr) minmax(240px,2fr);gap:12px;align-items:end}
+.spend-booster-compact .form-actions{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;margin:0}.spend-booster-compact select{min-width:0;width:100%}
+.reward-expiration-banner{border:1px solid #ded3ae;background:#fffaf0;border-radius:10px;padding:12px 16px;margin-block:16px}.reward-expiration-banner-heading,.reward-expiration-banner-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.reward-expiration-banner-row{margin-top:6px}.reward-expiration-banner-row span{min-width:0;overflow-wrap:anywhere}
+button.account-preview{width:100%;text-align:left;background:transparent;color:inherit;border:0;font:inherit;cursor:pointer}button.account-preview:focus-visible{outline:2px solid #326d55;outline-offset:2px}
+@media(max-width:1150px){.filters.shopping-plan-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.shopping-plan-filter-actions{grid-column:1/-1}}
+@media(max-width:600px){.filters.shopping-plan-filters,.spend-booster-compact>.form-grid{grid-template-columns:minmax(0,1fr)}.weekly-planner>.disclosure-body{padding:12px}.weekly-card-actions button,.weekly-selection-toolbar button{white-space:normal}}
+
+.shopping-plan-filters .shopping-plan-search-field{grid-column:auto}
+
+/* One shared summary control replaces native markers and legacy text arrows. */
+details > summary.disclosure-summary{display:flex;align-items:center;gap:8px;list-style:none;cursor:pointer;line-height:1.4}
+details>summary::marker{content:''}details>summary::-webkit-details-marker{display:none}
+summary.disclosure-summary>.disclosure-arrow{width:16px;height:16px;flex:0 0 16px;transform:rotate(0deg)}
+details[open]>summary.disclosure-summary>.disclosure-arrow{transform:rotate(90deg)}
+summary.disclosure-summary>.disclosure-title{min-width:0;flex:1;font:inherit}
+summary.disclosure-summary>.disclosure-title>h2{margin:0;font-size:inherit;line-height:inherit}
+.section-disclosure>summary.disclosure-summary{font-size:18px;font-weight:650;margin:0}
+.weekly-planner.section-disclosure{padding:0}.weekly-planner.section-disclosure>summary.disclosure-summary{padding:16px 20px}
+.search-filter-panel{padding:20px}.search-filter-search label{display:flex;flex-direction:column;gap:8px;margin:0}.search-filter-search .search{max-width:none;width:100%;height:44px;box-sizing:border-box}.search-filter-search input{width:100%;min-width:0;box-sizing:border-box}.search-filter-panel>.more-filters{margin-top:16px}.more-filters>.disclosure-summary{font-size:16px;font-weight:600}.more-filters>.disclosure-body{padding-top:16px}.search-filter-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr));gap:12px;align-items:end}.search-filter-fields label{min-width:0;margin:0}.search-filter-fields select{width:100%;min-width:0}.clear-filters{margin-top:12px}.shopping-search-filters{margin-block:20px}
+.shopping-week-section>.disclosure-body{padding:0 20px 20px;min-height:0}.shopping-week-toolbar{display:grid;grid-template-columns:minmax(140px,160px) minmax(150px,1fr) repeat(4,max-content);align-items:end;gap:12px;padding:0}.shopping-week-toolbar>label{margin:0;min-width:0}.shopping-week-toolbar :is(input,select){width:100%;min-width:0}.shopping-week-toolbar>button{width:auto;min-width:0;white-space:nowrap;margin:0}.shopping-week-section>.disclosure-summary>.disclosure-title>small{display:block;font-size:13px;font-weight:400;margin-top:4px}
+.spend-booster-compact.panel>.form-grid{display:grid;grid-template-columns:minmax(140px,1fr) minmax(220px,2fr);align-items:end;gap:12px;padding:0;margin:0}.booster-actions{display:flex;flex-direction:row;flex-wrap:wrap;gap:8px;grid-column:1/-1;margin:0}.booster-actions>button{display:inline-flex;align-items:center;justify-content:center;width:auto;margin:0;min-height:40px}.booster-selected-details{border-top:1px solid #dce4de;padding-top:12px;margin-top:16px}.booster-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-block:12px}.booster-facts dt{font-size:12px;color:#738176}.booster-facts dd{margin:4px 0 0;font-weight:600;overflow-wrap:anywhere}
+@media(max-width:800px){.shopping-week-toolbar{grid-template-columns:repeat(2,minmax(0,1fr)) repeat(2,max-content)}.shopping-week-toolbar>button:nth-of-type(1){grid-column:1}}
+@media(max-width:600px){.search-filter-panel{padding:16px}.shopping-week-toolbar{grid-template-columns:minmax(0,1fr)}.shopping-week-toolbar>button:nth-of-type(1){grid-column:auto}.shopping-week-toolbar>button{width:100%}.spend-booster-compact.panel>.form-grid{grid-template-columns:minmax(0,1fr)}.booster-actions>button{flex:1 1 auto}}
+.weekly-deal-estimate{margin-top:16px;border-top:1px solid #dce4de;padding-top:12px}.weekly-deal-estimate h3{font-size:15px;margin:0 0 10px}.weekly-deal-estimate dl{display:grid;gap:8px}.weekly-deal-estimate dl>div{display:flex;justify-content:space-between;gap:16px}.weekly-deal-estimate dd{margin:0;font-weight:600;white-space:nowrap}.weekly-deal-estimate small{display:block;margin-top:10px;color:#728075}.weekly-offer-editor>details{margin-block:12px}.reward-payment-rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:12px;align-items:start}.reward-payment-rules label{margin:0;min-width:0}

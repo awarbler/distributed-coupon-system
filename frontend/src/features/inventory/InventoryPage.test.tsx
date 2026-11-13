@@ -18,7 +18,7 @@ it('collapses inventory sections without losing filters or stock form inputs',as
  const data=workspace();data.inventory=[{inventoryId:'stock',productId:'product',revision:'2',productName:'Olay',sku:'00123',totalPurchased:'5',quantityOnHand:null}];const user=userEvent.setup()
  render(<WorkspacePages page="inventory" data={data} api={new ApiClient('test')} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
  const search=screen.getByLabelText('Search products');await user.type(search,'Olay')
- await user.click(screen.getByRole('button',{name:'Collapse Inventory filters'}));expect(search).not.toBeVisible();await user.click(screen.getByRole('button',{name:'Expand Inventory filters'}));expect(search).toHaveValue('Olay')
+ expect(search).toBeVisible();const more=screen.getByText('More Filters',{selector:'summary *'}).closest('details')!;expect(more).not.toHaveAttribute('open');await user.click(screen.getByText('More Filters',{selector:'summary *'}));expect(more).toHaveAttribute('open');expect(search).toHaveValue('Olay')
  await user.click(screen.getByRole('button',{name:'View / update'}));await user.selectOptions(screen.getByLabelText('Inventory action'),'SET');const quantity=screen.getByLabelText('Quantity on hand');await user.type(quantity,'3')
  await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).not.toBeVisible();await user.click(screen.getByText('Update stock',{exact:true}));expect(quantity).toHaveValue('3')
  expect(screen.getByText('Product summary')).toBeInTheDocument();expect(screen.getByText('Purchase history')).toBeInTheDocument();expect(screen.getByText('Stock history')).toBeInTheDocument()

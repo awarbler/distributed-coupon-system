@@ -2,6 +2,7 @@ package coupons.shopping;
 
 import coupons.promotions.Coupon;
 import coupons.promotions.Promotion;
+import coupons.rewards.PaymentEligibility;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -29,11 +30,13 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
         public Line { if(memberRewardRate!=null&&!java.util.Set.of(0,1,5).contains(memberRewardRate))throw new IllegalArgumentException("Member reward rate must be 0, 1 or 5 percent."); Objects.requireNonNull(id);requireText(name,"Product");if(regular==null&&sale==null||regular!=null&&regular.signum()<0||sale!=null&&sale.signum()<0||quantity<1)throw new IllegalArgumentException("Enter a purchase price and positive quantity for every product."); }
     }
     /** Explicit same-product sale grouping. Existing scenarios without a rule retain their prices. */
-    public record PriceRule(String type, java.math.BigDecimal bundlePrice,List<UUID> lineIds) implements java.io.Serializable {
+    public record PriceRule(String type, java.math.BigDecimal bundlePrice,List<UUID> lineIds,Integer buyQuantity,Integer freeQuantity) implements java.io.Serializable {
+        public PriceRule(String type,java.math.BigDecimal bundlePrice,List<UUID> lineIds){this(type,bundlePrice,lineIds,null,null);}
         public PriceRule(String type,java.math.BigDecimal bundlePrice){this(type,bundlePrice,List.of());}
         public PriceRule {
             lineIds=lineIds==null?List.of():List.copyOf(lineIds);
-            if(!java.util.Set.of("BOGO_FREE","BOGO_HALF","BUY_ONE_GET_TWO","TWO_FOR").contains(type))
+            if(type.equals("BUY_GET")&&(buyQuantity==null||freeQuantity==null||buyQuantity<1||freeQuantity<1||buyQuantity>1000||freeQuantity>1000))throw new IllegalArgumentException("Enter buy and free quantities from 1 to 1000.");
+            if(!java.util.Set.of("BOGO_FREE","BOGO_HALF","BUY_ONE_GET_TWO","BUY_TWO_GET_ONE","TWO_FOR","BUY_GET").contains(type))
                 throw new IllegalArgumentException("Choose a supported sale button.");
             if(type.equals("TWO_FOR")&&(bundlePrice==null||bundlePrice.signum()<0))
                 throw new IllegalArgumentException("Enter the price for two products.");
@@ -41,7 +44,9 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
         public java.math.BigDecimal total(java.math.BigDecimal unit,int quantity) {
             var q=java.math.BigDecimal.valueOf(quantity);
             return switch(type) {
+                case "BUY_GET" -> unit.multiply(java.math.BigDecimal.valueOf(quantity-(long)freeQuantity*(quantity/(buyQuantity+freeQuantity))));
                 case "BOGO_FREE" -> unit.multiply(java.math.BigDecimal.valueOf(quantity-quantity/2));
+                case "BUY_TWO_GET_ONE" -> unit.multiply(java.math.BigDecimal.valueOf(quantity-quantity/3));
                 case "BUY_ONE_GET_TWO" -> unit.multiply(java.math.BigDecimal.valueOf(quantity-2*(quantity/3)));
                 case "BOGO_HALF" -> unit.multiply(q).subtract(unit.multiply(new java.math.BigDecimal("0.5")).multiply(java.math.BigDecimal.valueOf(quantity/2)));
                 case "TWO_FOR" -> bundlePrice.multiply(java.math.BigDecimal.valueOf(quantity/2)).add(unit.multiply(java.math.BigDecimal.valueOf(quantity%2)));
@@ -49,10 +54,13 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
             };
         }
     }
-    public record PlanningSource(String text,String mediaType,String contentBase64,List<PlanningSource> earlier,String purchaseChannel) implements java.io.Serializable {
+    public record PlanningSource(String text,String mediaType,String contentBase64,List<PlanningSource> earlier,String purchaseChannel,List<UUID> advertisedDealIds) implements java.io.Serializable {
+        public PlanningSource(String text,String mediaType,String contentBase64,List<PlanningSource> earlier,String channel){this(text,mediaType,contentBase64,earlier,channel,List.of());}
         public PlanningSource(String text,String mediaType,String contentBase64,List<PlanningSource> earlier){this(text,mediaType,contentBase64,earlier,null);}
         public PlanningSource(String text,String mediaType,String contentBase64){this(text,mediaType,contentBase64,List.of());}
         public PlanningSource {
+            advertisedDealIds=advertisedDealIds==null?List.of():List.copyOf(advertisedDealIds);
+            if(advertisedDealIds.size()>100)throw new IllegalArgumentException("Too many advertisement links.");
             if(purchaseChannel!=null&&!java.util.Set.of("ONLINE","IN_STORE","UNKNOWN").contains(purchaseChannel))throw new IllegalArgumentException("Unknown purchase channel.");
             earlier=earlier==null?List.of():List.copyOf(earlier);
             if(earlier.size()>20)throw new IllegalArgumentException("Use at most 20 source attachments per plan.");
@@ -64,10 +72,11 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
             }
         }
     }
-    public record ScenarioCoupon(UUID id,String description,java.math.BigDecimal amount,int requiredQuantity,List<UUID> lineIds,UUID savedCouponId,String kind,boolean wholeReceipt) implements java.io.Serializable {
+    public record ScenarioCoupon(UUID id,String description,java.math.BigDecimal amount,int requiredQuantity,List<UUID> lineIds,UUID savedCouponId,String kind,boolean wholeReceipt,boolean pendingVerification) implements java.io.Serializable {
+        public ScenarioCoupon(UUID id,String description,java.math.BigDecimal amount,int requiredQuantity,List<UUID> lines,UUID savedId,String kind,boolean wholeReceipt){this(id,description,amount,requiredQuantity,lines,savedId,kind,wholeReceipt,false);}
         public ScenarioCoupon(UUID id,String description,java.math.BigDecimal amount,int requiredQuantity,List<UUID> lines,UUID savedId,String kind){this(id,description,amount,requiredQuantity,lines,savedId,kind,false);}
         public ScenarioCoupon(UUID id,String description,java.math.BigDecimal amount,int requiredQuantity,List<UUID> lines,UUID savedId){this(id,description,amount,requiredQuantity,lines,savedId,"MANUFACTURER");}
-        public ScenarioCoupon {kind=kind==null?"MANUFACTURER":kind;if(!java.util.Set.of("MANUFACTURER","STORE_COUPON","SALE_PROMOTION").contains(kind))throw new IllegalArgumentException("Choose manufacturer or store coupon.");Objects.requireNonNull(id);requireText(description,"Coupon description");if(amount==null||amount.signum()<=0||requiredQuantity<1||!wholeReceipt&&lineIds.isEmpty())throw new IllegalArgumentException("Coupon needs a positive amount, required quantity and products.");lineIds=List.copyOf(lineIds);}
+        public ScenarioCoupon {kind=kind==null?"MANUFACTURER":kind;if(!java.util.Set.of("MANUFACTURER","STORE_COUPON","SALE_PROMOTION").contains(kind)&&!(pendingVerification&&kind.equals("UNKNOWN")))throw new IllegalArgumentException("Choose manufacturer or store coupon.");Objects.requireNonNull(id);requireText(description,"Coupon description");if(amount==null||amount.signum()<0||!pendingVerification&&amount.signum()==0||requiredQuantity<1||!wholeReceipt&&lineIds.isEmpty())throw new IllegalArgumentException("Coupon needs a positive amount, required quantity and products.");lineIds=List.copyOf(lineIds);}
     }
     public record ScenarioPromotion(UUID id,String description,String rewardType,java.math.BigDecimal rewardAmount,int requiredQuantity,java.math.BigDecimal requiredSpend,String spendBasis,boolean allowsWalgreensCash,List<UUID> lineIds,boolean wholeReceipt,Boolean allowsWalmartCash, boolean restrictSameRegisterReward, String prohibitedRegisterRewardProgram, String originProduct, String originBrand, String originProgram, String originPromotion,Boolean paymentRulesReviewed,String giftCardRule,Boolean rollingAllowed,String earnedRegisterRewardType,Boolean allowsRegisterRewards,Boolean allowsEcb) implements java.io.Serializable {
         public ScenarioPromotion(UUID id,String description,String rewardType,java.math.BigDecimal rewardAmount,int requiredQuantity,java.math.BigDecimal requiredSpend,String spendBasis,boolean allowsWalgreensCash,List<UUID> lineIds,boolean wholeReceipt,Boolean allowsWalmartCash, boolean restrictSameRegisterReward, String prohibitedRegisterRewardProgram, String originProduct, String originBrand, String originProgram, String originPromotion,Boolean paymentRulesReviewed){this(id,description,rewardType,rewardAmount,requiredQuantity,requiredSpend,spendBasis,allowsWalgreensCash,lineIds,wholeReceipt,allowsWalmartCash,restrictSameRegisterReward,prohibitedRegisterRewardProgram,originProduct,originBrand,originProgram,originPromotion,paymentRulesReviewed,null,null,null,null,null);}
@@ -77,7 +86,8 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
         public ScenarioPromotion(UUID id,String description,String rewardType,java.math.BigDecimal amount,int quantity,java.math.BigDecimal spend,String basis,boolean allows,List<UUID> lines){this(id,description,rewardType,amount,quantity,spend,basis,allows,lines,false);}
         public ScenarioPromotion {if(giftCardRule!=null&&!java.util.Set.of("PROHIBITED","COUNTS","REDUCES","UNKNOWN").contains(giftCardRule))throw new IllegalArgumentException("Record the gift-card payment rule.");if(earnedRegisterRewardType!=null&&!java.util.Set.of("MANUFACTURER","STORE","UNKNOWN").contains(earnedRegisterRewardType))throw new IllegalArgumentException("Record the earned RR type.");allowsWalmartCash=allowsWalmartCash==null?true:allowsWalmartCash;Objects.requireNonNull(id);requireText(description,"Promotion description");if(!java.util.Set.of("REGISTER_REWARD","WALGREENS_CASH","ECB","WALMART_CASH","CASH","FETCH","PG_BRAND","IBOTTA","PAYPAL","VENMO","SWAGBUCKS").contains(rewardType)||rewardAmount==null||rewardAmount.signum()<0||requiredQuantity<0||requiredSpend==null||requiredSpend.signum()<0||!wholeReceipt&&lineIds.isEmpty()||!java.util.Set.of("BEFORE_COUPONS","AFTER_COUPONS","AFTER_REWARDS_USED","BEFORE_COUPONS_AFTER_STORE_RR","AFTER_COUPONS_AFTER_STORE_RR").contains(spendBasis))throw new IllegalArgumentException("Complete the promotion amount, requirements and qualifying products.");lineIds=List.copyOf(lineIds);}
     }
-    public record ScenarioPayment(UUID id,String type,java.math.BigDecimal amount,String notes,String registerRewardType,UUID rewardSourceId, String originProduct, String originBrand, String originProgram, String originPromotion) implements java.io.Serializable {
+    public record ScenarioPayment(UUID id,String type,java.math.BigDecimal amount,String notes,String registerRewardType,UUID rewardSourceId, String originProduct, String originBrand, String originProgram, String originPromotion,PaymentEligibility.Rule eligibility) implements java.io.Serializable {
+        public ScenarioPayment(UUID id,String type,java.math.BigDecimal amount,String notes,String rrType,UUID source,String product,String brand,String program,String promotion){this(id,type,amount,notes,rrType,source,product,brand,program,promotion,null);}
         public ScenarioPayment(UUID id,String type,java.math.BigDecimal amount,String notes,String rrType,UUID source){this(id,type,amount,notes,rrType,source,null,null,null,null);}
         public ScenarioPayment(UUID id,String type,java.math.BigDecimal amount,String notes){this(id,type,amount,notes,null,null);}
         public ScenarioPayment { if(registerRewardType!=null&&!java.util.Set.of("MANUFACTURER","STORE","UNKNOWN").contains(registerRewardType))throw new IllegalArgumentException("Unknown Register Reward type."); Objects.requireNonNull(id);if(!java.util.Set.of("WALGREENS_CASH","WALMART_CASH","REGISTER_REWARD","ECB","GIFT_CARD","CASH","CARD").contains(type)||amount==null||amount.signum()<0)throw new IllegalArgumentException("Choose a payment type and nonnegative amount.");notes=notes==null?"":notes; }
@@ -189,7 +199,7 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
                 if(!rule.lineIds().contains(owner.id()))throw new IllegalArgumentException("Include the product that owns the sale group.");
                 var eligible=items.stream().filter(l->rule.lineIds().contains(l.id())).sorted(java.util.Comparator.comparing(l->l.sale()==null?l.regular():l.sale())).toList();
                 if(eligible.size()!=rule.lineIds().size())throw new IllegalArgumentException("Every sale-group product must exist in this plan.");
-                long count=eligible.stream().mapToLong(Line::quantity).sum(),discounted=rule.type().equals("BUY_ONE_GET_TWO")?2*(count/3):count/2;
+                long count=eligible.stream().mapToLong(Line::quantity).sum(),discounted=rule.type().equals("BUY_GET")?(long)rule.freeQuantity()*(count/(rule.buyQuantity()+rule.freeQuantity())):rule.type().equals("BUY_ONE_GET_TWO")?2*(count/3):rule.type().equals("BUY_TWO_GET_ONE")?count/3:count/2;
                 for(var l:eligible) {
                     if(!grouped.add(l.id())||!l.id().equals(owner.id())&&l.priceRule()!=null)throw new IllegalArgumentException("A product cannot belong to overlapping sale rules.");
                     long take=Math.min(discounted,l.quantity());discounted-=take;
@@ -199,11 +209,16 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
                 }
             }
             var couponRows=new java.util.ArrayList<java.util.Map<String,Object>>();var couponTotal=zero;
-            for(var c:coupons){var couponLines=c.wholeReceipt()?items.stream().map(Line::id).toList():c.lineIds();long qty=items.stream().filter(l->couponLines.contains(l.id())).mapToLong(Line::quantity).sum();boolean met=qty>=c.requiredQuantity();var eligible=couponLines.stream().map(sale::get).reduce(zero,java.math.BigDecimal::add);var available=couponLines.stream().map(id->sale.get(id).subtract(discounts.get(id))).reduce(zero,java.math.BigDecimal::add);boolean fits=c.amount().compareTo(available)<=0;boolean applied=met&&fits;
-                couponRows.add(java.util.Map.of("id",c.id(),"description",c.description(),"qualifyingQuantity",qty,"requiredQuantity",c.requiredQuantity(),"quantityMet",met,"applied",applied,"amount",applied?c.amount():zero,"reason",!met?"Required quantity not met":!fits?"Coupon exceeds remaining merchandise":"Entered coupon applied"));
+            for(var c:coupons){var couponLines=c.wholeReceipt()?items.stream().map(Line::id).toList():c.lineIds();long qty=items.stream().filter(l->couponLines.contains(l.id())).mapToLong(Line::quantity).sum();boolean met=qty>=c.requiredQuantity();var eligible=couponLines.stream().map(sale::get).reduce(zero,java.math.BigDecimal::add);var available=couponLines.stream().map(id->sale.get(id).subtract(discounts.get(id))).reduce(zero,java.math.BigDecimal::add);boolean fits=c.amount().compareTo(available)<=0;boolean applied=(!c.pendingVerification()||c.savedCouponId()!=null)&&c.amount().signum()>0&&met&&fits;
+                couponRows.add(java.util.Map.of("id",c.id(),"description",c.description(),"qualifyingQuantity",qty,"requiredQuantity",c.requiredQuantity(),"quantityMet",met,"applied",applied,"amount",applied?c.amount():zero,"reason",!met?"Required quantity not met":!fits?"Coupon exceeds remaining merchandise":c.amount().signum()==0?"Enter the planned discount amount":c.pendingVerification()?"Included in planning estimate; actual coupon use is not confirmed":"Entered coupon applied"));
                 if(applied){couponTotal=couponTotal.add(c.amount());var remaining=c.amount();for(int i=0;i<couponLines.size();i++){var id=couponLines.get(i);var part=i==couponLines.size()-1?remaining:c.amount().multiply(sale.get(id).subtract(discounts.get(id))).divide(available,2,java.math.RoundingMode.DOWN);discounts.put(id,discounts.get(id).add(part));remaining=remaining.subtract(part);}}
             }
-            var saleTotal=sale.values().stream().reduce(zero,java.math.BigDecimal::add);var merchandise=saleTotal.subtract(couponTotal);var calculatedTax=taxRate==null?tax:merchandise.multiply(taxRate).movePointLeft(2).setScale(2,java.math.RoundingMode.HALF_UP);var rawOop=merchandise.subtract(registerRewardsUsed).subtract(ecbUsed).add(calculatedTax).subtract(walgreensCashUsed).subtract(walmartCashUsed).subtract(giftCardUsed);var oop=rawOop.max(zero);var selected=manualOop==null?oop:manualOop;var potential=zero;var receiptLevelRewards=zero;var cashRebates=zero;var promoRows=new java.util.ArrayList<java.util.Map<String,Object>>();var perItemRewards=new java.util.HashMap<UUID,java.math.BigDecimal>();
+            var saleTotal=sale.values().stream().reduce(zero,java.math.BigDecimal::add);var merchandise=saleTotal.subtract(couponTotal);
+            // Keep explicitly entered but unverified coupon arithmetic visible as a proposal.
+            // It never feeds verified eligibility, reward funding, or optimizer decisions.
+            var proposedCouponTotal=coupons.stream().filter(ScenarioCoupon::pendingVerification).map(ScenarioCoupon::amount).reduce(zero,java.math.BigDecimal::add).min(merchandise);
+            var proposedMerchandise=merchandise.subtract(proposedCouponTotal).max(zero);
+            var calculatedTax=taxRate==null?tax:merchandise.multiply(taxRate).movePointLeft(2).setScale(2,java.math.RoundingMode.HALF_UP);var rawOop=merchandise.subtract(registerRewardsUsed).subtract(ecbUsed).add(calculatedTax).subtract(walgreensCashUsed).subtract(walmartCashUsed).subtract(giftCardUsed);var oop=rawOop.max(zero);var selected=manualOop==null?oop:manualOop;var potential=zero;var receiptLevelRewards=zero;var cashRebates=zero;var promoRows=new java.util.ArrayList<java.util.Map<String,Object>>();var perItemRewards=new java.util.HashMap<UUID,java.math.BigDecimal>();
             var fundingIssues=new java.util.ArrayList<String>();
             String fundingStatus="Met";
             if(walgreens){
@@ -226,6 +241,15 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
             if(retailer!=null&&retailer.trim().matches("(?i)^(cvs|walmart)(?:\\s.*|#.*|$)")){
                 boolean cvs=retailer.trim().toLowerCase(java.util.Locale.ROOT).startsWith("cvs");
                 if(registerRewardsUsed.signum()>0||walgreensCashUsed.signum()>0||cvs&&walmartCashUsed.signum()>0||!cvs&&ecbUsed.signum()>0){fundingStatus="Not Met";fundingIssues.add("Funding belongs to another retailer.");}
+            }
+            if(retailer!=null&&giftCardUsed.signum()>0){
+                var identified=payments==null?zero:payments.stream().filter(v->v.type().equals("GIFT_CARD")&&v.eligibility()!=null).map(ScenarioPayment::amount).reduce(zero,java.math.BigDecimal::add);
+                if(identified.compareTo(giftCardUsed)<0){if(fundingStatus.equals("Met"))fundingStatus="Needs Review";fundingIssues.add("Select the recorded gift card to verify its acceptance and balance.");}
+                if(payments!=null){var uses=new java.util.HashMap<UUID,java.math.BigDecimal>();for(var p:payments)if(p.type().equals("GIFT_CARD")&&p.eligibility()!=null){var rule=p.eligibility();uses.merge(rule.instrumentId(),p.amount(),java.math.BigDecimal::add);if(rule.available()!=null&&uses.get(rule.instrumentId()).compareTo(rule.available())>0){fundingStatus="Not Met";fundingIssues.add("Combined uses exceed this gift card's available balance.");}}}
+            }
+            if(retailer!=null&&payments!=null)for(var payment:payments)if(payment.amount().signum()>0){
+                var rule=payment.eligibility();String status=PaymentEligibility.check(retailer,payment.type(),rule,payment.amount(),rule==null?null:rule.evaluatedOn());
+                if(!status.equals("Met")){if(status.equals("Not Met")||fundingStatus.equals("Met"))fundingStatus=status;fundingIssues.add(payment.type()+": "+status+" — check the recorded instrument, retailer acceptance, expiration and available balance.");}
             }
             if(rawOop.signum()<0){fundingStatus="Not Met";fundingIssues.add("Funding exceeds checkout amount.");}
             for(var p:promotions){var promotionLines=p.wholeReceipt()?items.stream().map(Line::id).toList():p.lineIds();long qty=items.stream().filter(l->promotionLines.contains(l.id())).mapToLong(Line::quantity).sum();var spend=promotionLines.stream().map(sale::get).reduce(zero,java.math.BigDecimal::add);if(!p.spendBasis().startsWith("BEFORE_COUPONS"))spend=spend.subtract(promotionLines.stream().map(discounts::get).reduce(zero,java.math.BigDecimal::add));if(p.spendBasis().endsWith("AFTER_STORE_RR")&&payments!=null)spend=spend.subtract(payments.stream().filter(v->v.type().equals("REGISTER_REWARD")&&"STORE".equals(v.registerRewardType())).map(ScenarioPayment::amount).reduce(zero,java.math.BigDecimal::add)).max(zero);if(p.spendBasis().equals("AFTER_REWARDS_USED"))spend=spend.subtract(registerRewardsUsed).subtract(ecbUsed).subtract(walgreensCashUsed).subtract(walmartCashUsed).max(zero);
@@ -255,7 +279,49 @@ public record ShoppingPlan(UUID planId, String name, String retailer,
                 var reduction=(java.math.BigDecimal)item.get("saleReduction");
                 if(reduction.signum()>0){storePromotionTotal=storePromotionTotal.add(reduction);storePromotions.add(java.util.Map.of("id",item.get("id"),"description",item.get("name")+" Store Promotion","kind","SALE_PROMOTION","amount",reduction));}
             }
-            var out=new java.util.LinkedHashMap<String,Object>();out.put("fundingRuleStatus",fundingStatus);out.put("expectedExtraBucks",promoRows.stream().filter(p->p.get("rewardType").equals("ECB")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(zero,java.math.BigDecimal::add));out.put("expectedWalmartCash",promoRows.stream().filter(p->p.get("rewardType").equals("WALMART_CASH")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(zero,java.math.BigDecimal::add));out.put("expectedRegisterRewards",promoRows.stream().filter(p->p.get("rewardType").equals("REGISTER_REWARD")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(zero,java.math.BigDecimal::add));out.put("expectedWalgreensCash",promoRows.stream().filter(p->p.get("rewardType").equals("WALGREENS_CASH")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(memberTotal,java.math.BigDecimal::add));out.put("fundingIssues",fundingIssues);out.put("storePromotions",storePromotions);out.put("storePromotionTotal",storePromotionTotal);out.put("totalDiscounts",storePromotionTotal.add(couponTotal));out.put("items",itemRows);out.put("receiptLevelRewards",receiptLevelRewards);out.put("memberRewardEstimate",memberTotal);out.put("memberRewardLines",memberRows);out.put("coupons",couponRows);out.put("promotions",promoRows);out.put("regularTotal",items.stream().allMatch(l->l.regular()!=null)?regular:null);out.put("saleTotal",saleTotal);out.put("saleReductionTotal",items.stream().map(l->(l.regular()==null?l.sale():l.regular()).multiply(java.math.BigDecimal.valueOf(l.quantity()))).reduce(zero,java.math.BigDecimal::add).subtract(saleTotal));out.put("couponTotal",couponTotal);out.put("merchandiseAfterCoupons",merchandise);out.put("tax",calculatedTax);out.put("totalWithTax",merchandise.add(calculatedTax));out.put("cashRebates",cashRebates);out.put("otherRebates",potential.subtract(cashRebates));out.put("afterCashRebates",selected.subtract(cashRebates));out.put("beforeTaxAfterCashRebates",selected.subtract(calculatedTax).subtract(cashRebates));out.put("netBeforeTax",selected.subtract(calculatedTax).subtract(potential));out.put("registerRewardsUsed",registerRewardsUsed);out.put("ecbUsed",ecbUsed);out.put("walmartCashUsed",walmartCashUsed);out.put("walgreensCashUsed",walgreensCashUsed);out.put("giftCardUsed",giftCardUsed);out.put("receiptTotalBeforeFunding",merchandise.subtract(registerRewardsUsed).subtract(ecbUsed).add(calculatedTax).max(zero));out.put("calculatedOop",oop);out.put("selectedOop",selected);out.put("manualDifference",selected.subtract(oop));out.put("overFunding",rawOop.negate().max(zero));out.put("potentialRewards",potential);out.put("afterPotentialRewards",selected.subtract(potential));return out;
+            var out=new java.util.LinkedHashMap<String,Object>();
+            out.put("fundingRuleStatus",fundingStatus);
+            out.put("proposedCouponTotal",proposedCouponTotal);
+            out.put("proposedMerchandiseAfterCoupons",proposedMerchandise);
+            out.put("proposedCalculatedOop",proposedMerchandise.add(calculatedTax).subtract(registerRewardsUsed).subtract(ecbUsed).subtract(walgreensCashUsed).subtract(walmartCashUsed).subtract(giftCardUsed).max(zero));
+            out.put("expectedExtraBucks",promoRows.stream().filter(p->p.get("rewardType").equals("ECB")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(zero,java.math.BigDecimal::add));
+            out.put("expectedWalmartCash",promoRows.stream().filter(p->p.get("rewardType").equals("WALMART_CASH")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(zero,java.math.BigDecimal::add));
+            out.put("expectedRegisterRewards",promoRows.stream().filter(p->p.get("rewardType").equals("REGISTER_REWARD")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(zero,java.math.BigDecimal::add));
+            out.put("expectedWalgreensCash",promoRows.stream().filter(p->p.get("rewardType").equals("WALGREENS_CASH")).map(p->(java.math.BigDecimal)p.get("potentialReward")).reduce(memberTotal,java.math.BigDecimal::add));
+            out.put("fundingIssues",fundingIssues);
+            out.put("storePromotions",storePromotions);
+            out.put("storePromotionTotal",storePromotionTotal);
+            out.put("totalDiscounts",storePromotionTotal.add(couponTotal));
+            out.put("items",itemRows);
+            out.put("receiptLevelRewards",receiptLevelRewards);
+            out.put("memberRewardEstimate",memberTotal);
+            out.put("memberRewardLines",memberRows);
+            out.put("coupons",couponRows);
+            out.put("promotions",promoRows);
+            out.put("regularTotal",items.stream().allMatch(l->l.regular()!=null)?regular:null);
+            out.put("saleTotal",saleTotal);
+            out.put("saleReductionTotal",items.stream().map(l->(l.regular()==null?l.sale():l.regular()).multiply(java.math.BigDecimal.valueOf(l.quantity()))).reduce(zero,java.math.BigDecimal::add).subtract(saleTotal));
+            out.put("couponTotal",couponTotal);
+            out.put("merchandiseAfterCoupons",merchandise);
+            out.put("tax",calculatedTax);
+            out.put("totalWithTax",merchandise.add(calculatedTax));
+            out.put("cashRebates",cashRebates);
+            out.put("otherRebates",potential.subtract(cashRebates));
+            out.put("afterCashRebates",selected.subtract(cashRebates));
+            out.put("beforeTaxAfterCashRebates",selected.subtract(calculatedTax).subtract(cashRebates));
+            out.put("netBeforeTax",selected.subtract(calculatedTax).subtract(potential));
+            out.put("registerRewardsUsed",registerRewardsUsed);
+            out.put("ecbUsed",ecbUsed);
+            out.put("walmartCashUsed",walmartCashUsed);
+            out.put("walgreensCashUsed",walgreensCashUsed);
+            out.put("giftCardUsed",giftCardUsed);
+            out.put("receiptTotalBeforeFunding",merchandise.subtract(registerRewardsUsed).subtract(ecbUsed).add(calculatedTax).max(zero));
+            out.put("calculatedOop",oop);
+            out.put("selectedOop",selected);
+            out.put("manualDifference",selected.subtract(oop));
+            out.put("overFunding",rawOop.negate().max(zero));
+            out.put("potentialRewards",potential);
+            out.put("afterPotentialRewards",selected.subtract(potential));return out;
         }
     }
 

@@ -34,6 +34,7 @@ public final class PostgresSchema {
             ReceiptFinancialProjection.install(connection);
             ReceiptFinancialProjection.appendAll(connection);
             RewardInstrumentRepository.install(connection);
+            applyMigration(connection,"/db/migration/V14__weekly_deal_archive_and_card_terms.sql",14,"audited Weekly Deal removal and recorded card acceptance");
             if (ownsTransaction) connection.commit(); else connection.releaseSavepoint(savepoint);
         } catch (SQLException | IOException | RuntimeException failure) {
             try { if (ownsTransaction) connection.rollback(); else connection.rollback(savepoint); }

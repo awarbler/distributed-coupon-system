@@ -137,6 +137,20 @@ class PostgresTransactionRepositoryTest {
                 new ReceiptCreateCtx("test-user")));
     }
 
+    @Test void explicitlySelectedAvailableCouponIsRedeemedWithReceiptWithoutInventingClipping() {
+        var clipped=new PostgresClippedCouponRepository(connections);var couponId=UUID.randomUUID();var day=java.time.LocalDate.of(2026,10,18);
+        clipped.save(new ClippedCoupon(couponId,"Synthetic",null,new Coupon("Product coupon",BigDecimal.ONE,1,CouponType.MANUFACTURER,null),CouponStatus.AVAILABLE,null,1),"test");
+        var id=UUID.randomUUID();var tx=transaction();tx.setObservations(new ReceiptObservations(day,null,List.of(),List.of(),null,List.of(),java.util.Map.of()));tx.addAppliedCoupon(new CouponApplied(couponId,"Printed actual coupon",new BigDecimal("0.75"),List.of(),1,true));
+        repository.saveWithDraft(id,tx,new ReceiptMeta("Synthetic",id.toString(),null,null),List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"),List.of(couponId),null,0,null,0);
+        var used=clipped.findById(couponId).orElseThrow();assertEquals(CouponStatus.APPLIED,used.status());assertNull(used.clippedOn());assertEquals(id,used.redeemedTransactionId());assertEquals(new BigDecimal("0.75"),repository.findById(id).orElseThrow().transaction().getAppliedCoupons().getFirst().getAppliedAmount());
+    }
+    @Test void receiptEditConfirmsNewCouponLinkAtomicallyAndProtectsRecordedRedemption() {
+        var clipped=new PostgresClippedCouponRepository(connections);var couponId=UUID.randomUUID();var day=java.time.LocalDate.of(2026,10,18);var id=UUID.randomUUID();var meta=new ReceiptMeta("Synthetic",id.toString(),null,null);
+        clipped.save(new ClippedCoupon(couponId,"Synthetic",null,new Coupon("Product coupon",BigDecimal.ONE,1,CouponType.MANUFACTURER,null),CouponStatus.AVAILABLE,null,1),"test");
+        var original=transaction();original.setObservations(new ReceiptObservations(day,null,List.of(),List.of(),null,List.of(),java.util.Map.of()));repository.save(id,original,meta,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),new ReceiptCreateCtx("test"));
+        var edited=transaction();edited.setObservations(original.getObservations());edited.addAppliedCoupon(new CouponApplied(couponId,"Printed actual coupon",new BigDecimal("0.75"),List.of(),1,true));repository.update(id,1,edited,meta,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),changeContext());
+        assertEquals(CouponStatus.APPLIED,clipped.findById(couponId).orElseThrow().status());assertNull(clipped.findById(couponId).orElseThrow().clippedOn());assertThrows(IllegalArgumentException.class,()->repository.update(id,2,original,meta,List.of(),new ReceiptWriteRequest(UUID.randomUUID(),NOW),changeContext()));assertEquals(2,repository.findById(id).orElseThrow().revision());
+    }
     @Test void linkedReceiptCouponPlanAndDraftCommitOrRollBackTogether() {
         UUID id = UUID.randomUUID(), planId = UUID.randomUUID(), couponId = UUID.randomUUID();
         var plans = new PostgresShoppingPlanRepository(connections);
@@ -234,6 +248,44 @@ class PostgresTransactionRepositoryTest {
         assertTrue(repository.findById(rolledBack).isEmpty());assertEquals(coupons.promotions.CouponStatus.CLIPPED,couponRepo.findById(expired.couponId()).orElseThrow().status());
 
         assertThrows(IllegalArgumentException.class,()->new PostgresPlatformRepository(connections).deleteCatalogRecord(false,coupon.couponId(),2,"test"));
+    }
+
+    private ClippedCoupon importedCoupon(String offer,String raw) {return importedCoupon(offer,raw,java.util.Map.of());}
+    private ClippedCoupon importedCoupon(String offer,String raw,java.util.Map<String,String> details) {
+        var id=UUID.randomUUID();var terms=new coupons.promotions.CouponTerms(id,coupons.promotions.CouponTerms.Source.DIGITAL_MANUFACTURER,coupons.promotions.CouponTerms.Discount.DOLLARS,"Walgreens","Walgreens",null,"CREST",List.of(),null,null,null,1,raw,null,null,raw,java.time.LocalDate.of(2026,11,8),"weekly.pdf",details);
+        return new ClippedCoupon(id,"Walgreens",offer,new Coupon("CREST $2 off 1",new BigDecimal("2"),1,CouponType.MANUFACTURER,java.time.LocalDate.of(2026,11,30),terms),CouponStatus.CLIPPED,java.time.LocalDate.of(2026,11,8),1);
+    }
+    @Test void availableOfferImportDoesNotConsumeClippedSlotsAndIsRevisionProtected() {
+        var repo=new PostgresClippedCouponRepository(connections);var source=importedCoupon("available-offer","Verified available website offer");var available=new ClippedCoupon(source.couponId(),source.provider(),source.externalId(),source.coupon(),CouponStatus.AVAILABLE,null,1);
+        repo.importReviewed(List.of(available),java.util.Map.of(available.couponId(),0L),"test");assertEquals(CouponStatus.AVAILABLE,repo.findById(available.couponId()).orElseThrow().status());assertEquals(0,repo.findByProvider("Walgreens").stream().filter(c->c.status()==CouponStatus.CLIPPED).count());assertThrows(java.util.ConcurrentModificationException.class,()->repo.importReviewed(List.of(available),java.util.Map.of(available.couponId(),0L),"test"));
+    }
+    @Test void reviewedCouponImportIsAtomicAndRejectsRepeatedVerifiedOffers() {
+        var repo=new PostgresClippedCouponRepository(connections);var first=importedCoupon("offer-a","Original offer a");
+        repo.importReviewed(List.of(first),java.util.Map.of(first.couponId(),0L),"test");
+        var duplicate=importedCoupon("offer-a","Changed display wording");var other=importedCoupon("offer-b","Original offer b");
+        assertThrows(IllegalArgumentException.class,()->repo.importReviewed(List.of(other,duplicate),java.util.Map.of(other.couponId(),0L,duplicate.couponId(),0L),"test"));
+        assertTrue(repo.findById(other.couponId()).isEmpty());assertEquals(1,repo.findByProvider("Walgreens").size());
+        assertThrows(java.util.ConcurrentModificationException.class,()->repo.importReviewed(List.of(first),java.util.Map.of(first.couponId(),0L),"test"));
+        var distinct=importedCoupon("offer-distinct","Original offer a");repo.importReviewed(List.of(distinct),java.util.Map.of(distinct.couponId(),0L),"test");assertEquals(2,repo.findByProvider("Walgreens").size());
+    }
+    @Test void refreshPreservesIdentityPlanReferencesAndAbsentCoupons() {
+        var repo=new PostgresClippedCouponRepository(connections);var first=importedCoupon("offer-a","Original a");var absent=importedCoupon("offer-b","Original b");repo.saveAll(List.of(first,absent),"test");
+        var plans=new PostgresShoppingPlanRepository(connections);var plan=new ShoppingPlan(UUID.randomUUID(),"Coupon plan","Walgreens",java.time.LocalDate.of(2026,11,8),List.of(),1);plans.save(plan,"test");
+        var purchase=new PlannedPurchase(UUID.randomUUID(),plan.planId(),"CREST",null,1,BigDecimal.TEN,null,List.of(first.couponId()),1);new PostgresPlannedPurchaseRepository(connections).save(purchase,"test");
+        var changed=new ClippedCoupon(first.couponId(),first.provider(),first.externalId(),first.coupon(),first.status(),first.clippedOn(),2);
+        repo.importReviewed(List.of(changed),java.util.Map.of(first.couponId(),1L),"test");
+        assertEquals(first.couponId(),repo.findById(first.couponId()).orElseThrow().couponId());assertEquals(2,repo.findById(first.couponId()).orElseThrow().revision());var restored=repo.findById(absent.couponId()).orElseThrow();assertEquals(absent.couponId(),restored.couponId());assertEquals(absent.status(),restored.status());assertEquals(absent.externalId(),restored.externalId());assertEquals(absent.revision(),restored.revision());assertEquals(absent.coupon().getTerms(),restored.coupon().getTerms());assertEquals(absent.coupon().getCouponDescription(),restored.coupon().getCouponDescription());assertEquals(absent.coupon().getDiscountAmount(),restored.coupon().getDiscountAmount());assertEquals(absent.coupon().getExpirationDate(),restored.coupon().getExpirationDate());
+        assertEquals(List.of(first.couponId()),new PostgresPlannedPurchaseRepository(connections).findById(purchase.plannedPurchaseId()).orElseThrow().clippedCouponIds());
+    }
+    @Test void removedCouponsFreeLocalSlotsAndAreNotRedeemed() {
+        var repo=new PostgresClippedCouponRepository(connections);var list=new java.util.ArrayList<ClippedCoupon>();for(int i=0;i<200;i++)list.add(importedCoupon("offer-"+i,"Text "+i,i==0?java.util.Map.of("recordedClipLimit","200"):java.util.Map.of()));repo.saveAll(list,"test");
+        var extra=importedCoupon("offer-extra","Extra text");assertThrows(IllegalArgumentException.class,()->repo.save(extra,"test"));assertTrue(repo.findById(extra.couponId()).isEmpty());
+        var old=list.get(0);var removed=new ClippedCoupon(old.couponId(),old.provider(),old.externalId(),old.coupon(),CouponStatus.NO_LONGER_AVAILABLE,old.clippedOn(),2);repo.update(removed,1,"test","removed locally");repo.save(extra,"test");
+        assertEquals(200,repo.findByProvider("Walgreens").stream().filter(c->c.status()==CouponStatus.CLIPPED).count());assertNull(repo.findById(old.couponId()).orElseThrow().redeemedTransactionId());
+    }
+    @Test void identicalSourceTextWithoutOfferIdRequiresReviewInsteadOfDuplicateImport() {
+        var repo=new PostgresClippedCouponRepository(connections);var first=importedCoupon(null,"Exact original evidence");repo.importReviewed(List.of(first),java.util.Map.of(first.couponId(),0L),"test");var second=importedCoupon(null,"Exact original evidence");
+        assertThrows(IllegalArgumentException.class,()->repo.importReviewed(List.of(second),java.util.Map.of(second.couponId(),0L),"test"));assertEquals(1,repo.findByProvider("Walgreens").size());
     }
 
     @Test void permanentCatalogDeletionDetachesPlansAndRemovesUnsharedSource() {

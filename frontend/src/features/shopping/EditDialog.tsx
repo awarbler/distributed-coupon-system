@@ -1,3 +1,4 @@
+import { CouponPicker } from './CouponPicker'
 import { StoreInput } from '../../components/StoreInput'
 import { FormActions } from '../../components/ui'
 import { useState } from 'react'
@@ -9,7 +10,7 @@ import { integer } from '../../api/format'
 import { Modal, Notice } from '../../components/ui'
 import type { Deal, Coupon, Plan, PlanRow, Purchase, Workspace } from '../../types/platform'
 
-export type Edit = { kind: 'plan'; plan?: Plan } | { kind: 'purchase'; row: PlanRow; item?: Purchase; initialDealId?: string } | { kind: 'redeem'; coupon: Coupon } | { kind: 'coupon' }
+export type Edit = { kind: 'plan'; plan?: Plan } | { kind: 'purchase'; row: PlanRow; item?: Purchase; initialDealId?: string } | { kind: 'redeem'; coupon: Coupon } | { kind: 'coupon'; coupon?:Coupon; initialValues?:Record<string,string> }
 interface Request { path: string; method: 'POST' | 'PUT'; body: unknown; revision?: string; key: string }
 export function EditDialog({ edit, api, data, onClose, onSaved, onReview, onEdit, online }:
   { edit: Edit; api: ApiClient; data: Workspace; onClose: () => void; onSaved: () => void; onReview?: () => void; onEdit?: (edit: Edit) => void; online: boolean }) {
@@ -35,9 +36,9 @@ export function EditDialog({ edit, api, data, onClose, onSaved, onReview, onEdit
   const [error, setError] = useState('')
   const [pending, setPending] = useState<Request | null>(null)
   const [busy, setBusy] = useState(false)
-  const availableDeals = [...new Map([...data.deals, ...createdDeals].map(d => [d.dealId, d])).values()]
+  const availableDeals = [...new Map([...data.deals.filter(d=>!d.pricing?.advertisement), ...createdDeals].map(d => [d.dealId, d])).values()]
   const availableCoupons = [...new Map([...data.coupons, ...createdCoupons].map(c => [c.couponId, c])).values()]
-  const title = edit.kind === 'coupon' ? 'Add coupon' : edit.kind === 'plan' ? plan ? 'Edit shopping plan' : 'Create a shopping plan' : edit.kind === 'purchase' ? item ? 'Edit planned item' : 'Add a planned item' : 'Record coupon redemption'
+  const title = edit.kind === 'coupon' ? edit.coupon?'Edit coupon':'Add coupon' : edit.kind === 'plan' ? plan ? 'Edit shopping plan' : 'Create a shopping plan' : edit.kind === 'purchase' ? item ? 'Edit planned item' : 'Add a planned item' : 'Record coupon redemption'
   function build(): Request {
     const key = crypto.randomUUID()
     if (edit.kind === 'plan') return { path: plan ? `/shopping-plans/${plan.planId}` : '/shopping-plans', method: plan ? 'PUT' : 'POST', key, revision: plan?.revision, body: { ...(plan ? {} : { planId: id }), name: name.trim(), retailer: retailer.trim() || null, shoppingDate: when || null } }
@@ -60,7 +61,7 @@ export function EditDialog({ edit, api, data, onClose, onSaved, onReview, onEdit
       if (e instanceof ApiError && e.status >= 400 && e.status < 500 && e.status !== 409) setPending(null)
     } finally { setBusy(false) }
   }
-  return <Modal title={title} onClose={onClose}>{addingCoupon ? <CouponForm api={api} onCancel={() => edit.kind === 'coupon' ? onClose() : setAddingCoupon(false)} onSaved={added => { if (edit.kind === 'coupon') { onSaved(); onClose() } else { setCreatedCoupons([...createdCoupons, ...added]); setCoupons([...coupons, added[0].couponId]); setAddingCoupon(false); onSaved() } }} /> : addingDeal ? <DealForm api={api} onCancel={() => setAddingDeal(false)} onSaved={d => { setCreatedDeals([...createdDeals, d]); setDeal(d.dealId); setPriceSource('DEAL'); if (d.pricing?.type === 'SALE') setSale(d.pricing.promotionalPrice || ''); setAddingDeal(false); onSaved() }} /> : <form onSubmit={submit}>
+  return <Modal title={title} onClose={onClose}>{addingCoupon ? <CouponForm api={api} coupon={edit.kind==='coupon'?edit.coupon:undefined} initialValues={edit.kind==='coupon'?edit.initialValues:undefined} onCancel={() => edit.kind === 'coupon' ? onClose() : setAddingCoupon(false)} onSaved={added => { if (edit.kind === 'coupon') { onSaved(); onClose() } else { setCreatedCoupons([...createdCoupons, ...added]); setCoupons([...coupons, added[0].couponId]); setAddingCoupon(false); onSaved() } }} /> : addingDeal ? <DealForm api={api} onCancel={() => setAddingDeal(false)} onSaved={d => { setCreatedDeals([...createdDeals, d]); setDeal(d.dealId); setPriceSource('DEAL'); if (d.pricing?.type === 'SALE') setSale(d.pricing.promotionalPrice || ''); setAddingDeal(false); onSaved() }} /> : <form onSubmit={submit}>
     {error && <div className="error" role="alert">{error}</div>}
     {pending && !busy && <Notice>The original request is retained. Retry sends the same key and values. Refresh and review the record before making a different change.</Notice>}
     <fieldset disabled={busy || !!pending || !online}>
@@ -130,7 +131,7 @@ value={sku}
         </div>
         <label>Advertised deal <span>(optional association)</span><select value={deal} onChange={e => { setDeal(e.target.value); setPriceSource(e.target.value ? 'DEAL' : 'MANUAL') }}><option value="">No deal linked</option>{availableDeals.map(d => <option key={d.dealId} value={d.dealId}>{d.title}</option>)}</select></label>
         <button type="button" className="text-button" onClick={() => setAddingDeal(true)}>Add a deal</button>
-        <span className="field-label">Linked coupons</span><div className="check-list">{availableCoupons.length ? availableCoupons.map(c => <label key={c.couponId} className="check"><input type="checkbox" checked={coupons.includes(c.couponId)} onChange={e => setCoupons(e.target.checked ? [...coupons, c.couponId] : coupons.filter(id => id !== c.couponId))} />{c.provider}: {c.description}</label>) : <p>No recorded coupons to associate.</p>}</div>
+        <CouponPicker coupons={availableCoupons} store={edit.row.plan.retailer||''} day={edit.row.plan.shoppingDate||''} products={[{id:item?.plannedPurchaseId||id,name,sku,quantity}]} selectedIds={coupons} onSelect={({coupon})=>setCoupons([...new Set([...coupons,coupon.couponId])])} onRemove={id=>setCoupons(coupons.filter(c=>c!==id))} api={api}/>
         <button type="button" className="text-button" onClick={() => setAddingCoupon(true)}>Add coupon</button>
         <p className="muted">Java estimates merchandise, qualifying recorded offers and linked coupons. Tax is excluded; expected rewards are separate from register cost. Pricing source: {priceSource === 'DEAL' ? 'linked deal' : 'manually entered'}.</p>
       </>}

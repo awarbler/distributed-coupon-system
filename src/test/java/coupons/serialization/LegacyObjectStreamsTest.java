@@ -61,9 +61,17 @@ class LegacyObjectStreamsTest {
         var restored=(coupons.shopping.ShoppingPlan.Scenario)read(bytes.toByteArray());assertEquals(scenario,restored);assertTrue(restored.promotions().getFirst().paymentRulesReviewed());assertEquals("REDUCES",restored.promotions().getFirst().giftCardRule());assertTrue(restored.promotions().getFirst().rollingAllowed());
         assertEquals(scenario.estimate(),restored.estimate());
     }
+    @Test void couponImportMetadataRoundTripsAndOlderCouponRecordsRemainReadable() throws Exception {
+        var t=new coupons.promotions.CouponTerms(UUID.randomUUID(),coupons.promotions.CouponTerms.Source.DIGITAL_MANUFACTURER,coupons.promotions.CouponTerms.Discount.DOLLARS,"Walgreens","Walgreens",null,"CREST",List.of(),null,null,null,1,null,null,null,"Original offer",java.time.LocalDate.of(2026,11,8),"weekly.pdf");
+        var bytes=new ByteArrayOutputStream();try(var writer=LegacyObjectStreams.output(bytes)){writer.writeObject(t);}
+        assertEquals(t,read(bytes.toByteArray()));
+        var old=(coupons.promotions.ClippedCoupon)((Map<?,?>)read(fixture())).get("coupon");
+        assertNull(old.coupon().getTerms().originalOfferText());assertNull(old.coupon().getTerms().importedOn());assertNull(old.coupon().getTerms().importSource());
+    }
     @Test void readsExistingSnapshotsPlansDraftsAndHistoryWithoutMigration() throws Exception {
         var values=(Map<?,?>)read(fixture());
         assertEquals(Set.of("state","receipt","draft","plan","purchase","coupon","dealTerms","worksheet","details","couponArray","enumContracts"),values.keySet());
+        assertNull(((coupons.promotions.DealTerms)values.get("dealTerms")).advertisement());
         var plan=values.get("plan");var scenario=plan.getClass().getMethod("scenario").invoke(plan);
         var lines=(List<?>)scenario.getClass().getMethod("items").invoke(scenario);var line=lines.getFirst();
         assertEquals(new BigDecimal("0.12345678901234567890"),line.getClass().getMethod("sale").invoke(line));
@@ -72,16 +80,20 @@ class LegacyObjectStreamsTest {
         byte[] original=fixture();var bytes=new ByteArrayOutputStream();
         try(var writer=LegacyObjectStreams.output(bytes)){writer.writeObject(read(original));}
         var current=descriptors(bytes.toByteArray());
-        Map<String,List<String>> additions=Map.of(
-            "coupons.ShoppingPlan$PlanningSource",List.of("purchaseChannel:Ljava/lang/String;"),
-            "coupons.EarningDetails",List.of("registerRewardType:Ljava/lang/String;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;"),
-            "coupons.RegisterReward",List.of("previousVersions:Ljava/util/List;","correctedBy:Ljava/lang/String;","correctedAt:Ljava/time/Instant;","registerRewardType:Ljava/lang/String;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;"),
-            "coupons.ShoppingPlan$ScenarioPayment",List.of("registerRewardType:Ljava/lang/String;","rewardSourceId:Ljava/util/UUID;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;"),
-            "coupons.ShoppingPlan$ScenarioPromotion",List.of("giftCardRule:Ljava/lang/String;","rollingAllowed:Ljava/lang/Boolean;","earnedRegisterRewardType:Ljava/lang/String;","allowsRegisterRewards:Ljava/lang/Boolean;","allowsEcb:Ljava/lang/Boolean;","paymentRulesReviewed:Ljava/lang/Boolean;","restrictSameRegisterReward:Z","prohibitedRegisterRewardProgram:Ljava/lang/String;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;"),
-            "coupons.ShoppingPlan$Scenario",List.of("walgreensCashIncrement:Ljava/math/BigDecimal;","walgreensCashLimit:Ljava/math/BigDecimal;"),
-            "coupons.repository.GiftCardPromotion",List.of("planningRules:Ljava/util/Map;"),
-            "coupons.repository.PaymentSnap",List.of("giftCardId:Ljava/util/UUID;"),
-            "coupons.repository.ReceiptMeta",List.of("registerNumber:Ljava/lang/String;","transactionNumber:Ljava/lang/String;"));
+        Map<String,List<String>> additions=Map.ofEntries(
+            Map.entry("coupons.CouponTerms",List.of("originalOfferText:Ljava/lang/String;","importedOn:Ljava/time/LocalDate;","importSource:Ljava/lang/String;","offerDetails:Ljava/util/Map;")),
+            Map.entry("coupons.ShoppingPlan$PriceRule",List.of("buyQuantity:Ljava/lang/Integer;","freeQuantity:Ljava/lang/Integer;")),
+            Map.entry("coupons.DealTerms",List.of("advertisement:Lcoupons/DealTerms$WeeklyAdvertisement;")),
+            Map.entry("coupons.ShoppingPlan$PlanningSource",List.of("purchaseChannel:Ljava/lang/String;","advertisedDealIds:Ljava/util/List;")),
+            Map.entry("coupons.EarningDetails",List.of("registerRewardType:Ljava/lang/String;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;")),
+            Map.entry("coupons.RegisterReward",List.of("previousVersions:Ljava/util/List;","correctedBy:Ljava/lang/String;","correctedAt:Ljava/time/Instant;","registerRewardType:Ljava/lang/String;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;")),
+            Map.entry("coupons.ShoppingPlan$ScenarioPayment",List.of("eligibility:Lcoupons/rewards/PaymentEligibility$Rule;","registerRewardType:Ljava/lang/String;","rewardSourceId:Ljava/util/UUID;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;")),
+            Map.entry("coupons.ShoppingPlan$ScenarioPromotion",List.of("giftCardRule:Ljava/lang/String;","rollingAllowed:Ljava/lang/Boolean;","earnedRegisterRewardType:Ljava/lang/String;","allowsRegisterRewards:Ljava/lang/Boolean;","allowsEcb:Ljava/lang/Boolean;","paymentRulesReviewed:Ljava/lang/Boolean;","restrictSameRegisterReward:Z","prohibitedRegisterRewardProgram:Ljava/lang/String;","originProduct:Ljava/lang/String;","originBrand:Ljava/lang/String;","originProgram:Ljava/lang/String;","originPromotion:Ljava/lang/String;")),
+            Map.entry("coupons.ShoppingPlan$Scenario",List.of("walgreensCashIncrement:Ljava/math/BigDecimal;","walgreensCashLimit:Ljava/math/BigDecimal;")),
+            Map.entry("coupons.repository.GiftCardPromotion",List.of("planningRules:Ljava/util/Map;")),
+            Map.entry("coupons.repository.PaymentSnap",List.of("giftCardId:Ljava/util/UUID;")),
+            Map.entry("coupons.repository.ReceiptMeta",List.of("registerNumber:Ljava/lang/String;","transactionNumber:Ljava/lang/String;")));
+        current.computeIfPresent("coupons.ShoppingPlan$ScenarioCoupon",(key,value)->value.replace(",pendingVerification:Z","").replace(":pendingVerification:Z,",":"));
         current.computeIfPresent("coupons.ReceiptWorksheetData",(key,value)->value.replace(",packageDetails:Ljava/util/Map;",""));
         current.computeIfPresent("coupons.repository.AccountAdjustment",(key,value)->value.replace(",details:Ljava/util/Map;",""));
         current.computeIfPresent("coupons.repository.RRUsageLink",(key,value)->value.replace(",previousMatches:Ljava/util/List;",""));

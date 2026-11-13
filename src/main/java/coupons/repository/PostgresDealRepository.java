@@ -22,6 +22,10 @@ public final class PostgresDealRepository implements DealRepository {
         Objects.requireNonNull(d); PostgresRepositorySupport.requireActor(actor,"Recorded by");
         if(d.revision()!=1) throw new IllegalArgumentException("New deal revision must be one.");
         PostgresRepositorySupport.transaction(connections,c->{
+            // An explicit new import may legitimately reproduce the deterministic
+            // identity of a previously deleted bad extraction. Restore it as a new
+            // active revision instead of letting stale archive metadata block it.
+            try(var restore=c.prepareStatement("DELETE FROM deleted_weekly_deals WHERE deal_id=?")){restore.setObject(1,d.dealId());restore.executeUpdate();}
             if(source!=null) {
                 try(var p=c.prepareStatement("INSERT INTO source_artifacts VALUES (?,?,?,?,?,?)")) {
                     p.setObject(1,source.getArtifactId());p.setString(2,source.getLabel());p.setString(3,source.getMediaType());
@@ -30,7 +34,7 @@ public final class PostgresDealRepository implements DealRepository {
             }
             PostgresRepositorySupport.validateSources(c,d.sourceArtifactIds());
             try(PreparedStatement p=c.prepareStatement("INSERT INTO deal_current(deal_id,title,interpreted_terms,retailer,valid_from,valid_through,revision,recorded_by,pricing,manual_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?)")) {
-                bind(p,d);p.setLong(7,1);p.setString(8,actor);p.setBytes(9,d.pricing()==null?null:PostgresRepositorySupport.serialize(d.pricing()));p.setString(10,source==null?null:fingerprint(d));p.executeUpdate();
+                bind(p,d);p.setLong(7,1);p.setString(8,actor);p.setBytes(9,d.pricing()==null?null:PostgresRepositorySupport.serialize(d.pricing()));p.setString(10,source==null&&(d.pricing()==null||d.pricing().advertisement()==null)?null:fingerprint(d));p.executeUpdate();
             } catch(SQLException e){if("23505".equals(e.getSQLState()))throw new IllegalArgumentException("Deal ID already exists.",e);throw e;}
             PostgresRepositorySupport.insertSources(c,"deal_sources","deal_id",d.dealId(),d.sourceArtifactIds());
             insertHistory(c,d,actor,"initial interpretation"); return null;
@@ -70,6 +74,7 @@ public final class PostgresDealRepository implements DealRepository {
     private static String fingerprint(AdvertisedDeal d)throws java.security.NoSuchAlgorithmException {
         var t=d.pricing();var values=new ArrayList<Object>();
         values.add(d.retailer()==null?null:d.retailer().trim().toLowerCase(Locale.ROOT));values.add(d.title().trim().toLowerCase(Locale.ROOT));values.add(d.interpretedTerms().trim());values.add(d.validFrom());values.add(d.validThrough());
+        if(t!=null&&t.advertisement()!=null){var fields=new TreeMap<>(t.advertisement().fields());for(var sourceField:List.of("sourceName","page","originalText"))fields.remove(sourceField);values.add(fields);values.add(t.advertisement().draftJson().trim());}
         if(t!=null){values.addAll(Arrays.asList(t.type(),t.productDescription(),t.minimumQuantity(),t.freeQuantity(),t.repeatable(),t.limit(),t.qualifications(),t.loyaltyRequirement(),t.exclusions(),t.cheapestItemsDiscounted()));for(var n:new java.math.BigDecimal[]{t.regularUnitPrice(),t.promotionalPrice(),t.minimumSpend(),t.rewardAmount()})values.add(n==null?null:n.stripTrailingZeros().toPlainString());values.add(t.qualifyingSkus().stream().sorted().toList());}
         return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(values.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
     }

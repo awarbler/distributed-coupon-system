@@ -1,5 +1,6 @@
+import { ProductCouponPicker } from './CouponPicker'
 import { useState } from 'react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiClient } from '../../api/client'
@@ -195,16 +196,16 @@ describe('approved shopping notebook',()=>{
     function Harness(){const [value,setValue]=useState(input);return <QuickDealTools api={api} scenario={value} data={data} onChange={v=>{saved=v;setValue(v)}} store="Walgreens" day="2026-10-19"/>}
     render(<Harness/>);await new Promise(resolve=>setTimeout(resolve,500))
     expect(screen.queryByText(/attached automatically/)).not.toBeInTheDocument();expect(saved).toBeUndefined()
-    expect(input.coupons[0].amount).toBe('5');expect(mutate).not.toHaveBeenCalled()
+    expect(input.coupons[0].amount).toBe('5');expect(mutate.mock.calls.every(call=>call[0]==='/shopping-plans/match-offers')).toBe(true)
   })
   it('does not stack recorded coupons onto unallocated advertised manufacturer amounts',async()=>{
     const api=new ApiClient('test'),data=workspace(),input=scenario()
     data.coupons=[{couponId:'saved',provider:'Brand',externalId:null,status:'CLIPPED',clippedOn:'2026-10-01',redeemedOn:null,redeemedTransactionId:null,revision:'1',description:'My coupon',discountAmount:'3',couponType:'MANUFACTURER',expirationDate:'2026-10-31'}]
     input.coupons=[{id:'advertised',description:'Advertised manufacturer coupons',amount:'8',requiredQuantity:'1',lineIds:[],savedCouponId:null,kind:'MANUFACTURER',wholeReceipt:true}]
-    const mutate=vi.spyOn(api,'mutate')
-    render(<QuickDealTools api={api} scenario={input} data={data} onChange={vi.fn()} store="CVS" day="2026-10-27"/>)
-    expect(await screen.findByText(/same discount is not counted twice/)).toBeInTheDocument()
-    expect(mutate).not.toHaveBeenCalled()
+    const mutate=vi.spyOn(api,'mutate').mockResolvedValue([]),change=vi.fn(),user=userEvent.setup()
+    render(<ProductCouponPicker product={input.items[0]} api={api} scenario={input} coupons={data.coupons} onChange={change} store="Walgreens" day="2026-10-27"/>)
+    await user.click(screen.getByText(/^Find \/ Change Coupon/));await user.click(screen.getByLabelText('Search all my coupons'));await user.click(screen.getByRole('button',{name:'Select coupon'}));expect(await screen.findByText(/Unallocated advertised totals cannot be matched automatically/)).toBeInTheDocument();expect(change).not.toHaveBeenCalled()
+    expect(mutate.mock.calls.every(call=>call[0]==='/shopping-plans/match-offers')).toBe(true)
   })
   it('sale buttons preserve the entered unit price and attach the rule for backend calculation',async()=>{
     const change=vi.fn(),user=userEvent.setup(),line=scenario().items[0]
@@ -272,5 +273,20 @@ it('loads the source image even when reading fails, preserving products for manu
  expect(screen.queryByRole('dialog',{name:'Add screenshot'})).not.toBeInTheDocument()
  expect(screen.getByRole('img',{name:'Original deal screenshot'})).toHaveAttribute('src',`data:image/png;base64,${btoa('photo')}`)
  expect(saved?.items).toEqual(input.items)
- expect(mutate).toHaveBeenCalledWith('/shopping-plans/import-preview','POST',{mediaType:'image/png',contentBase64:btoa('photo'),text:null},expect.any(String))
+ expect(mutate).toHaveBeenCalledWith('/shopping-plans/import-preview','POST',{mediaType:'image/png',contentBase64:btoa('photo'),text:null},expect.any(String),undefined,expect.any(AbortSignal))
+})
+
+it('puts the collapsed picker inside product Coupons and keeps existing manual fields unchanged',async()=>{
+ const user=userEvent.setup(),data=workspace(),api=new ApiClient('test'),saved=row('saved-idea','Venus idea');saved.plan.retailer='Walgreens';saved.plan.scenario!.items[0].name='Venus Razor';saved.plan.scenario!.coupons=[{id:'manual',description:'My entered coupon',amount:'4',requiredQuantity:'1',lineIds:['line'],savedCouponId:null,kind:'MANUFACTURER'}];data.coupons=[{couponId:'venus-offer',provider:'Walgreens',description:'Gillette or Venus $4 off 1',discountAmount:'4',requiredQuantity:'1',couponType:'MANUFACTURER',status:'AVAILABLE',expirationDate:'2099-11-30',externalId:null,clippedOn:null,redeemedOn:null,redeemedTransactionId:null,revision:'1',terms:{source:'DIGITAL_MANUFACTURER',discount:'DOLLARS',storeRestriction:'Walgreens',productOrBrand:'Venus'}}];vi.spyOn(api,'mutate').mockImplementation(async path=>path.endsWith('/match-offers')?[]:{items:[],coupons:[],promotions:[],selectedOop:'0',potentialRewards:'0'});render(<PlanScenarioEditor plan={saved.plan} data={data} api={api} writable onClose={vi.fn()} onReceipt={vi.fn()}/>);expect(document.querySelector('.quick-deal-tools .coupon-picker')).toBeNull();expect(screen.getByLabelText('Coupon description 1')).toHaveValue('My entered coupon');expect(screen.getByLabelText('Coupon amount 1')).toHaveValue('4');expect(screen.queryByText('Gillette or Venus $4 off 1')).not.toBeInTheDocument();const picker=screen.getByLabelText('Coupons for Venus Razor');await user.click(within(picker).getByText(/^Find \/ Change Coupon/));expect(within(picker).getByText('Gillette or Venus $4 off 1')).toBeInTheDocument();await user.click(within(picker).getByText(/^Find \/ Change Coupon/));expect(screen.getByLabelText('Coupon description 1')).toHaveValue('My entered coupon');expect(screen.getByLabelText('Coupon amount 1')).toHaveValue('4');expect(screen.queryByLabelText('Search coupons')).not.toBeInTheDocument();
+})
+
+it('cancels screenshot reading, preserves evidence, and ignores a late reader response',async()=>{
+ const api=new ApiClient('test'),user=userEvent.setup();let finish!:(value:unknown)=>void
+ const mutate=vi.spyOn(api,'mutate').mockImplementation(()=>new Promise(resolve=>{finish=resolve}))
+ let saved:PlanScenario|undefined
+ function Harness(){const [value,setValue]=useState<PlanScenario>({...scenario(),items:[]});return <QuickDealTools api={api} scenario={value} data={workspace()} store="Walgreens" day="2026-11-09" initialMode="screenshot" onChange={next=>{saved=next;setValue(next)}}/>}
+ render(<Harness/>);const photo=new File(['photo'],'deal.png',{type:'image/png'});await user.upload(screen.getByLabelText('Deal photos — select companion images together'),photo);await screen.findByText(/Attached: deal.png/);await user.click(screen.getByRole('button',{name:'Add to this plan'}));await screen.findByRole('button',{name:'Cancel reading'});await user.click(screen.getByRole('button',{name:'Cancel reading'}));
+ const args=mutate.mock.calls[0];expect((args[5] as AbortSignal).aborted).toBe(true);expect(saved?.source?.contentBase64).toBe(btoa('photo'));expect(saved?.items).toEqual([])
+ finish({items:[{id:'late',name:'Late item',regular:'99',sale:null,quantity:'1'}],coupons:[],promotions:[],unresolved:[],source:{text:'',mediaType:'image/png',contentBase64:btoa('photo')}})
+ await waitFor(()=>expect(screen.getByRole('button',{name:'Re-read screenshot offers'})).toBeEnabled());expect(saved?.items).toEqual([])
 })

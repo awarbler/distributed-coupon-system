@@ -10,6 +10,39 @@ import static org.junit.jupiter.api.Assertions.*;
 class WeeklyDealPlannerTest {
     static BigDecimal n(String n){return new BigDecimal(n);}
     static WeeklyDealPlanner.Candidate deal(String id,String price,String earning){var item=new ShoppingPlan.Line(UUID.randomUUID(),id,null,null,n(price),1);var reward=new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),"Expected reward","REGISTER_REWARD",n(earning),1,BigDecimal.ZERO,"BEFORE_COUPONS",true,List.of(item.id()),false,true,false,null,null,null,null,null);return new WeeklyDealPlanner.Candidate(id,id,"Walgreens",new ShoppingPlan.Scenario(List.of(item),List.of(),List.of(reward),n("0"),n("0"),n("0"),n("0"),null,"CASH",""));}
+    @Test void rewardEarningModePrioritizesVerifiedEarningsBeforeCash() {
+        var candidates=List.of(deal("cheap","2","0"),deal("earner","8","10"));
+        var result=WeeklyDealPlanner.plan(candidates,List.of(),n("0"),n("8"),"MAX_REWARDS",DAY);
+        assertEquals(n("8"),result.get("cash"));assertEquals(n("10.08"),result.get("earnings"));
+        assertEquals(n("0"),result.get("registerRewardsUsedValue"));
+    }
+    @Test void rewardModeSeparatesRebatesAndNeverFundsTheirOriginatingTransaction() {
+        var base=deal("rebate","10","2");var source=base.scenario();var line=source.items().getFirst();
+        var rebate=new ShoppingPlan.ScenarioPromotion(UUID.randomUUID(),"Recorded Ibotta offer","IBOTTA",n("3"),1,n("0"),"BEFORE_COUPONS",true,List.of(line.id()),false,true,false,null,null,null,null,null,true);
+        var scenario=new ShoppingPlan.Scenario(source.items(),List.of(),List.of(source.promotions().getFirst(),rebate),n("0"),n("0"),n("0"),n("0"),null,"CASH","");
+        var result=WeeklyDealPlanner.plan(List.of(new WeeklyDealPlanner.Candidate("rebate","Rebate offer","Walgreens",scenario)),List.of(),n("0"),n("20"),"MAX_REWARDS",DAY);
+        var step=(WeeklyDealPlanner.Step)((List<?>)result.get("steps")).getFirst();
+        assertEquals(n("10"),result.get("cash"));assertEquals(n("2"),step.estimate().get("expectedRegisterRewards"));assertEquals(n("3"),step.estimate().get("cashRebates"));assertEquals(n("0"),step.estimate().get("registerRewardsUsed"));assertEquals(n("5.10"),result.get("earnings"));
+    }
+    @Test void blankPreferenceComparesExistingStrategies() {
+        var result=WeeklyDealPlanner.plan(List.of(deal("a","3","2")),List.of(),n("0"),n("8"),"",DAY);
+        assertEquals(6,((List<?>)result.get("alternatives")).size());assertEquals(n("3"),result.get("cash"));
+    }
+    @Test void reconcilesBudgetWithDisplayedCheckoutCents(){
+        var a=deal("a","0.005","0");var b=deal("b","0.50","0");
+        var required=List.of(new WeeklyDealPlanner.RequiredItem(a.id(),a.scenario().items().getFirst().id(),1),new WeeklyDealPlanner.RequiredItem(b.id(),b.scenario().items().getFirst().id(),1));
+        var result=WeeklyDealPlanner.plan(List.of(a,b),List.of(),n("0"),n("18.40"),"REWARDS",DAY,required,false);
+        assertEquals(0,n("0.51").compareTo((BigDecimal)result.get("cash")));assertEquals(0,n("17.89").compareTo((BigDecimal)result.get("remaining")));
+    }
+    @Test void verifiedNetworkCardUsesRecordedAcceptanceAcrossRetailers(){
+        var rule=new coupons.rewards.PaymentEligibility.Rule(UUID.randomUUID(),List.of("Walgreens","CVS","Walmart"),List.of(),"Visa",DAY.plusDays(30),DAY,true,n("50"));
+        for(String store:List.of("Walgreens","CVS","Walmart"))assertEquals("Met",coupons.rewards.PaymentEligibility.check(store,"GIFT_CARD",rule,n("10"),DAY));
+        assertEquals("Not Met",coupons.rewards.PaymentEligibility.check("Walgreens","GIFT_CARD",rule,n("51"),DAY));
+        assertEquals("Needs Review",coupons.rewards.PaymentEligibility.check("Walgreens","GIFT_CARD",null,n("10"),DAY));
+        assertEquals("Not Met",coupons.rewards.PaymentEligibility.check("Walgreens","GIFT_CARD",rule,n("10"),DAY.plusDays(31)));
+        for(String type:List.of("REGISTER_REWARD","WALGREENS_CASH"))assertEquals("Not Met",coupons.rewards.PaymentEligibility.check("CVS",type,null,n("1"),DAY));
+        assertEquals("Not Met",coupons.rewards.PaymentEligibility.check("Walgreens","ECB",null,n("1"),DAY));assertEquals("Not Met",coupons.rewards.PaymentEligibility.check("CVS","WALMART_CASH",null,n("1"),DAY));
+    }
     @SuppressWarnings("unchecked") @Test void respectsBudgetAndDoesNotSpendSameRewardTwice(){
         var rr=new WeeklyDealPlanner.Reward("rr","Palmolive","REGISTER_REWARD","Walgreens",n("2"),LocalDate.parse("2026-11-05"),"MANUFACTURER",null,"Other",null,null);
         var result=WeeklyDealPlanner.plan(List.of(deal("a","4","3"),deal("b","4","3")),List.of(rr),n("0"),n("5"),"REWARDS",LocalDate.parse("2026-11-04"));
@@ -18,6 +51,12 @@ class WeeklyDealPlannerTest {
     @Test void expiredRewardIsNotSpendableAndNewEarningsDoNotFundPurchase(){var rr=new WeeklyDealPlanner.Reward("old","Old","REGISTER_REWARD","Walgreens",n("10"),LocalDate.parse("2026-11-01"));var result=WeeklyDealPlanner.plan(List.of(deal("a","25","100")),List.of(rr),n("0"),n("20"),"REWARDS",LocalDate.parse("2026-11-04"));assertTrue(((List<?>)result.get("steps")).isEmpty());}
     @Test void lowerOopPrecedesExpirationPriority(){var early=new WeeklyDealPlanner.Reward("early","Early","REGISTER_REWARD","Walgreens",n("2"),LocalDate.parse("2026-11-05"),"MANUFACTURER",null,"Other",null,null);var later=new WeeklyDealPlanner.Reward("later","Later","REGISTER_REWARD","Walgreens",n("4"),LocalDate.parse("2026-11-20"),"MANUFACTURER",null,"Other",null,null);var result=WeeklyDealPlanner.plan(List.of(deal("a","4","1")),List.of(later,early),n("0"),n("20"),"LOWEST_OOP",LocalDate.parse("2026-11-04"));assertEquals(Set.of("later"),result.get("rewardsUsed"));}
     @Test void bothPreferencesMinimizeOopBeforeExpectedEarnings(){var candidates=List.of(deal("cheap","2","0"),deal("earner","8","10"));var low=WeeklyDealPlanner.plan(candidates,List.of(),n("0"),n("8"),"LOWEST_OOP",LocalDate.now());var rewards=WeeklyDealPlanner.plan(candidates,List.of(),n("0"),n("8"),"REWARDS",LocalDate.now());assertEquals(n("2"),low.get("cash"));assertEquals(n("2"),rewards.get("cash"));}
+    @Test void maximizeRegisterRewardsReportsUsedEarnedAndNetSeparately(){
+        var expiring=new WeeklyDealPlanner.Reward("rr5","Expiring RR","REGISTER_REWARD","Walgreens",n("5"),DAY.plusDays(1),"MANUFACTURER",null,"Other",null,null);
+        var result=WeeklyDealPlanner.plan(List.of(deal("replacement","5","4")),List.of(expiring),n("0"),n("5"),"MAX_REGISTER_REWARDS",DAY);
+        assertEquals(Set.of("rr5"),result.get("rewardsUsed"));assertEquals(n("0"),result.get("cash"));
+        assertEquals(n("5"),result.get("registerRewardsUsedValue"));assertEquals(n("4"),result.get("expectedRegisterRewards"));assertEquals(n("-1"),result.get("netRegisterRewardChange"));
+    }
 
     static final LocalDate DAY=LocalDate.parse("2026-11-04");
     static WeeklyDealPlanner.Candidate restricted(String name,String price,String threshold,String basis,boolean wc,boolean same,String program,String product,String promotion){
@@ -285,6 +324,14 @@ class WeeklyDealPlannerTest {
         var required=deal("required","25","1");var cheap=deal("cheap","1","100");
         var result=selected(List.of(cheap,required),List.of(must(required,2)),true,List.of(),"0","10");
         assertEquals("required",step(result).id());assertEquals(2,step(result).scenario().items().getFirst().quantity());assertEquals(false,result.get("affordable"));assertEquals(true,result.get("requirementsMet"));assertEquals(0,n("50").compareTo((BigDecimal)result.get("cash")));assertEquals(0,n("40").compareTo((BigDecimal)result.get("additionalCashNeeded")));
+    }
+    @Test void blockedRequiredItemKeepsHumanReadableNameAndNoUuidInIssue(){
+        var id=UUID.randomUUID();var blocked=new WeeklyDealPlanner.Candidate("plan","Edited trip","Walgreens",null);
+        var result=selected(List.of(blocked),List.of(new WeeklyDealPlanner.RequiredItem("plan",id,2,"Jiffy Corn Muffin Mix")),false,List.of(),"0","20");assertEquals(false,result.get("requirementsMet"));assertTrue(result.get("issues").toString().contains("Jiffy Corn Muffin Mix"));assertFalse(result.get("issues").toString().contains(id.toString()));assertNull(result.get("cash"));
+    }
+    @Test void priceLabelsCannotBecomeVerifiedProducts(){
+        var candidate=deal("Regular $4.99 Sale :","3.49","0");var item=candidate.scenario().items().getFirst();
+        var result=selected(List.of(candidate),List.of(new WeeklyDealPlanner.RequiredItem(candidate.id(),item.id(),1,"Product name needs correction")),false,List.of(),"0","20");assertEquals(false,result.get("requirementsMet"));assertTrue(result.get("issues").toString().contains("price label"));assertNull(result.get("cash"));
     }
     @Test void missingMustBuyProductAndMissingPricesAreReportedWithoutSubstitution(){
         var available=deal("available","2","10");var missingId=UUID.randomUUID();

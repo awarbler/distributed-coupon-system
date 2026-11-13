@@ -1,5 +1,5 @@
 import { RewardExpirationAlerts } from './features/rewards/RewardExpirationAlerts'
-import { FormActions } from './components/ui'
+import { DisclosureSummary, FormActions } from './components/ui'
 import type { ReceiptDraftState } from './features/receipts/ReceiptCreate'
 import { useCallback, useEffect, useState } from 'react'
 import { ClipboardList, Download, LayoutDashboard, Leaf, LogOut, Menu, Package, ReceiptText, RefreshCw, ShieldCheck, ShoppingBag, Ticket, Wallet, X } from 'lucide-react'
@@ -37,6 +37,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false)
   const [page, setPage] = useState<Page>(currentPage)
   const [rewardsNavigationKey,setRewardsNavigationKey]=useState(0)
+  const [rewardProvider,setRewardProvider]=useState('')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [edit, setEdit] = useState<Edit | null>(null)
   const [checkoutPlan, setCheckoutPlan] = useState<Plan | null>(null)
@@ -68,7 +69,7 @@ export default function App() {
     setRefreshing(true); setError('')
     try { setData(await api.workspace()) } catch (e) { setError((e as Error).message) } finally { setRefreshing(false) }
   }, [api])
-  function navigate(requested: Page) { if(requested==='rewards')setRewardsNavigationKey(value=>value+1); const p=requested==='rebates'?'deals':requested; setPage(p); window.history.pushState(null, '', `#${p}`); setMobileMenu(false) }
+  function navigate(requested: Page) {setRewardProvider(''); if(requested==='rewards')setRewardsNavigationKey(value=>value+1); const p=requested==='rebates'?'deals':requested; setPage(p); window.history.pushState(null, '', `#${p}`); setMobileMenu(false) }
   const closeEdit = useCallback(() => setEdit(null), [])
   function openNestedEditor(next: Edit) {
     if (edit?.kind === 'plan' && edit.plan) {
@@ -91,7 +92,7 @@ export default function App() {
   const closeSettings = useCallback(() => setSettings(false), [])
   function logout() { setSavedReceiptDraft(null);setPlanReceipt(null);setApi(null); setData(null); setToken(''); setError(''); setEdit(null); setReceipt(null); setCreating(false); setSettings(false); setMessage('') ; setCheckoutPlan(null)}
   async function installApp() { if (install) { await install.prompt(); await install.userChoice; setInstall(null) } }
-  if (!api || !data) return <main className="connect-page"><section className="connect-story"><Brand /><div><span className="eyebrow">Shop thoughtfully. Keep more.</span><h1>A clearer picture<br />of every grocery trip.</h1><p>Your shopping plans, receipts, coupons, and rewards — together in one personal workspace.</p><div className="story-icons"><span><ClipboardList />Plan your trip</span><span><ReceiptText />Know your spending</span><span><Wallet />Track your rewards</span></div></div><small>One workspace. Every little saving.</small></section><section className="connect-form"><span className="icon-tile mint"><ShieldCheck size={26} /></span><h2>Welcome to your workspace</h2><p>Connect to your Grocery Intelligence API to get started.</p>{!online && <Notice>You’re offline. Reconnect to load your records. Financial data is not stored for offline use.</Notice>}{error && <div className="error" role="alert">{error}</div>}<form onSubmit={connect}><label>API access token<input type="password" autoComplete="off" required value={token} onChange={e => setToken(e.target.value)} disabled={connecting} placeholder="Enter your access token" /></label><button className="primary full-width" disabled={connecting || !online}>{connecting ? 'Connecting…' : 'Open my workspace'}</button></form><p className="security-note"><ShieldCheck size={15} />Your token stays in memory. It is not saved on this device.</p><details><summary>Connection & installation help</summary><p>Start the Java API and use its configured access token. In development, Vite forwards API requests to the local backend.</p><p>To install on iPhone, use Share → Add to Home Screen. Installation requires HTTPS, or localhost for desktop development.</p></details></section></main>
+  if (!api || !data) return <main className="connect-page"><section className="connect-story"><Brand /><div><span className="eyebrow">Shop thoughtfully. Keep more.</span><h1>A clearer picture<br />of every grocery trip.</h1><p>Your shopping plans, receipts, coupons, and rewards — together in one personal workspace.</p><div className="story-icons"><span><ClipboardList />Plan your trip</span><span><ReceiptText />Know your spending</span><span><Wallet />Track your rewards</span></div></div><small>One workspace. Every little saving.</small></section><section className="connect-form"><span className="icon-tile mint"><ShieldCheck size={26} /></span><h2>Welcome to your workspace</h2><p>Connect to your Grocery Intelligence API to get started.</p>{!online && <Notice>You’re offline. Reconnect to load your records. Financial data is not stored for offline use.</Notice>}{error && <div className="error" role="alert">{error}</div>}<form onSubmit={connect}><label>API access token<input type="password" autoComplete="off" required value={token} onChange={e => setToken(e.target.value)} disabled={connecting} placeholder="Enter your access token" /></label><button className="primary full-width" disabled={connecting || !online}>{connecting ? 'Connecting…' : 'Open my workspace'}</button></form><p className="security-note"><ShieldCheck size={15} />Your token stays in memory. It is not saved on this device.</p><details><DisclosureSummary>Connection & installation help</DisclosureSummary><p>Start the Java API and use its configured access token. In development, Vite forwards API requests to the local backend.</p><p>To install on iPhone, use Share → Add to Home Screen. Installation requires HTTPS, or localhost for desktop development.</p></details></section></main>
   const writable = data.canWrite && online && !refreshing
   return <div className="app-shell" data-original-shopping={page==='shopping'&&!creating&&!receipt?'true':undefined}>
     <a className="skip-link" href="#main-content" onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus() }}>Skip to content</a>
@@ -103,8 +104,8 @@ export default function App() {
         {!data.canWrite && <Notice>Read-only access. A write-authorized token is required to save changes.</Notice>}
         {error && <div className="error" role="alert">{error} Showing previously loaded data.<button className="text-button" onClick={() => void refresh()}>Try refresh</button></div>}
         {message && <div className="success" role="status">{message}<button className="icon-button" aria-label="Dismiss message" onClick={() => setMessage('')}><X size={16} /></button></div>}
-        {page!=='dashboard'&&<RewardExpirationAlerts rewards={data.expiringRewards} visible={false} onReceipt={setReceipt} onRewards={()=>navigate('rewards')}/>}
-        {refreshing && !data ? <Loading /> : <WorkspacePages rewardsNavigationKey={rewardsNavigationKey}
+        {page!=='dashboard'&&<RewardExpirationAlerts rewards={data.expiringRewards} visible={false} onReceipt={setReceipt} onRewards={provider=>{navigate('rewards');setRewardProvider(provider??'')}}/>}
+        {refreshing && !data ? <Loading /> : <WorkspacePages rewardProvider={rewardProvider} onRewardAccount={provider=>{navigate('rewards');setRewardProvider(provider);setRewardsNavigationKey(v=>v+1)}} rewardsNavigationKey={rewardsNavigationKey}
           data={data}
           api={api}
           onChanged={() => void refresh()}
@@ -140,7 +141,7 @@ export default function App() {
       />
     )}
     {creating && <ReceiptCreate workspace={data??undefined} onOpenExisting={id=>{setCreating(false);setSavedReceiptDraft(null);setPlanReceipt(null);setReceipt(id)}} savedDraft={savedReceiptDraft??undefined} onDraftSaved={()=>void refresh()} planning={planReceipt??undefined} coupons={data?.coupons} products={data?.productLookup} offers={data?.rewardOffers} api={api} enabled={writable} onClose={closeCreate} onReview={reviewSaved} onSaved={id => { setCreating(false);setSavedReceiptDraft(null);setPlanReceipt(null); setReceipt(id); setMessage('Receipt saved.'); void refresh() }} />}
-    {receipt && <ReceiptDetail offers={data?.rewardOffers} id={receipt} api={api} onClose={closeReceipt} writable={writable} onChanged={() => void refresh()} />}
+    {receipt && <ReceiptDetail couponCatalog={data?.coupons} offers={data?.rewardOffers} id={receipt} api={api} onClose={closeReceipt} writable={writable} onChanged={() => void refresh()} />}
     {settings && <Modal title="Your workspace" onClose={closeSettings}><p>This connection serves one owner’s database. The web app does not read or migrate local receipt files.</p><div className="key-values"><div><span>Access</span><strong>{data.canWrite ? 'Owner / write' : 'Read only'}</strong></div><div><span>Data storage</span><strong>Backend database</strong></div><div><span>Offline financial storage</span><strong>Disabled</strong></div></div>{install ? <button className="primary" onClick={() => void installApp()}><Download size={18} />Install application</button> : <p className="muted">Install using your browser’s app menu. On iPhone: Share → Add to Home Screen. HTTPS is required outside localhost.</p>}<FormActions><button className="secondary" onClick={logout}><LogOut size={17} />Disconnect and clear screen</button></FormActions></Modal>}
   </div>
 }

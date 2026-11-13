@@ -6,6 +6,7 @@ package coupons.promotions; // Declare the package containing the coupon-system 
 public enum CouponType { // Define the valid classifications that a Coupon can use.
 
     MANUFACTURER, // Represent a manufacturer-funded coupon.
+    OTHER, // Classification not stated in the source.
     STORE // Represent a store coupon.
 
 }

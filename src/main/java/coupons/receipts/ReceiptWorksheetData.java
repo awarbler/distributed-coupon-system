@@ -13,7 +13,12 @@ public record ReceiptWorksheetData(Map<UUID,Group> earningGroups, Map<UUID,Use> 
             unit=normalize(unit);itemUnit=normalize(itemUnit);secondaryUnit=normalize(secondaryUnit);
             if(size!=null&&unit==null||secondarySize!=null&&secondaryUnit==null||itemCount!=null&&itemUnit==null)throw new IllegalArgumentException("Select the unit for each recorded package measure.");
         }
-        private static String normalize(String value){if(value==null||value.isBlank())return null;var v=value.trim().toLowerCase(Locale.ROOT);if(!Set.of("fl oz","oz","ml","l","g","kg","loads","rolls","sheets","items","toothbrushes").contains(v))throw new IllegalArgumentException("Choose a supported package unit.");return v;}
+        private static String normalize(String value){
+            if(value==null||value.isBlank())return null;
+            var v=value.trim().toLowerCase(Locale.ROOT);
+            if(v.length()>50)throw new IllegalArgumentException("Package or weight unit must be 50 characters or fewer.");
+            return v;
+        }
     }
     public enum Group { CASH, GIFT_CARD, STORE_REWARD, POINTS_VALUE }
     public record Use(List<UUID> lineIds, BigDecimal originalUnits, boolean checkoutDeduction) implements Serializable {

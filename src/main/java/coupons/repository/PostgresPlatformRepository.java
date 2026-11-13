@@ -349,7 +349,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                     reported.add(fields("transactionId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "date", r.transaction().getObservations().purchaseDate(), "status", r.status(), "values", r.transaction().getObservations().walgreensCash()));
                 }
             }
-            return fields("manualRewards",state.balances().adjustments().stream().filter(a->a.reason().startsWith("Member reward:")).map(a->AccountAdjustment.currentMember(a,state.balances().adjustments())).map(a->fields("id",a.eventId(),"provider",a.provider(),"description",a.reason().substring("Member reward: ".length()),"amount",a.usdChange(),"date",a.date(),"expirationDate",a.expirationDate(),"status",a.usdChange()!=null&&a.usdChange().signum()==0?"VOID":"ACTIVE")).toList(),"expiringRewards", expiringRewards(state,records,day), "rewardInstruments", RewardInstrumentRepository.list(c), "rewardsOverview", rewardsOverview(summary,records,day,balanceProviders),"productLookup", productLookup(records), "accountActivity", withRecordedTimes(c,state,AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards())), "receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", historicalRewardOffers(records), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "sortTime", ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).map(LocalTime::toString).orElse(null), "totals", totals(r))).toList(),
+            return fields("deletedWeeklyDealIds",WeeklyDealArchive.deletedIds(c),"manualRewards",state.balances().adjustments().stream().filter(a->a.reason().startsWith("Member reward:")).map(a->AccountAdjustment.currentMember(a,state.balances().adjustments())).map(a->fields("id",a.eventId(),"provider",a.provider(),"description",a.reason().substring("Member reward: ".length()),"amount",a.usdChange(),"date",a.date(),"expirationDate",a.expirationDate(),"status",a.usdChange()!=null&&a.usdChange().signum()==0?"VOID":"ACTIVE")).toList(),"expiringRewards", expiringRewards(state,records,day), "rewardInstruments", RewardInstrumentRepository.list(c), "rewardsOverview", rewardsOverview(summary,records,day,balanceProviders),"productLookup", productLookup(records), "accountActivity", withRecordedTimes(c,state,AccountActivityView.project(summary,records,state.rrUsageLinks().values(),state.rewards())), "receiptEarnings", records.stream().flatMap(r -> r.transaction().getObservations().earnings().stream().map(v -> fields("receiptId", r.transactionId(), "receiptNumber", r.metadata() == null ? null : r.metadata().receiptNumber(), "receiptStatus", r.status(), "earning", v))).toList(), "rewardOffers", historicalRewardOffers(records), "asOf", day, "receipts", records.stream().map(r -> fields("transactionId", r.transactionId(), "revision", r.revision(), "status", r.status(), "metadata", r.metadata(), "date", r.transaction().getObservations().purchaseDate(), "time", r.transaction().getObservations().printedTime(), "sortTime", ReceiptTimeInput.parse(r.transaction().getObservations().printedTime()).map(LocalTime::toString).orElse(null), "totals", totals(r))).toList(),
                     "receiptPeriods", receiptPeriods(records), "summaries", fields("all", savings(records), "day", savings(SavingsReport.day(records, day)), "week", savings(ReceiptWorksheetReport.week(records, day)), "month", savings(SavingsReport.month(records, YearMonth.from(day)))), "plans", planRows, "coupons", coupons, "deals", deals, "rebates", rebates, "inventory", inventory, "balances", balances, "reportedBalances", reported,
                     "unavailableRewardSources",state.balances().adjustments().stream().filter(AccountAdjustment::unavailable).filter(a->a.unavailableSource()!=null).map(a->fields("sourceId",a.unavailableSource(),"date",a.date(),"reason",a.reason())).toList(),"accountHistory", state.balances(), "movements", summary.movements(records), "promotions", state.giftCardPromotions().values().stream().map(p->rebateProgress(p,state.history().values())).toList(), "rrMatches", state.rrUsageLinks().values(), "rewardRemovals", state.rewardVoids().values());
         });
@@ -455,7 +455,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
                 String sku=item.getProductCode();
                 if(sku==null || sku.isBlank()) continue;
                 String key=sku.trim().toLowerCase(java.util.Locale.ROOT)+"\n"+item.getProductName().trim().toLowerCase(java.util.Locale.ROOT);
-                result.putIfAbsent(key,fields("sku",sku.trim(),"description",item.getProductName(),"regularPrice",item.getRegularUnitPrice(),
+                result.putIfAbsent(key,fields("sku",sku.trim(),"description",item.getProductName(),"regularPrice",item.getRegularUnitPrice(),"retailer",r.metadata()==null?null:r.metadata().retailer(),
                         "purchaseDate",r.transaction().getObservations().purchaseDate(),"receiptNumber",r.metadata()==null?null:r.metadata().receiptNumber()));
             }
         });
@@ -557,6 +557,30 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         return artifact;
     }
 
+    @Override public PlannedPurchase saveWeeklyPurchase(UUID planId,UUID requestedId,String sourceItem,String name,String sku,int quantity,BigDecimal regular,BigDecimal sale,String priceSource,UUID dealId,List<UUID> couponIds,String actor) {
+        PostgresRepositorySupport.requireActor(actor,"Recorded by");
+        for(var coupon:couponIds)new PostgresClippedCouponRepository(db).findById(coupon).orElseThrow();
+        if(dealId==null||sourceItem==null||sourceItem.isBlank()||sourceItem.length()>100)throw new IllegalArgumentException("Select the saved advertisement product.");
+        new PostgresDealRepository(db).findById(dealId).orElseThrow();
+        UUID id=UUID.nameUUIDFromBytes(("weekly-purchase:"+planId+":"+dealId+":"+sourceItem).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return transaction(db,c->{
+            ShoppingPlan plan;
+            try(var p=c.prepareStatement("SELECT payload FROM shopping_plan_current WHERE plan_id=? FOR UPDATE")){p.setObject(1,planId);try(var rows=p.executeQuery()){if(!rows.next())throw new NoSuchElementException("Shopping plan no longer exists.");plan=PostgresRepositorySupport.deserialize(rows.getBytes(1),ShoppingPlan.class);}}
+            if(plan.purchasedReceiptId()!=null)throw new IllegalArgumentException("Choose an unfinished shopping plan.");
+            try(var p=c.prepareStatement("SELECT payload FROM planned_purchase_current WHERE plan_id=?")){p.setObject(1,planId);try(var rows=p.executeQuery()){while(rows.next()){
+                var old=PostgresRepositorySupport.deserialize(rows.getBytes(1),PlannedPurchase.class);
+                boolean legacyMatch=old.plannedPurchaseId().version()==4&&dealId.equals(old.advertisedDealId())&&(sku!=null&&old.productCode()!=null?sku.equals(old.productCode()):name.strip().equalsIgnoreCase(old.productName().strip()));
+                if(old.plannedPurchaseId().equals(id)||legacyMatch)return old;
+            }}}
+            var item=new PlannedPurchase(id,planId,name,sku,quantity,sale==null?regular:sale,dealId,couponIds,1,regular,sale,priceSource);
+            PostgresPlannedPurchaseRepository.insert(c,item,actor);
+            var revised=new ShoppingPlan(plan.planId(),plan.name(),plan.retailer(),plan.shoppingDate(),plan.plannedPurchaseIds(),plan.revision()+1,plan.scenario(),plan.purchasedReceiptId(),plan.organization());
+            PostgresShoppingPlanRepository.revise(c,revised,plan.revision(),actor,"Added source-linked Weekly Deal product");return item;
+        });
+    }
+
+    public List<PlannedPurchase> planPurchases(UUID id) {return new PostgresPlannedPurchaseRepository(db).findByPlanId(id);}
+
     public PlannedPurchase savePurchase(UUID planId, UUID id, String name, String code, int quantity, BigDecimal target,
             UUID deal, List<UUID> coupons, long expected, String actor) {
         var planRepo = new PostgresShoppingPlanRepository(db);
@@ -624,7 +648,11 @@ public final class PostgresPlatformRepository implements PlatformRepository {
     }
 
     /** Explicit permanent cleanup; refuse redeemed coupons and detach current plan references. */
+    public List<UUID> deletedWeeklyDealIds(){return PostgresRepositorySupport.transaction(db,WeeklyDealArchive::deletedIds);}
+    @Override public SourceArtifact weeklyDealSource(UUID deal,UUID source){var saved=new PostgresDealRepository(db).findById(deal).orElseThrow();if(!saved.sourceArtifactIds().contains(source))throw new NoSuchElementException();return new PostgresSourceArtifactRepository(db).findById(source).orElseThrow();}
+    public Map<String,Object> deleteWeeklyDeals(Map<UUID,Long> ids,String actor,String reason){return new WeeklyDealArchive(db).delete(ids,actor,reason);}
     public void deleteCatalogRecord(boolean deal, UUID id, long expected, String actor) {
+        if(deal&&new PostgresDealRepository(db).findById(id).map(d->d.pricing()!=null&&d.pricing().advertisement()!=null).orElse(false)){deleteWeeklyDeals(Map.of(id,expected),actor,"Owner deleted Weekly Deal");return;}
         PostgresRepositorySupport.transaction(db,c->{
             String table=deal?"deal_current":"clipped_coupon_current",key=deal?"deal_id":"coupon_id";
             try(var p=c.prepareStatement("SELECT revision,"+(deal?"NULL":"status")+" FROM "+table+" WHERE "+key+"=? FOR UPDATE")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();if(r.getLong(1)!=expected)throw new java.util.ConcurrentModificationException("Record changed; refresh before deleting.");if(!deal&&"APPLIED".equals(r.getString(2)))throw new IllegalArgumentException("Used coupons cannot be permanently deleted.");}}
@@ -639,7 +667,7 @@ public final class PostgresPlatformRepository implements PlatformRepository {
             var sources=new HashSet<UUID>();
             if(deal)try(var p=c.prepareStatement("SELECT artifact_id FROM deal_sources WHERE deal_id=? UNION SELECT artifact_id FROM deal_history_sources WHERE deal_id=?")){p.setObject(1,id);p.setObject(2,id);try(var r=p.executeQuery()){while(r.next())sources.add((UUID)r.getObject(1));}}
             for(String t:deal?List.of("deal_history_sources","deal_sources","deal_history","deal_current"):List.of("clipped_coupon_history","clipped_coupon_current"))try(var p=c.prepareStatement("DELETE FROM "+t+" WHERE "+key+"=?")){p.setObject(1,id);p.executeUpdate();}
-            for(var source:sources)try(var p=c.prepareStatement("DELETE FROM source_artifacts WHERE artifact_id=? AND NOT EXISTS(SELECT 1 FROM deal_sources WHERE artifact_id=?) AND NOT EXISTS(SELECT 1 FROM deal_history_sources WHERE artifact_id=?) AND NOT EXISTS(SELECT 1 FROM rebate_sources WHERE artifact_id=?) AND NOT EXISTS(SELECT 1 FROM rebate_history_sources WHERE artifact_id=?)")){for(int i=1;i<=5;i++)p.setObject(i,source);p.executeUpdate();}
+            for(var source:sources)try(var p=c.prepareStatement("DELETE FROM source_artifacts WHERE artifact_id=? AND NOT EXISTS(SELECT 1 FROM deal_sources WHERE artifact_id=?) AND NOT EXISTS(SELECT 1 FROM deal_history_sources WHERE artifact_id=?) AND NOT EXISTS(SELECT 1 FROM rebate_sources WHERE artifact_id=?) AND NOT EXISTS(SELECT 1 FROM rebate_history_sources WHERE artifact_id=?) AND NOT EXISTS(SELECT 1 FROM deleted_weekly_deals WHERE ?=ANY(source_ids))")){for(int i=1;i<=6;i++)p.setObject(i,source);p.executeUpdate();}
             return null;
         });
     }
@@ -648,6 +676,10 @@ public final class PostgresPlatformRepository implements PlatformRepository {
         new PostgresClippedCouponRepository(db).saveAll(copies, actor);
     }
 
+    public AdvertisedDeal deal(UUID id) { return new PostgresDealRepository(db).findById(id).orElseThrow(); }
+    public AdvertisedDeal updateDeal(AdvertisedDeal deal,long expected,String actor) {
+        return new PostgresDealRepository(db).update(deal,expected,actor,"Corrected weekly advertisement interpretation");
+    }
     public void saveDeal(AdvertisedDeal deal, String actor, SourceArtifact source) {
         new PostgresDealRepository(db).save(deal, actor, source);
     }

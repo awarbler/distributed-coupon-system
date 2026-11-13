@@ -1,3 +1,4 @@
+import type { Coupon } from '../types/platform'
 import type { Decimal, ReceiptRow } from '../types/platform'
 // Display formatting only: no financial calculations or conversion of money to Number.
 export function decimal(value: Decimal | undefined, places = 2): string {
@@ -142,4 +143,16 @@ export function instrumentLabel(card: {kind?:string;provider:string;nickname?:st
   const last=instrumentLastFour(card)
   const name=brand||(card.kind==='GIFT_CARD'&&card.nickname&&card.nickname!==card.provider?`${card.provider} · ${card.nickname}`:card.nickname||card.provider)
   return `${name}${last?` · ending ${last}`:''}`
+}
+
+// Coupon discovery is text search, never a financial eligibility decision.
+export const normalizeCouponText=(text:string)=>text.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim()
+const tokens=(text:string)=>normalizeCouponText(text).split(' ').filter(w=>w.length>2&&!['the','and','off','any','one','two','for','with','coupon','products','product','selected'].includes(w))
+export function couponScore(c:Coupon,query:string) {
+ const t=c.terms,words=tokens(query),title=normalizeCouponText(c.description),body=normalizeCouponText([t?.productOrBrand,t?.conditions,t?.originalOfferText,...(t?.qualifyingSkus||[]),...Object.values(t?.offerDetails||{})].filter(Boolean).join(' '))
+ return words.reduce((n,w)=>n+(title.split(' ').includes(w)?6:0)+(body.split(' ').includes(w)?2:0),0)
+}
+export function recordedClipLimit(coupons:Coupon[]) {
+ const latest=coupons.filter(c=>/^\d+$/.test(c.terms?.offerDetails?.recordedClipLimit||'')).sort((a,b)=>(b.terms?.importedOn||'').localeCompare(a.terms?.importedOn||''))[0]
+ return latest?Number(latest.terms!.offerDetails!.recordedClipLimit):null
 }

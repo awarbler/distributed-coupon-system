@@ -105,8 +105,17 @@ public interface PlatformRepository {
 
     void saveCoupons(List<ClippedCoupon> copies, String actor);
 
+    default List<UUID> deletedWeeklyDealIds(){return List.of();}
+    default Map<String,Object> deleteWeeklyDeals(Map<UUID,Long> ids,String actor,String reason){throw new UnsupportedOperationException();}
+    default AdvertisedDeal deal(UUID id) { throw new UnsupportedOperationException("Advertised-deal lookup unavailable."); }
+    default AdvertisedDeal updateDeal(AdvertisedDeal deal,long expected,String actor) { throw new UnsupportedOperationException("Advertised-deal correction unavailable."); }
     void saveDeal(AdvertisedDeal deal, String actor, SourceArtifact source);
+    default SourceArtifact weeklyDealSource(UUID deal,UUID source){throw new UnsupportedOperationException();}
 
+    default PlannedPurchase saveWeeklyPurchase(UUID plan,UUID id,String sourceItem,String name,String sku,int quantity,BigDecimal regular,BigDecimal sale,String priceSource,UUID deal,List<UUID> coupons,String actor) {
+        return savePurchase(plan,id,name,sku,quantity,regular,sale,priceSource,deal,coupons,0,actor);
+    }
+    default List<PlannedPurchase> planPurchases(UUID id) {return List.of();}
     PlannedPurchase savePurchase(UUID planId, UUID id, String name, String code, int quantity, BigDecimal regular, BigDecimal sale, String source,
             UUID deal, List<UUID> coupons, long expected, String actor);
 

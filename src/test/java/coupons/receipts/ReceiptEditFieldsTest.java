@@ -227,4 +227,14 @@ class ReceiptEditFieldsTest {
         assertEquals(n("5"),saved.transaction().getReceiptTotals().getFinalTotal());
         assertEquals(1,repo.history().findByReceiptId(saved.transactionId()).size());
     }
+    @Test void worksheetAcceptsPoundsForAWeighedReceiptLine() {
+        var details=new ReceiptWorksheetData.PackageDetails(n("1.97"),"lb",null,null,null,null);
+        assertEquals(n("1.97"),details.size());
+        assertEquals("lb",details.unit());
+    }
+    @Test void worksheetDoesNotRequireAUnitFromAFixedPackageSizeList() {
+        var details=new ReceiptWorksheetData.PackageDetails(n("1.97"),"receipt lb",null,null,null,null);
+        assertEquals("receipt lb",details.unit());
+        assertDoesNotThrow(()->new ReceiptWorksheetData.PackageDetails(null,null,null,null,null,null));
+    }
 }

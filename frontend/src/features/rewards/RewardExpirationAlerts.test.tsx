@@ -28,11 +28,13 @@ it('sends one browser notification the day before expiration across remounts',()
  expect(notification).toHaveBeenCalledWith('ECB reward expires tomorrow',expect.objectContaining({body:expect.stringContaining('$5.00')}))
 })
 
-it('shows every reward in the 48-hour date window and can collapse and expand',()=>{
+it('shows every reward in the 48-hour date window and can dismiss the compact banner',()=>{
  vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-06T18:00:00Z'));
  const rewards=Array.from({length:8},(_,i)=>({...reward,id:`soon-${i}`,description:`Soon ${i}`,expirationDate:i%2?'2026-11-07':'2026-11-08'}));
  render(<RewardExpirationAlerts visible rewards={[...rewards,{...reward,id:'later',description:'Later reward',expirationDate:'2026-11-27'}]} onReceipt={vi.fn()} onRewards={vi.fn()}/>);
- expect(screen.getByRole('button',{name:'Hide reward expirations'})).toHaveAttribute('aria-expanded','true');expect(screen.queryByText('Collapse')).not.toBeInTheDocument();expect(screen.getAllByText(/^Soon /)).toHaveLength(8);expect(screen.queryByText('Later reward')).not.toBeInTheDocument();
- fireEvent.click(screen.getByRole('button',{name:'Hide reward expirations'}));expect(screen.queryByText('Soon 0')).not.toBeInTheDocument();expect(screen.getByRole('button',{name:'Show reward expirations'})).toHaveAttribute('aria-expanded','false');
- fireEvent.click(screen.getByRole('button',{name:'Show reward expirations'}));expect(screen.getByText('Soon 0')).toBeVisible();
+ expect(screen.getByRole('region',{name:'Reward expirations'})).toBeVisible();expect(screen.queryByText('Later reward')).not.toBeInTheDocument();for(let i=0;i<8;i++)expect(screen.getByText(new RegExp(`Soon ${i}`))).toBeVisible();
+ fireEvent.click(screen.getByRole('button',{name:'Dismiss reward expiration notice'}));expect(screen.queryByRole('region',{name:'Reward expirations'})).toBeNull();
 });
+it('renders no empty-state panel when there are no rewards due',()=>{vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-06T18:00:00Z'));const view=render(<RewardExpirationAlerts visible rewards={[{...reward,expirationDate:'2026-12-10'}]} onReceipt={vi.fn()} onRewards={vi.fn()}/>);expect(view.container).toBeEmptyDOMElement()})
+
+it('opens the matching account for a reward without a receipt',()=>{vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-01T18:00:00Z'));const onRewards=vi.fn();render(<RewardExpirationAlerts visible rewards={[{...reward,receiptId:null}]} onReceipt={vi.fn()} onRewards={onRewards}/>);fireEvent.click(screen.getByRole('button',{name:'View rewards'}));expect(onRewards).toHaveBeenCalledWith('ECB')})

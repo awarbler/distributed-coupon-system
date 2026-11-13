@@ -14,6 +14,14 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ShoppingPlanAndCouponTest {
+    @Test void couponQuantityCountsAllAssociatedProductLines(){
+        for(String[] entry:new String[][]{{"CVS","5"},{"Walgreens","2"}}){
+            var first=new ShoppingPlan.Line(UUID.randomUUID(),"Eligible first",null,new BigDecimal("8"),null,1);var second=new ShoppingPlan.Line(UUID.randomUUID(),"Eligible second",null,new BigDecimal("8"),null,1);
+            var coupon=new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),"Recorded offer",new BigDecimal(entry[1]),2,List.of(first.id(),second.id()),null);
+            var scenario=new ShoppingPlan.Scenario(List.of(first,second),List.of(coupon),List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");
+            assertEquals(0,new BigDecimal(entry[1]).compareTo((BigDecimal)scenario.estimate(entry[0]).get("couponTotal")));
+        }
+    }
     @Test @SuppressWarnings("unchecked") void automaticStorePromotionSavingsRecalculateWithoutExtraCouponRows() {
         UUID id=UUID.randomUUID();
         for(String[] values:new String[][]{{"11.50","11","3","1.50"},{"12","11","3","3"},{"12","10","4","8"},{"10","11","3","0"}}) {
@@ -37,6 +45,47 @@ class ShoppingPlanAndCouponTest {
             assertEquals(basis.equals("BEFORE_COUPONS"),row.get("eligible"));
             var duplicate=List.of(payments.getFirst(),new ShoppingPlan.ScenarioPayment(UUID.randomUUID(),"REGISTER_REWARD",new BigDecimal("10"),"duplicate","MANUFACTURER",source));
             assertThrows(IllegalArgumentException.class,()->new ShoppingPlan.Scenario(items,List.of(),List.of(promotion),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","",null,duplicate,null));
+        }
+    }
+
+    @Test void unverifiedWebsiteTermsRemainExcludedEvenAfterClippingAndIssuerClassification() {
+        for(String verification:List.of("NEEDS_REVIEW","VERIFIED")) {
+            var id=UUID.randomUUID();var terms=new coupons.promotions.CouponTerms(id,coupons.promotions.CouponTerms.Source.DIGITAL_MANUFACTURER,coupons.promotions.CouponTerms.Discount.DOLLARS,"Walgreens","Walgreens",null,"Product",List.of("123"),null,null,null,1,null,null,null,"Selected products...",LocalDate.of(2026,11,8),"available.pdf",Map.of("qualificationStatus",verification));
+            var offer=new ClippedCoupon(id,"Walgreens",null,new Coupon("Imported offer",new BigDecimal("2"),1,CouponType.MANUFACTURER,LocalDate.of(2026,11,30),terms),CouponStatus.CLIPPED,LocalDate.of(2026,11,8),1);
+            var purchase=new PlannedPurchase(UUID.randomUUID(),UUID.randomUUID(),"Product","123",1,BigDecimal.TEN,null,List.of(id),1);
+            var estimate=ShoppingEstimate.calculate(List.of(purchase),Map.of(),Map.of(id,offer),LocalDate.of(2026,11,8),"Walgreens");
+            assertEquals(0,new BigDecimal(verification.equals("VERIFIED")?"2":"0").compareTo(estimate.couponSavings()));
+            if(verification.equals("NEEDS_REVIEW"))assertTrue(estimate.issues().stream().anyMatch(x->x.contains("qualifying terms need review")));
+        }
+    }
+
+    @Test @SuppressWarnings("unchecked") void selectedLibraryCouponCountsInPlanningWithoutConfirmingActualUse() throws Exception {
+        UUID line=UUID.randomUUID(),saved=UUID.randomUUID();
+        var coupon=new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),"Available Venus coupon",new BigDecimal("4"),1,List.of(line),saved,"MANUFACTURER",false,true);
+        var scenario=new ShoppingPlan.Scenario(List.of(new ShoppingPlan.Line(line,"Venus","123",new BigDecimal("12"),null,1)),List.of(coupon),List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");
+        var report=scenario.estimate("Walgreens");assertEquals(new BigDecimal("4"),report.get("couponTotal"));assertEquals(new BigDecimal("8"),report.get("calculatedOop"));assertEquals(true,((List<Map<String,Object>>)report.get("coupons")).getFirst().get("applied"));
+        var bytes=new java.io.ByteArrayOutputStream();try(var out=coupons.serialization.LegacyObjectStreams.output(bytes)){out.writeObject(scenario);}try(var in=coupons.serialization.LegacyObjectStreams.input(new java.io.ByteArrayInputStream(bytes.toByteArray()))){var restored=(ShoppingPlan.Scenario)in.readObject();assertEquals(saved,restored.coupons().getFirst().savedCouponId());assertTrue(restored.coupons().getFirst().pendingVerification());assertEquals(report,restored.estimate("Walgreens"));}
+    }
+    @Test @SuppressWarnings("unchecked") void bounceDownyAndTideSelectedCouponsGiveThirteenDollarPlanningSubtotal() {
+        var bounce=UUID.randomUUID();var downy=UUID.randomUUID();var tide=UUID.randomUUID();var items=List.of(new ShoppingPlan.Line(bounce,"BOUNCE",null,new BigDecimal("5"),null,1),new ShoppingPlan.Line(downy,"DOWNY",null,new BigDecimal("5"),null,1),new ShoppingPlan.Line(tide,"TIDE LAUNDRY CARE",null,new BigDecimal("5"),null,1));
+        var coupons=List.of(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),"Downy $1 off 1",BigDecimal.ONE,1,List.of(downy),UUID.randomUUID(),"UNKNOWN",false,true),new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),"Tide $1 off 1",BigDecimal.ONE,1,List.of(tide),UUID.randomUUID(),"UNKNOWN",false,true));
+        var scenario=new ShoppingPlan.Scenario(items,coupons,List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");var result=scenario.estimate("Walgreens");assertEquals(new BigDecimal("15"),result.get("saleTotal"));assertEquals(new BigDecimal("2"),result.get("couponTotal"));assertEquals(new BigDecimal("13"),result.get("calculatedOop"));assertTrue(((List<Map<String,Object>>)result.get("coupons")).stream().allMatch(c->Boolean.TRUE.equals(c.get("applied"))));
+        var tooFew=new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),"Requires two",BigDecimal.ONE,2,List.of(downy),UUID.randomUUID(),"UNKNOWN",false,true);var limited=new ShoppingPlan.Scenario(items,List.of(tooFew),List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");assertEquals(BigDecimal.ZERO,limited.estimate("Walgreens").get("couponTotal"));
+    }
+    @Test void zeroAmountPlannedSelectionDoesNotCauseAnAppliedZeroDiscountOrDivisionByZero() {
+        var line=UUID.randomUUID();var selection=new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),"Percentage amount not entered",BigDecimal.ZERO,1,List.of(line),UUID.randomUUID(),"UNKNOWN",false,true);var scenario=new ShoppingPlan.Scenario(List.of(new ShoppingPlan.Line(line,"Product",null,BigDecimal.ZERO,null,1)),List.of(selection),List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");assertEquals(BigDecimal.ZERO,scenario.estimate().get("couponTotal"));
+    }
+    @Test void confirmedReceiptUseOfAvailableCouponDoesNotFabricateClipping() {
+        var id=UUID.randomUUID();var coupon=new Coupon("Venus",new BigDecimal("4"),1,CouponType.MANUFACTURER,LocalDate.of(2026,11,30));
+        var available=new ClippedCoupon(id,"Walgreens",null,coupon,CouponStatus.AVAILABLE,null,1);var used=new ClippedCoupon(id,"Walgreens",null,coupon,CouponStatus.APPLIED,available.clippedOn(),LocalDate.of(2026,11,9),UUID.randomUUID(),2);
+        assertNull(used.clippedOn());assertEquals(CouponStatus.APPLIED,used.status());assertNotNull(used.redeemedTransactionId());assertEquals(CouponStatus.AVAILABLE,available.status());
+    }
+    @Test void importedRewardsRebatesAndBogoNeverBecomeImmediateCheckoutDeductions() {
+        for(var mechanism:List.of(coupons.promotions.CouponTerms.Discount.REWARD,coupons.promotions.CouponTerms.Discount.REBATE,coupons.promotions.CouponTerms.Discount.BOGO,coupons.promotions.CouponTerms.Discount.UNKNOWN)) {
+            var id=UUID.randomUUID();var terms=new coupons.promotions.CouponTerms(id,coupons.promotions.CouponTerms.Source.DIGITAL_MANUFACTURER,mechanism,"Walgreens","Walgreens",null,"Product",List.of(),null,null,null,1,"Recorded original terms",null,null);
+            var offer=new ClippedCoupon(id,"Walgreens",null,new Coupon("Imported offer",null,0,CouponType.MANUFACTURER,LocalDate.of(2026,11,30),terms),CouponStatus.CLIPPED,LocalDate.of(2026,11,8),1);
+            var purchase=new PlannedPurchase(UUID.randomUUID(),UUID.randomUUID(),"Product",null,1,BigDecimal.TEN,null,List.of(id),1);
+            var estimate=ShoppingEstimate.calculate(List.of(purchase),Map.of(),Map.of(id,offer),LocalDate.of(2026,11,8),"Walgreens");assertEquals(0,estimate.couponSavings().signum());assertEquals(BigDecimal.TEN,estimate.registerCost());assertTrue(estimate.issues().stream().anyMatch(x->x.contains("separate promotion/rebate review")));
         }
     }
 

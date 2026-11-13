@@ -251,7 +251,7 @@ public final class PostgresPlanCheckoutRepository {
         return PostgresRepositorySupport.transaction(db, c -> {
             // Lock the parent plan to serialize checkout creation.
             try (PreparedStatement p = c.prepareStatement(
-                    "SELECT plan_id FROM shopping_plan_current "
+                    "SELECT plan_id,retailer FROM shopping_plan_current "
                     + "WHERE plan_id=? FOR UPDATE"
             )) {
                 p.setObject(1, planId);
@@ -262,6 +262,8 @@ public final class PostgresPlanCheckoutRepository {
                                 "Shopping plan does not exist."
                         );
                     }
+                    String store=r.getString("retailer");
+                    if(coupons.rewards.PaymentEligibility.check(store,"WALGREENS_CASH",null,(BigDecimal)values.get("walgreensCashUsed"),null).equals("Not Met")||coupons.rewards.PaymentEligibility.check(store,"REGISTER_REWARD",null,(BigDecimal)values.get("registerRewardsCoupon"),null).equals("Not Met"))throw new IllegalArgumentException("These rewards belong to a different retailer.");
                 }
             }
 

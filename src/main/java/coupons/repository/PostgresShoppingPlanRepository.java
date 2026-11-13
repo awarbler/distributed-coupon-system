@@ -35,7 +35,9 @@ public final class PostgresShoppingPlanRepository implements ShoppingPlanReposit
     @Override public ShoppingPlan update(ShoppingPlan plan,long expected,String actor,String reason) {
         Objects.requireNonNull(plan); PostgresRepositorySupport.requireActor(actor,"Changed by"); PostgresRepositorySupport.requireActor(reason,"Reason");
         if(expected<1 || plan.revision()!=expected+1) throw new IllegalArgumentException("Invalid plan revision.");
-        return PostgresRepositorySupport.transaction(connections,c -> {
+        return PostgresRepositorySupport.transaction(connections,c -> revise(c,plan,expected,actor,reason));
+    }
+    static ShoppingPlan revise(Connection c,ShoppingPlan plan,long expected,String actor,String reason)throws SQLException {
             long stored; try(PreparedStatement p=c.prepareStatement("SELECT revision FROM shopping_plan_current WHERE plan_id=? FOR UPDATE")) {
                 p.setObject(1,plan.planId()); try(ResultSet r=p.executeQuery()){if(!r.next())throw new IllegalArgumentException("Plan does not exist.");stored=r.getLong(1);}
             }
@@ -44,7 +46,6 @@ public final class PostgresShoppingPlanRepository implements ShoppingPlanReposit
                 p.setString(1,plan.name());p.setString(2,plan.retailer());p.setObject(3,plan.shoppingDate());p.setLong(4,plan.revision());p.setBytes(5,PostgresRepositorySupport.serialize(plan));p.setObject(6,plan.planId());p.executeUpdate();
             }
             history(c,plan,actor,reason); return plan;
-        });
     }
     static void markPurchased(Connection c,UUID id,long expected,UUID receiptId,String actor)throws SQLException {
         ShoppingPlan old;

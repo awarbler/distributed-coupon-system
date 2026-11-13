@@ -661,10 +661,6 @@ label > select, label > textarea.autosize-input {
 }
 
 .receipt-product > summary, .receipt-products > summary { list-style:none; cursor:pointer; }
-.receipt-product > summary::-webkit-details-marker, .receipt-products > summary::-webkit-details-marker { display:none; }
-.receipt-disclosure-arrow { display:inline-block; margin-right:8px; font-size:18px; transition:transform .15s; }
-.receipt-product:not([open]) > summary .receipt-disclosure-arrow,
-.receipt-products:not([open]) > summary .receipt-disclosure-arrow { transform:rotate(-90deg); }
 .product-disclosure-actions { display:flex; flex-wrap:wrap; gap:16px; margin:8px 0 14px; }
 .receipt-channel-basis { grid-template-columns:repeat(2,minmax(0,1fr)); }
 

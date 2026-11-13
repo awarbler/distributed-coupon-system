@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ShoppingNotebookTest {
+    @Test void detachedPriceLabelsNeverBecomeProductNames(){var result=ShoppingNoteInput.parse("Regular $4.99 Sale : $3.49",null);assertTrue(((List<?>)result.get("items")).isEmpty());assertTrue(result.get("unresolved").toString().contains("product name"));}
     static final String ADIDAS="""
         Addidas Gift Package 10.00
         Buy One Get One 50% Off
@@ -79,6 +80,23 @@ class ShoppingNotebookTest {
         var unresolved=(List<String>)imported.get("unresolved");assertEquals(1,unresolved.size());assertTrue(unresolved.getFirst().startsWith("Store Promotion .99"));
         var scenario=new ShoppingPlan.Scenario(items,coupons,promotions,n("0"),n("0"),n("0"),n("0"),null,"CASH","",null,List.of(),source);var estimate=scenario.estimate();
         assertEquals(0,n("12").compareTo((BigDecimal)estimate.get("saleTotal")));assertEquals(0,n("8.40").compareTo((BigDecimal)estimate.get("couponTotal")));assertEquals(0,n("3.60").compareTo((BigDecimal)estimate.get("calculatedOop")));assertEquals(0,n("6.62").compareTo((BigDecimal)estimate.get("potentialRewards")));assertEquals(0,n("2.97").compareTo((BigDecimal)estimate.get("storePromotionTotal")));assertEquals(0,n("11.37").compareTo((BigDecimal)estimate.get("totalDiscounts")));assertEquals(BigDecimal.ZERO,estimate.get("tax"));assertNull(scenario.manualOop());assertEquals(List.of(),imported.get("payments"));
+    }
+    @Test @SuppressWarnings("unchecked") void qtipsPlainLanguageOfferPopulatesOneProductAndKeepsUnresolvedCouponQuantities(){
+        var result=ShoppingNoteInput.parse("""
+            Q-tips Cotton Swabs Durable Paper Stick
+            500 count
+            Regular price: $5.79
+            Advertised pricing: 2/$8.00 or 1/$4.49
+            Offer completed: $4.00 each
+            $5.00 off 3 coupon applied
+            $3.00 off 3 coupon applied
+            """,null);
+        var items=(List<ShoppingPlan.Line>)result.get("items");var coupons=(List<ShoppingPlan.ScenarioCoupon>)result.get("coupons");
+        assertEquals(1,items.size());assertTrue(items.getFirst().name().startsWith("Q-tips Cotton Swabs"));assertEquals(2,items.getFirst().quantity());assertEquals(n("5.79"),items.getFirst().regular());assertEquals(n("4.00"),items.getFirst().sale());
+        assertEquals(2,coupons.size());assertEquals(n("5.00"),coupons.get(0).amount());assertEquals(3,coupons.get(0).requiredQuantity());assertTrue(coupons.get(0).pendingVerification());assertEquals(n("3.00"),coupons.get(1).amount());assertEquals(3,coupons.get(1).requiredQuantity());assertTrue(coupons.get(1).pendingVerification());assertFalse(((List<String>)result.get("unresolved")).isEmpty());
+        var scenario=new ShoppingPlan.Scenario(items,coupons,List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","",null,List.of(),null);
+        var estimate=scenario.estimate("Walgreens");
+        assertEquals(n("8.00"),estimate.get("saleTotal"));assertEquals(BigDecimal.ZERO,estimate.get("couponTotal"));assertEquals(n("8.00"),estimate.get("proposedCouponTotal"));assertEquals(0,BigDecimal.ZERO.compareTo((BigDecimal)estimate.get("proposedMerchandiseAfterCoupons")));assertEquals(0,BigDecimal.ZERO.compareTo((BigDecimal)estimate.get("proposedCalculatedOop")));assertEquals(n("8.00"),estimate.get("calculatedOop"));
     }
     @Test @SuppressWarnings("unchecked") void unrecognizedCouponRewardPaymentAndCalculationLinesNeverBecomeProducts() {
         var result=ShoppingNoteInput.parse("Qtips $4.99\nManufacturer Coupon unknown 2.00\nWalgreens Coupon unknown 1.00\nOnline Promo Code unknown 0.40\nOop unknown 3.60\nEarn unknown 0.12\nFetch unknown 2500.00\nBuy 3 : unknown = 12.00",null);

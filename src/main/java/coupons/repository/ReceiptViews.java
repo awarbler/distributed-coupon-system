@@ -23,6 +23,9 @@ public final class ReceiptViews {
         }
         var giftCardPayments=new LinkedHashMap<String,BigDecimal>();
         tx.getPayments().stream().filter(p->p.getPaymentType()==PaymentType.GIFT_CARD).forEach(p->giftCardPayments.merge(p.getAccountName()==null||p.getAccountName().isBlank()?"Gift Card":p.getAccountName(),p.getAmount(),BigDecimal::add));
+        var walmartCashUsed=tx.getPayments().stream()
+                .filter(p->p.getPaymentType()==PaymentType.OTHER&&"Walmart Cash".equals(p.getAccountName()))
+                .map(coupons.receipts.Payment::getAmount).reduce(BigDecimal.ZERO,BigDecimal::add);
         var paymentReview = calculator.reconcilePayments(tx, receipt.metadata());
         var benefitTotals = SavingsReport.calculate(List.of(receipt));
         boolean paymentComplete = paymentReview.paymentEntryStatus() == ReceiptMeta.PaymentEntryStatus.COMPLETE
@@ -31,7 +34,7 @@ public final class ReceiptViews {
                 ? paymentReview.recordedCashCardPaid().subtract(benefitTotals.knownConfirmedBenefitValue()) : null;
         var breakdown=discountBreakdown(tx);
         BigDecimal merchandiseBeforeCoupons=calculator.calculateSaleMerchandiseTotal(tx).subtract((BigDecimal)breakdown.get("salePromotions"));
-        return fields("giftCardPayments",giftCardPayments,"merchandiseBeforeCoupons",merchandiseBeforeCoupons,"calculationChecks", calculator.recordedChecks(tx,receipt.metadata()), "printedObservations", tx.getObservations(), "discountBreakdown", breakdown, "paymentReview", paymentReview, "benefitAdjustedCashSpending", adjusted,
+        return fields("giftCardPayments",giftCardPayments,"walmartCashUsed",walmartCashUsed,"merchandiseBeforeCoupons",merchandiseBeforeCoupons,"calculationChecks", calculator.recordedChecks(tx,receipt.metadata()), "printedObservations", tx.getObservations(), "discountBreakdown", breakdown, "paymentReview", paymentReview, "benefitAdjustedCashSpending", adjusted,
                 "benefitObservations", tx.getObservations().earnings().stream().map(e -> fields(
                         "earningId", e.earningId(), "provider", e.provider(), "status", e.status(),
                         "expected", e.expected(), "confirmed", e.confirmed(), "valuation", SavingsReport.effectiveValuation(e))).toList(),

@@ -15,7 +15,7 @@ public record ClippedCoupon(UUID couponId, String provider, String externalId,
         if (externalId != null && externalId.isBlank()) throw new IllegalArgumentException("External ID must be null or nonblank.");
         Objects.requireNonNull(coupon, "Coupon cannot be null.");
         Objects.requireNonNull(status, "Coupon status cannot be null.");
-        if (clippedOn == null && status != CouponStatus.AVAILABLE) throw new IllegalArgumentException("Non-available coupons require a clipped date.");
+        if (clippedOn == null && status != CouponStatus.AVAILABLE && status != CouponStatus.APPLIED) throw new IllegalArgumentException("Non-available coupons require a clipped date.");
         if (redeemedTransactionId != null && status != CouponStatus.APPLIED) throw new IllegalArgumentException("A redeemed transaction requires APPLIED status.");
         if (status == CouponStatus.APPLIED && redeemedTransactionId == null) throw new IllegalArgumentException("APPLIED coupons require a transaction.");
         if (redeemedOn != null && redeemedTransactionId == null) throw new IllegalArgumentException("Redemption date requires a transaction.");

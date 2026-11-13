@@ -148,6 +148,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             for(var couponId:selectedCouponIds) {
                 ClippedCoupon coupon;
                 try(var p=connection.prepareStatement("SELECT payload FROM clipped_coupon_current WHERE coupon_id=? FOR UPDATE")){p.setObject(1,couponId);try(var r=p.executeQuery()){if(!r.next())throw new IllegalArgumentException("Selected coupon no longer exists.");coupon=PostgresRepositorySupport.deserialize(r.getBytes(1),ClippedCoupon.class);}}
+                if(coupon.coupon().getTerms()!=null&&!coupon.coupon().getTerms().checkoutDiscount())throw new IllegalArgumentException("Rebates, reward offers and BOGO offers cannot be recorded as a saved checkout discount. Record the actual receipt terms separately.");
                 if(snapshot.appliedCoupons().stream().noneMatch(x->x.getApplicationId().equals(couponId)))throw new IllegalArgumentException("Selected coupon must have one receipt discount.");
                 if(metadata==null || snapshot.observations().purchaseDate()==null)throw new IllegalArgumentException("Purchase date required to use clipped coupons.");
                 PostgresClippedCouponRepository.redeem(connection,couponId,id,snapshot.observations().purchaseDate(),coupon.revision(),context.requestedBy());
@@ -208,6 +209,7 @@ public final class PostgresTransactionRepository implements TransactionRepositor
             insertEvidence(connection, evidence);
             insertNewRedemptions(connection, before.transaction().getRegisterRewardRedemptions(),
                     snapshot.registerRewardRedemptions());
+            confirmNewCouponLinks(connection,before,afterRecord,context.requestedBy());
             insertHistory(connection, history);
             insertRequest(connection, request.requestId(), id, serialize(payload), result);
             return result;
@@ -619,6 +621,19 @@ public final class PostgresTransactionRepository implements TransactionRepositor
         }
     }
 
+    private static void confirmNewCouponLinks(Connection connection,ReceiptRecord before,ReceiptRecord after,String actor)throws SQLException {
+        var oldIds=before.transaction().getAppliedCoupons().stream().map(x->x.getApplicationId()).collect(java.util.stream.Collectors.toSet());
+        var newIds=after.transaction().getAppliedCoupons().stream().map(x->x.getApplicationId()).collect(java.util.stream.Collectors.toSet());
+        try(var p=connection.prepareStatement("SELECT coupon_id FROM clipped_coupon_redemptions WHERE transaction_id=?")){p.setObject(1,after.transactionId());try(var r=p.executeQuery()){while(r.next())if(!newIds.contains(r.getObject(1,UUID.class)))throw new IllegalArgumentException("Existing coupon redemption links cannot be removed from the receipt.");}}
+        for(var id:newIds)if(!oldIds.contains(id)) {
+            ClippedCoupon coupon=null;
+            try(var p=connection.prepareStatement("SELECT payload FROM clipped_coupon_current WHERE coupon_id=? FOR UPDATE")){p.setObject(1,id);try(var r=p.executeQuery()){if(r.next())coupon=PostgresRepositorySupport.deserialize(r.getBytes(1),ClippedCoupon.class);}}
+            if(coupon==null)continue;
+            if(after.transaction().getObservations().purchaseDate()==null)throw new IllegalArgumentException("Purchase date required to confirm a coupon used.");
+            if(coupon.coupon().getTerms()!=null&&!coupon.coupon().getTerms().checkoutDiscount())throw new IllegalArgumentException("Select only checkout coupons for receipt deductions.");
+            PostgresClippedCouponRepository.redeem(connection,id,after.transactionId(),after.transaction().getObservations().purchaseDate(),coupon.revision(),actor);
+        }
+    }
     private void ensureUnchangedRedemptions(ReceiptRecord before, ReceiptRecord after) {
         List<RegisterRewardRedemption> oldValues = before.transaction().getRegisterRewardRedemptions();
         List<RegisterRewardRedemption> newValues = after.transaction().getRegisterRewardRedemptions();

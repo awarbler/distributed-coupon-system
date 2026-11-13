@@ -50,6 +50,46 @@ class PostgresMilestone2RepositoryTest {
         rebates = new PostgresRebateRepository(connections, clock);
     }
 
+    @Test void weeklyArchiveIsAtomicAuditedAndPreservesEditedPlanAndSource()throws Exception {
+        var source=artifact();
+        var ad=new coupons.promotions.DealTerms.WeeklyAdvertisement("{\"items\":[],\"coupons\":[],\"promotions\":[]}",java.util.Map.of("sourceName","incorrect.pdf"),List.of());
+        var terms=new coupons.promotions.DealTerms(coupons.promotions.DealTerms.Type.ADVERTISEMENT,"Product",null,null,1,null,0,null,false,null,List.of(),null,null,null,false,false,ad);
+        var deal=new AdvertisedDeal(UUID.randomUUID(),"Incorrect import","Recorded terms","Walgreens",null,null,List.of(source.getArtifactId()),1,terms);deals.save(deal,"test",source);
+        var manual=new AdvertisedDeal(UUID.randomUUID(),"Manual offer","Owner terms","Walgreens",null,null,List.of(source.getArtifactId()),1);deals.save(manual,"test");
+        var plans=new PostgresShoppingPlanRepository(connections);var plan=new coupons.shopping.ShoppingPlan(UUID.randomUUID(),"Owner edited plan","Walgreens",LocalDate.of(2026,11,10),List.of(),1);plans.save(plan,"test");
+        var platform=new PostgresPlatformRepository(connections);var purchase=platform.saveWeeklyPurchase(plan.planId(),UUID.randomUUID(),"line","Owner product",null,3,new BigDecimal("12.34"),null,"MANUAL",deal.dealId(),List.of(),"test");
+        var before=plans.findById(plan.planId()).orElseThrow();var archive=new WeeklyDealArchive(connections);
+        assertThrows(ConcurrentModificationException.class,()->archive.delete(java.util.Map.of(deal.dealId(),2L),"test","Incorrect imports"));assertTrue(deals.findById(deal.dealId()).isPresent());
+        assertThrows(IllegalArgumentException.class,()->archive.delete(java.util.Map.of(deal.dealId(),1L,manual.dealId(),1L),"test","Incorrect imports"));assertTrue(deals.findById(deal.dealId()).isPresent());
+        var result=archive.delete(java.util.Map.of(deal.dealId(),1L),"test","Incorrect imports");assertEquals(1,result.get("deleted"));assertTrue(deals.findById(deal.dealId()).isEmpty());assertTrue(deals.findById(manual.dealId()).isPresent());
+        assertEquals(before,plans.findById(plan.planId()).orElseThrow());assertEquals(List.of(purchase),platform.planPurchases(plan.planId()));assertTrue(artifacts.findById(source.getArtifactId()).isPresent());
+        try(var c=connections.open();var q=c.prepareStatement("SELECT payload,source_ids FROM deleted_weekly_deals WHERE deal_id=?")){q.setObject(1,deal.dealId());try(var r=q.executeQuery()){assertTrue(r.next());assertTrue(r.getBytes(1).length>0);assertEquals(1,((Object[])r.getArray(2).getArray()).length);assertTrue(WeeklyDealArchive.deletedIds(c).contains(deal.dealId()));}}
+        assertEquals(0,archive.delete(java.util.Map.of(deal.dealId(),1L),"test","Retry").get("deleted"));deals.save(deal,"verified reimport");assertTrue(deals.findById(deal.dealId()).isPresent());try(var c=connections.open()){assertFalse(WeeklyDealArchive.deletedIds(c).contains(deal.dealId()));}
+    }
+    @Test void weeklyPurchaseRetriesKeepOneLinkAndAdvancePlanRevisionOnce()throws Exception {
+        var planRepo=new PostgresShoppingPlanRepository(connections);UUID planId=UUID.randomUUID();
+        var plan=new coupons.shopping.ShoppingPlan(planId,"Weekly integration","Walgreens",LocalDate.of(2026,11,9),List.of(),1);planRepo.save(plan,"test");
+        var source=artifact();artifacts.save(source);UUID dealId=UUID.randomUUID();
+        var ad=new AdvertisedDeal(dealId,"CoverGirl","CoverGirl printed offer","Walgreens",null,null,List.of(source.getArtifactId()),1);deals.save(ad,"test");
+        var platform=new PostgresPlatformRepository(connections);
+        var first=platform.saveWeeklyPurchase(planId,UUID.randomUUID(),"source-line","CoverGirl",null,1,null,null,null,dealId,List.of(),"test");
+        var repeat=platform.saveWeeklyPurchase(planId,UUID.randomUUID(),"source-line","CoverGirl",null,1,null,null,null,dealId,List.of(),"test");
+        assertEquals(first.plannedPurchaseId(),repeat.plannedPurchaseId());assertEquals(1,platform.planPurchases(planId).size());assertEquals(2,planRepo.findById(planId).orElseThrow().revision());
+        var stale=new coupons.shopping.ShoppingPlan(planId,"Stale editor","Walgreens",plan.shoppingDate(),List.of(),2);assertThrows(ConcurrentModificationException.class,()->planRepo.update(stale,1,"test","Stale save"));
+        var second=platform.saveWeeklyPurchase(planId,UUID.randomUUID(),"other-source-line","Another product",null,2,new BigDecimal("3"),null,"DEAL",dealId,List.of(),"test");assertNotEquals(first.plannedPurchaseId(),second.plannedPurchaseId());assertEquals(2,platform.planPurchases(planId).size());
+    }
+    @Test void weeklyDealsShareOriginalAndPreserveCombinedTermsAcrossRevisions()throws Exception {
+        var source=artifact();
+        var ad=new coupons.promotions.DealTerms.WeeklyAdvertisement("{\"items\":[],\"coupons\":[],\"promotions\":[]}",java.util.Map.of("originalText","BOGO 50% plus spend 45 earn 15 WC"),List.of("Missing price"));
+        var terms=new coupons.promotions.DealTerms(coupons.promotions.DealTerms.Type.ADVERTISEMENT,"CeraVe",null,null,1,null,0,null,false,null,List.of(),null,null,null,false,false,ad);
+        var first=new AdvertisedDeal(UUID.randomUUID(),"CeraVe","BOGO 50% plus spend 45 earn 15 WC","Walgreens",LocalDate.of(2026,11,8),LocalDate.of(2026,11,14),List.of(source.getArtifactId()),1,terms);
+        deals.save(first,"test",source);
+        var second=new AdvertisedDeal(UUID.randomUUID(),"Another weekly offer","Other printed terms","Walgreens",first.validFrom(),first.validThrough(),first.sourceArtifactIds(),1,terms);deals.save(second,"test");
+        assertEquals(2,deals.findBySourceId(source.getArtifactId()).size());assertEquals(source,artifacts.findById(source.getArtifactId()).orElseThrow());
+        assertEquals(ad,deals.findById(first.dealId()).orElseThrow().pricing().advertisement());
+        var corrected=new AdvertisedDeal(first.dealId(),"CeraVe corrected",first.interpretedTerms(),first.retailer(),first.validFrom(),first.validThrough(),first.sourceArtifactIds(),2,terms);
+        deals.update(corrected,1,"test","Review correction");assertEquals(first,deals.findByRevision(first.dealId(),1).orElseThrow());assertEquals(corrected,deals.findById(first.dealId()).orElseThrow());
+    }
     @Test
     void sourceArtifactsRoundTripExactlyAndRejectConflictingReuse() {
         SourceArtifact original = artifact();

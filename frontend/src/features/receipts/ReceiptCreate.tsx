@@ -1,475 +1,4817 @@
-import { StoreInput, formatReceiptNumber } from '../../components/StoreInput'
-import { createPortal } from 'react-dom'
-import { InfoHelp, SectionHelp } from '../../components/ui'
-import { FormActions } from '../../components/ui'
-import { AutoSizeTextArea } from '../../components/ui'
-import { useState, useRef, useEffect } from 'react'
-import type { FormEvent } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
-import { ApiClient, ApiError, scenarioRequest } from '../../api/client'
-import { instrumentLabel, integer, money, titleWords, productDiscountLabel, isWalgreensStore } from '../../api/format'
-import { Modal, Notice } from '../../components/ui'
-import type { Totals, RewardOffer, PrintedTotalBasis, PaymentEntryStatus, Receipt, ProductLookup } from '../../types/platform'
-import { RewardFields } from './RewardFields'
-import { newReward, rewardBody, estimateReceiptMemberReward, footerDraft, footerBody, footerLabels } from './rewardStatus'
-import type { RewardDraft, FooterDraft } from './rewardStatus'
-import { ReceiptLineSelector } from './ReceiptLineSelector'
-import { FileDropZone } from '../../components/EvidenceField'
-import { SaleButtons } from '../shopping/QuickDealTools'
-import type { ScenarioLine, PlanScenario, ScenarioEstimate } from '../../types/platform'
+import { CouponPicker, type CouponSelection } from "../shopping/CouponPicker";
+import { StoreInput, formatReceiptNumber } from "../../components/StoreInput";
+import { createPortal } from "react-dom";
+import { DisclosureSummary, InfoHelp, SectionHelp } from "../../components/ui";
+import { FormActions } from "../../components/ui";
+import { AutoSizeTextArea } from "../../components/ui";
+import { useState, useRef, useEffect } from "react";
+import type { FormEvent } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import {
+  ApiClient,
+  ApiError,
+  scenarioRequest,
+  zeroScenarioAmount,
+} from "../../api/client";
+import {
+  instrumentLabel,
+  integer,
+  money,
+  titleWords,
+  productDiscountLabel,
+  isWalgreensStore,
+} from "../../api/format";
+import { Modal, Notice } from "../../components/ui";
+import type {
+  Totals,
+  RewardOffer,
+  PrintedTotalBasis,
+  PaymentEntryStatus,
+  Receipt,
+  ProductLookup,
+} from "../../types/platform";
+import { RewardFields } from "./RewardFields";
+import {
+  newReward,
+  rewardBody,
+  estimateReceiptMemberReward,
+  footerDraft,
+  footerBody,
+  footerLabels,
+} from "./rewardStatus";
+import type { RewardDraft, FooterDraft } from "./rewardStatus";
+import { ReceiptLineSelector } from "./ReceiptLineSelector";
+import { FileDropZone } from "../../components/EvidenceField";
+import { SaleButtons } from "../shopping/QuickDealTools";
+import type {
+  ScenarioLine,
+  PlanScenario,
+  ScenarioEstimate,
+} from "../../types/platform";
 
-type Line = {packageDetails?:import('../../types/platform').PackageDetails; observedStorePromotion?:string;observedRegularPrice?:string; id: string; description: string; sku: string; regular: string; sale?: string; quantity: string; priceRule?: ScenarioLine['priceRule'] }
-type Discount = { promotionLineId?:string; clippedCouponId?:string; requiredQuantity?: string | null; shared?: boolean; id: string; label: string; amount: string; kind: string; quantities: Record<string,string> }
-type Tender = { giftCardId?:string; id: string; type: string; amount: string; notes: string; accountName?: string; role?: string }
-type Reward = RewardDraft
-type Evidence = { evidenceId: string; mediaType: string; contentBase64: string; name: string; size: number }
-type Preview = { reviewToken: string; totals: Totals; possibleDuplicates: { transactionId: string }[]; evidence: unknown[] }
-const newLine = (): Line => ({ id: crypto.randomUUID(), description: '', sku: '', regular: '', quantity: '1' })
-const nullable = (s: string) => s.trim() || null
-const receiptStorePromoLabel = (description:string) => titleWords(`${description.trim().split(/\s+/)[0] || 'Product'} Store Promo`)
+type Line = {
+  pricingMethod?: "EACH" | "WEIGHT";
+  weight?: string;
+  weightUnit?: "lb" | "oz" | "kg" | "g";
+  packageDetails?: import("../../types/platform").PackageDetails;
+  observedStorePromotion?: string;
+  observedRegularPrice?: string;
+  id: string;
+  description: string;
+  sku: string;
+  regular: string;
+  sale?: string;
+  quantity: string;
+  priceRule?: ScenarioLine["priceRule"];
+};
+type Discount = {
+  plannedCouponId?: string;
+  promotionLineId?: string;
+  clippedCouponId?: string;
+  requiredQuantity?: string | null;
+  shared?: boolean;
+  id: string;
+  label: string;
+  amount: string;
+  kind: string;
+  quantities: Record<string, string>;
+};
+type Tender = {
+  giftCardId?: string;
+  id: string;
+  type: string;
+  amount: string;
+  notes: string;
+  accountName?: string;
+  role?: string;
+};
+type Reward = RewardDraft;
+type Evidence = {
+  evidenceId: string;
+  mediaType: string;
+  contentBase64: string;
+  name: string;
+  size: number;
+};
+type Preview = {
+  reviewToken: string;
+  totals: Totals;
+  possibleDuplicates: { transactionId: string }[];
+  evidence: unknown[];
+};
+const newLine = (): Line => ({
+  id: crypto.randomUUID(),
+  description: "",
+  sku: "",
+  regular: "",
+  quantity: "1",
+});
+const nullable = (s: string) => s.trim() || null;
+export function multiplyReceiptDecimals(
+  left: string | undefined,
+  right: string | undefined,
+): string {
+  const parse = (value: string | undefined) => {
+    const normalized = (value?.trim() ?? "").replace(/^[.]/, "0.");
+    const match = /^(\d+)(?:[.](\d*))?$/.exec(normalized);
+    if (!match) return null;
+    return {
+      units: BigInt(match[1] + (match[2] ?? "")),
+      places: (match[2] ?? "").length,
+    };
+  };
+  const a = parse(left),
+    b = parse(right);
+  if (!a || !b) return "";
+  const sourcePlaces = a.places + b.places,
+    product = a.units * b.units,
+    places = Math.min(sourcePlaces, 2),
+    droppedPlaces = sourcePlaces - places,
+    divisor = 10n ** BigInt(droppedPlaces),
+    rounded = droppedPlaces
+      ? product / divisor + (product % divisor) * 2n / divisor
+      : product,
+    digits = rounded.toString().padStart(places + 1, "0");
+  return places ? `${digits.slice(0, -places) || "0"}.${digits.slice(-places)}` : digits;
+}
+const weightedLineTotal = (line: Line) =>
+  line.pricingMethod === "WEIGHT"
+    ? multiplyReceiptDecimals(line.weight, line.regular)
+    : line.sale?.trim() || line.regular;
+const receiptLineQuantity = (line: Line) =>
+  line.pricingMethod === "WEIGHT" ? "1" : line.quantity;
+const receiptStorePromoLabel = (description: string) =>
+  titleWords(`${description.trim().split(/\s+/)[0] || "Product"} Store Promo`);
 
-export function ReceiptProductTotals({line,discounts,api}:{line:Line;discounts:Discount[];api:ApiClient}) {
-  const key=JSON.stringify({line,discounts}),[result,setResult]=useState<{key:string;total:string;after:string}|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false)
-  function scenarioInput(){
-    const scenario:PlanScenario={items:[{id:line.id,name:line.description,sku:line.sku,regular:'',sale:line.sale?.trim()||line.regular,quantity:line.quantity,priceRule:line.priceRule}],coupons:discounts.filter(d=>d.amount.trim()&&!/^0+(?:[.]0+)?$/.test(d.amount)).map(d=>({id:d.id,description:d.label||'Product discount',amount:d.amount,requiredQuantity:d.requiredQuantity||'1',lineIds:[line.id],savedCouponId:null,kind:d.kind})),promotions:[],tax:'0',walgreensCashUsed:'0',registerRewardsUsed:'0',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:''}
-    return scenarioRequest(scenario)
+export function ReceiptProductTotals({
+  line,
+  discounts,
+  api,
+}: {
+  line: Line;
+  discounts: Discount[];
+  api: ApiClient;
+}) {
+  const key = JSON.stringify({ line, discounts }),
+    [result, setResult] = useState<{
+      key: string;
+      total: string;
+      after: string;
+    } | null>(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  function scenarioInput() {
+    const scenario: PlanScenario = {
+      items: [
+        {
+          id: line.id,
+          name: line.description,
+          sku: line.sku,
+          regular: "",
+          sale: weightedLineTotal(line),
+          quantity: receiptLineQuantity(line),
+          priceRule:
+            line.pricingMethod === "WEIGHT" ? undefined : line.priceRule,
+        },
+      ],
+      coupons: discounts
+        .filter((d) => d.amount.trim() && !/^0+(?:[.]0+)?$/.test(d.amount))
+        .map((d) => ({
+          id: d.id,
+          description: d.label || "Product discount",
+          amount: d.amount,
+          requiredQuantity: d.requiredQuantity || "1",
+          lineIds: [line.id],
+          savedCouponId: null,
+          kind: d.kind,
+        })),
+      promotions: [],
+      tax: "0",
+      walgreensCashUsed: "0",
+      registerRewardsUsed: "0",
+      giftCardUsed: "0",
+      manualOop: null,
+      paymentMethod: "CASH",
+      fundingNotes: "",
+    };
+    return scenarioRequest(scenario);
   }
-  const sequence=useRef(0)
-  useEffect(()=>{
-    const controller=new AbortController(),request=++sequence.current
-    let input:ReturnType<typeof scenarioRequest>;try{input=scenarioInput()}catch{return}
-    const timer=setTimeout(()=>{void api.previewScenario(input,controller.signal).then(value=>{
-      const item=value.items.find(row=>row.id===line.id);if(!item)throw new Error('Product calculation unavailable.')
-      if(!controller.signal.aborted&&request===sequence.current){setResult({key,total:item.totalPrice,after:item.itemOopBeforeTaxAndFunding});setError('')}
-    }).catch(e=>{if(!controller.signal.aborted&&request===sequence.current)setError((e as Error).message)})},500)
-    return()=>{clearTimeout(timer);controller.abort()}
-  // The serialized key includes every price, quantity, rule and product discount.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[api,key])
-  async function calculate(){const request=++sequence.current;setBusy(true);setError('');try{
-    const value=await api.mutate('/shopping-plans/scenario/preview','POST',{scenario:scenarioInput()},crypto.randomUUID()) as ScenarioEstimate
-    const item=value.items.find(row=>row.id===line.id);if(!item)throw new Error('Product calculation unavailable.')
-    if(request===sequence.current)setResult({key,total:item.totalPrice,after:item.itemOopBeforeTaxAndFunding})
-  }catch(e){if(request===sequence.current)setError((e as Error).message)}finally{setBusy(false)}}
-  return <div className="planning-calculated"><p>Total: <strong>{result?.key===key?money(result.total):'—'}</strong></p><p>Total minus coupons: <strong>{result?.key===key?money(result.after):'—'}</strong><SectionHelp title="Product totals" label="About product totals">Product coupons only · before tax and whole-receipt discounts. Totals update automatically after valid entries; Calculate Product Totals refreshes them immediately.</SectionHelp></p><button type="button" className="secondary" disabled={busy} onClick={()=>void calculate()}>{busy?'Calculating…':'Calculate product totals'}</button>{error&&<p role="alert">{error}</p>}</div>
+  const sequence = useRef(0);
+  useEffect(() => {
+    const controller = new AbortController(),
+      request = ++sequence.current;
+    let input: ReturnType<typeof scenarioRequest>;
+    try {
+      input = scenarioInput();
+    } catch {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void api
+        .previewScenario(input, controller.signal)
+        .then((value) => {
+          const item = value.items.find((row) => row.id === line.id);
+          if (!item) throw new Error("Product calculation unavailable.");
+          if (!controller.signal.aborted && request === sequence.current) {
+            setResult({
+              key,
+              total: item.totalPrice,
+              after: item.itemOopBeforeTaxAndFunding,
+            });
+            setError("");
+          }
+        })
+        .catch((e) => {
+          if (!controller.signal.aborted && request === sequence.current)
+            setError((e as Error).message);
+        });
+    }, 500);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // The serialized key includes every price, quantity, rule and product discount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, key]);
+  async function calculate() {
+    const request = ++sequence.current;
+    setBusy(true);
+    setError("");
+    try {
+      const value = (await api.mutate(
+        "/shopping-plans/scenario/preview",
+        "POST",
+        { scenario: scenarioInput() },
+        crypto.randomUUID(),
+      )) as ScenarioEstimate;
+      const item = value.items.find((row) => row.id === line.id);
+      if (!item) throw new Error("Product calculation unavailable.");
+      if (request === sequence.current)
+        setResult({
+          key,
+          total: item.totalPrice,
+          after: item.itemOopBeforeTaxAndFunding,
+        });
+    } catch (e) {
+      if (request === sequence.current) setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="planning-calculated">
+      <p>
+        Total:{" "}
+        <strong>{result?.key === key ? money(result.total) : "—"}</strong>
+      </p>
+      <p>
+        Total minus coupons:{" "}
+        <strong>{result?.key === key ? money(result.after) : "—"}</strong>
+        <SectionHelp title="Product totals" label="About product totals">
+          Product coupons only · before tax and whole-receipt discounts. Totals
+          update automatically after valid entries; Calculate Product Totals
+          refreshes them immediately.
+        </SectionHelp>
+      </p>
+      <button
+        type="button"
+        className="secondary"
+        disabled={busy}
+        onClick={() => void calculate()}
+      >
+        {busy ? "Calculating…" : "Calculate product totals"}
+      </button>
+      {error && <p role="alert">{error}</p>}
+    </div>
+  );
 }
 
 /** Uses the existing Java sale calculator for a selected group or the whole receipt. */
-export function ReceiptDiscountSale({items,api,onCalculated}:{items:ScenarioLine[];api:ApiClient;onCalculated:(amount:string,name:string)=>void}){
- const [rule,setRule]=useState<ScenarioLine['priceRule']>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false)
- const version=useRef(0),source=JSON.stringify(items),sourceRef=useRef(source)
- useEffect(()=>{sourceRef.current=source},[source])
- useEffect(()=>()=>{version.current++},[])
- async function calculate(next=rule){if(!next)return;const attempt=++version.current,original=source;setBusy(true);setError('');try{
-  if(!items.length)throw new Error('Select qualifying products first.')
-  const scenario:PlanScenario={items:items.map((l,i)=>({...l,regular:'',priceRule:i===0?{...next,lineIds:items.map(x=>x.id)}:null})),coupons:[],promotions:[],tax:'0',walgreensCashUsed:'0',registerRewardsUsed:'0',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:''}
-  const result=await api.mutate('/shopping-plans/scenario/preview','POST',{scenario:scenarioRequest(scenario)},crypto.randomUUID()) as ScenarioEstimate&{saleReductionTotal:string}
-  if(result.saleReductionTotal==null)throw new Error('Receipt discount calculation is unavailable. Restart the updated API and try again.')
-  if(attempt===version.current&&original===sourceRef.current)onCalculated(result.saleReductionTotal,({BOGO_FREE:'BOGO Free',BOGO_HALF:'BOGO 50%',BUY_ONE_GET_TWO:'Buy 1 Get 2 Free',TWO_FOR:'2 For'} as Record<string,string>)[next.type]??'Sale promotion')
- }catch(e){if(attempt===version.current)setError((e as Error).message)}finally{if(attempt===version.current)setBusy(false)}}
- const first=items[0]??{id:'receipt-sale',name:'Receipt discount',sale:'',regular:'',quantity:'1'}
- return <div><SaleButtons baseLabel="Regular price" line={{...first,name:'Receipt discount',priceRule:rule}} onChange={value=>{version.current++;setBusy(false);setRule(value.priceRule);if(value.priceRule&&(value.priceRule.type!=='TWO_FOR'||value.priceRule.bundlePrice?.trim()))void calculate(value.priceRule)}}/><button type="button" className="secondary" disabled={busy||!rule} onClick={()=>void calculate()}>{busy?'Calculating…':'Calculate receipt discount'}</button><p className="muted">Applies to the selected products, or all products when Whole Receipt is selected. Recalculate after changing prices, quantities or selection. Do not also enter the same sale on a product.</p>{error&&<p className="error" role="alert">{error}</p>}</div>
+export function ReceiptDiscountSale({
+  items,
+  api,
+  onCalculated,
+}: {
+  items: ScenarioLine[];
+  api: ApiClient;
+  onCalculated: (amount: string, name: string) => void;
+}) {
+  const [rule, setRule] = useState<ScenarioLine["priceRule"]>(null),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const version = useRef(0),
+    source = JSON.stringify(items),
+    sourceRef = useRef(source);
+  useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
+  useEffect(
+    () => () => {
+      version.current++;
+    },
+    [],
+  );
+  async function calculate(next = rule) {
+    if (!next) return;
+    const attempt = ++version.current,
+      original = source;
+    setBusy(true);
+    setError("");
+    try {
+      if (!items.length) throw new Error("Select qualifying products first.");
+      const scenario: PlanScenario = {
+        items: items.map((l, i) => ({
+          ...l,
+          regular: "",
+          priceRule:
+            i === 0 ? { ...next, lineIds: items.map((x) => x.id) } : null,
+        })),
+        coupons: [],
+        promotions: [],
+        tax: "0",
+        walgreensCashUsed: "0",
+        registerRewardsUsed: "0",
+        giftCardUsed: "0",
+        manualOop: null,
+        paymentMethod: "CASH",
+        fundingNotes: "",
+      };
+      const result = (await api.mutate(
+        "/shopping-plans/scenario/preview",
+        "POST",
+        { scenario: scenarioRequest(scenario) },
+        crypto.randomUUID(),
+      )) as ScenarioEstimate & { saleReductionTotal: string };
+      if (result.saleReductionTotal == null)
+        throw new Error(
+          "Receipt discount calculation is unavailable. Restart the updated API and try again.",
+        );
+      if (attempt === version.current && original === sourceRef.current)
+        onCalculated(
+          result.saleReductionTotal,
+          (
+            {
+              BOGO_FREE: "BOGO Free",
+              BOGO_HALF: "BOGO 50%",
+              BUY_ONE_GET_TWO: "Buy 1 Get 2 Free",
+              TWO_FOR: "2 For",
+            } as Record<string, string>
+          )[next.type] ?? "Sale promotion",
+        );
+    } catch (e) {
+      if (attempt === version.current) setError((e as Error).message);
+    } finally {
+      if (attempt === version.current) setBusy(false);
+    }
+  }
+  const first = items[0] ?? {
+    id: "receipt-sale",
+    name: "Receipt discount",
+    sale: "",
+    regular: "",
+    quantity: "1",
+  };
+  return (
+    <div>
+      <SaleButtons
+        baseLabel="Regular price"
+        line={{ ...first, name: "Receipt discount", priceRule: rule }}
+        onChange={(value) => {
+          version.current++;
+          setBusy(false);
+          setRule(value.priceRule);
+          if (
+            value.priceRule &&
+            (value.priceRule.type !== "TWO_FOR" ||
+              value.priceRule.bundlePrice?.trim())
+          )
+            void calculate(value.priceRule);
+        }}
+      />
+      <button
+        type="button"
+        className="secondary"
+        disabled={busy || !rule}
+        onClick={() => void calculate()}
+      >
+        {busy ? "Calculating…" : "Calculate receipt discount"}
+      </button>
+      <p className="muted">
+        Applies to the selected products, or all products when Whole Receipt is
+        selected. Recalculate after changing prices, quantities or selection. Do
+        not also enter the same sale on a product.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
-function sameDecimal(a:string|null|undefined,b:string|null|undefined) {
- const normalize=(value:string)=>value.trim().replace(/^\+/, '').replace(/^(-?)0+(?=\d)/,'$1').replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,'');
- return a!=null&&b!=null&&normalize(a)===normalize(b)
+function sameDecimal(
+  a: string | null | undefined,
+  b: string | null | undefined,
+) {
+  const normalize = (value: string) =>
+    value
+      .trim()
+      .replace(/^\+/, "")
+      .replace(/^(-?)0+(?=\d)/, "$1")
+      .replace(/(\.\d*?)0+$/, "$1")
+      .replace(/\.$/, "");
+  return a != null && b != null && normalize(a) === normalize(b);
 }
 
 /** Shared receipt evidence/projection display; all arithmetic comes from Java. */
-export function ReceiptFinancialReview({ totals, cvs=false, rewardDescriptions={} }: { totals: Totals; cvs?:boolean; rewardDescriptions?:Record<string,string> }) {
-  const review = totals.paymentReview
-  const savings = totals.savings
-  const hideWhenZero=new Set(['Manufacturer coupons','Store discounts / coupons','Unclassified discounts','Walgreens Cash used','Register Rewards used','Recorded gift-card funding'])
-  const isZero=(value:string)=>/^[-+]?(?:0+(?:[.]0*)?|[.]0+)(?:[eE][-+]?[0-9]+)?$/.test(value.trim())
-  const showDiscountTotal=totals.coupons==null||!totals.discountBreakdown||Object.values(totals.discountBreakdown).some(value=>value==null)||Object.values(totals.discountBreakdown).filter(value=>value!=null&&!isZero(value)).length>1
-  return <>
-    <div className="key-values">{Object.entries({
-      'Regular merchandise': totals.regularMerchandise,
-      ...(!sameDecimal(totals.regularMerchandise,totals.saleMerchandise)?{'Merchandise before listed discounts': totals.saleMerchandise}:{}),
-      'Sale/promotion reductions': totals.discountBreakdown?.salePromotions ?? null,
-      'Manufacturer coupons': totals.discountBreakdown?.manufacturerCoupons ?? null,
-      'Store discounts / coupons': totals.discountBreakdown?.storeDiscounts ?? null,
-      'Unclassified discounts': totals.discountBreakdown?.unclassified ?? null,
-      ...(showDiscountTotal?{'Total listed discounts (sum above)': totals.coupons}:{}),
-      'Sales tax': totals.tax,
-      'Total before coupons': totals.merchandiseBeforeCoupons ?? null,
-      [review?.printedTotalBasis === 'BEFORE_PAYMENT_FUNDING' ? 'Printed purchase total' : review?.printedTotalBasis === 'AFTER_REWARD_REDEMPTIONS' ? 'Printed remaining total after redemptions' : 'Recorded printed total (basis unknown)']: review?.printedTotal ?? totals.reportedDue,
-      ...(!cvs ? {'Walgreens Cash used': totals.wcUsed, 'Register Rewards used': totals.rrUsed} : {}),
-      ...(totals.giftCardPayments&&Object.keys(totals.giftCardPayments).length?Object.fromEntries(Object.entries(totals.giftCardPayments).filter(([,value])=>!isZero(value))):{'Recorded gift-card funding': review?.giftCardFunding ?? null}),
-    }).filter(([name,value])=>!hideWhenZero.has(name)||value==null||!isZero(value)).map(([name, value]) => <div key={name}><span>{name}</span><strong>{money(value)}</strong></div>)}</div>
-    {!totals.discountBreakdown && <Notice>Restart the updated Java API to load the discount breakdown. The combined discount total remains recorded above.</Notice>}
-    <h3>Actual out of pocket</h3>
-    <div className="detail-row"><span>Actual cash/card paid</span><strong>{money(review?.recordedCashCardPaid)}</strong></div>
-    <p className="muted">From recorded cash and card payments. Excludes redeemed rewards, gift cards and newly earned benefits.</p>
-    {review ? <>
-      <p>Printed-total basis: {review.printedTotalBasis === 'BEFORE_PAYMENT_FUNDING' ? 'Before payment funding' : review.printedTotalBasis === 'AFTER_REWARD_REDEMPTIONS' ? 'After reward redemptions' : 'Unknown — legacy meaning preserved'}</p>
-      <p>Reconciliation: {review.status.toLowerCase().replaceAll('_', ' ')}.</p>
-      <p>{review.reason}</p>
-      {review.purchaseDifference != null && !isZero(review.purchaseDifference) && review.calculatedPurchaseTotal != null && <div role="note" aria-label="Receipt discrepancy" className="notice">
-        Recorded printed total {money(review.printedTotal)}. Independently calculated purchase total {money(review.calculatedPurchaseTotal)}. Difference {money(review.purchaseDifference)}. Review this discrepancy; recorded receipt values are preserved.
-      </div>}
-      {review.unresolvedPaymentIds.length > 0 && <Notice>Some payment entries need a role. In Edit receipt, classify Other as funding or an account deduction; move any RR payment into Register Rewards used. Review the receipt total basis and confirm all payments are entered.</Notice>}
-    </> : <Notice>Payment completeness and printed-total basis were not supplied by this server.</Notice>}
-    <h3 className="receipt-benefits-heading">Benefits — separate from payment</h3>
-    <div className="detail-row"><span>Known confirmed dollar-benefit subtotal</span><strong>{money(savings.knownConfirmedBenefitValue ?? savings.newlyEarned)}</strong></div>
-    {savings.confirmedBenefitsComplete === false && <Notice>Combined benefit value is incomplete. Native points remain recorded; no USD conversion is invented.</Notice>}
-    {totals.benefitObservations?.map(e => <p className="receipt-benefit-entry" key={e.earningId}>{e.provider} — {totals.qualification?.filter(q=>q.earningId===e.earningId).map(q=><span key={q.earningId}>Req: {q.review.status.replaceAll('_',' ')} — </span>)}{e.status}: {e.confirmed ? `recorded confirmed amount ${e.confirmed.amount} ${e.confirmed.kind === 'POINTS' ? 'points' : e.confirmed.currency}` : `expected ${e.expected?.amount ?? 'unknown'} ${e.expected?.kind === 'POINTS' ? 'points' : e.expected?.currency ?? ''}`}
-      {(e.confirmed || e.expected)?.kind === 'POINTS' && (e.valuation ? `; saved USD valuation ${money(e.valuation.amount)} (${e.valuation.basis})` : '; USD valuation not recorded')}
-      {rewardDescriptions[e.earningId]?.trim() && ` · ${rewardDescriptions[e.earningId].trim().split(/\s+/)[0]}`}
-    </p>)}
-    <div className="detail-row receipt-paid-after-rebates"><span>Total Paid after rebates</span><strong>{savings.paidAfterRebates == null ? 'Cannot calculate yet' : money(savings.paidAfterRebates)}</strong></div>
-    <p className="muted">Cash/card paid minus newly earned reward and rebate value, using the same calculation as the CLI and your spreadsheet. Includes saved dollar valuations of points. Rewards used are not subtracted again; Actual OOP remains the cash/card amount paid.</p>
-    {savings.paidAfterRebates == null && <Notice>{savings.recordedCashCardComplete === false ? 'Cannot calculate yet: payment amounts are missing. Record the actual tenders, or a genuine zero checkout.' : savings.confirmedBenefitsComplete === false ? 'Cannot calculate yet: a confirmed benefit is missing its dollar valuation. Keep native points recorded and add their saved valuation when known.' : 'Cannot calculate yet: recorded payment amounts or benefit valuations are missing.'}</Notice>}
-    <h3 className="receipt-total-saved-heading">Total saved</h3>
-    <div className="detail-row"><span>Total saved — including confirmed benefits</span><strong>{money(savings.totalSaved)}</strong></div>
-    <p className="muted">Regular merchandise plus recorded tax, minus cash/card paid, plus confirmed valued benefits. Separate from actual out of pocket; rewards used are not added again as earnings.</p>
-    {savings.totalSaved == null && <Notice>Savings inputs are incomplete. Review regular prices, payment information and benefit valuations.</Notice>}
-    <details><summary>Legacy calculations — original meanings preserved</summary>
-      {totals.difference && !/^-?0+(\.0+)?$/.test(totals.difference) && <p className="muted">The legacy reported/calculated difference of {money(totals.difference)} compares original checkout figures. It is separate from the purchase-total and payment reconciliation above.</p>}
-      <div className="key-values">{Object.entries({ 'Legacy calculated checkout': totals.calculatedDue, 'Recorded printed total': totals.reportedDue,
-        'Legacy reported/calculated difference': totals.difference, 'Legacy paid after benefits': savings.paidAfterRebates, 'Legacy total saved': savings.totalSaved,
-      }).map(([name, value]) => <div key={name}><span>{name}</span><strong>{money(value)}</strong></div>)}</div>
-    </details>
-  </>
+export function ReceiptFinancialReview({
+  totals,
+  cvs = false,
+  rewardDescriptions = {},
+}: {
+  totals: Totals;
+  cvs?: boolean;
+  rewardDescriptions?: Record<string, string>;
+}) {
+  const review = totals.paymentReview;
+  const savings = totals.savings;
+  const hideWhenZero = new Set([
+    "Manufacturer coupons",
+    "Store discounts / coupons",
+    "Unclassified discounts",
+    "Walgreens Cash used",
+    "Register Rewards used",
+    "Recorded gift-card funding",
+  ]);
+  const isZero = (value: string) =>
+    /^[-+]?(?:0+(?:[.]0*)?|[.]0+)(?:[eE][-+]?[0-9]+)?$/.test(value.trim());
+  const showDiscountTotal =
+    totals.coupons == null ||
+    !totals.discountBreakdown ||
+    Object.values(totals.discountBreakdown).some((value) => value == null) ||
+    Object.values(totals.discountBreakdown).filter(
+      (value) => value != null && !isZero(value),
+    ).length > 1;
+  return (
+    <>
+      <div className="key-values">
+        {Object.entries({
+          "Regular merchandise": totals.regularMerchandise,
+          ...(!sameDecimal(totals.regularMerchandise, totals.saleMerchandise)
+            ? { "Merchandise before listed discounts": totals.saleMerchandise }
+            : {}),
+          "Sale/promotion reductions":
+            totals.discountBreakdown?.salePromotions ?? null,
+          "Manufacturer coupons":
+            totals.discountBreakdown?.manufacturerCoupons ?? null,
+          "Store discounts / coupons":
+            totals.discountBreakdown?.storeDiscounts ?? null,
+          "Unclassified discounts":
+            totals.discountBreakdown?.unclassified ?? null,
+          ...(showDiscountTotal
+            ? { "Total listed discounts (sum above)": totals.coupons }
+            : {}),
+          "Sales tax": totals.tax,
+          "Total before coupons": totals.merchandiseBeforeCoupons ?? null,
+          [review?.printedTotalBasis === "BEFORE_PAYMENT_FUNDING"
+            ? "Printed purchase total"
+            : review?.printedTotalBasis === "AFTER_REWARD_REDEMPTIONS"
+              ? "Printed remaining total after redemptions"
+              : "Recorded printed total (basis unknown)"]:
+            review?.printedTotal ?? totals.reportedDue,
+          ...(!cvs
+            ? {
+                "Walgreens Cash used": totals.wcUsed,
+                "Register Rewards used": totals.rrUsed,
+                ...(totals.walmartCashUsed != null
+                  ? { "Walmart Cash used": totals.walmartCashUsed }
+                  : {}),
+              }
+            : {}),
+          ...(totals.giftCardPayments &&
+          Object.keys(totals.giftCardPayments).length
+            ? Object.fromEntries(
+                Object.entries(totals.giftCardPayments).filter(
+                  ([, value]) => !isZero(value),
+                ),
+              )
+            : {
+                "Recorded gift-card funding": review?.giftCardFunding ?? null,
+              }),
+        })
+          .filter(
+            ([name, value]) =>
+              !hideWhenZero.has(name) || value == null || !isZero(value),
+          )
+          .map(([name, value]) => (
+            <div key={name}>
+              <span>{name}</span>
+              <strong>{money(value)}</strong>
+            </div>
+          ))}
+      </div>
+      {!totals.discountBreakdown && (
+        <Notice>
+          Restart the updated Java API to load the discount breakdown. The
+          combined discount total remains recorded above.
+        </Notice>
+      )}
+      <h3>Actual out of pocket</h3>
+      <div className="detail-row">
+        <span>Actual cash/card paid</span>
+        <strong>{money(review?.recordedCashCardPaid)}</strong>
+      </div>
+      <p className="muted">
+        From recorded cash and card payments. Excludes redeemed rewards, gift
+        cards and newly earned benefits.
+      </p>
+      {review ? (
+        <>
+          <p>
+            Printed-total basis:{" "}
+            {review.printedTotalBasis === "BEFORE_PAYMENT_FUNDING"
+              ? "Before payment funding"
+              : review.printedTotalBasis === "AFTER_REWARD_REDEMPTIONS"
+                ? "After reward redemptions"
+                : "Unknown — legacy meaning preserved"}
+          </p>
+          <p>
+            Reconciliation: {review.status.toLowerCase().replaceAll("_", " ")}.
+          </p>
+          <p>{review.reason}</p>
+          {review.purchaseDifference != null &&
+            !isZero(review.purchaseDifference) &&
+            review.calculatedPurchaseTotal != null && (
+              <div
+                role="note"
+                aria-label="Receipt discrepancy"
+                className="notice"
+              >
+                Recorded printed total {money(review.printedTotal)}.
+                Independently calculated purchase total{" "}
+                {money(review.calculatedPurchaseTotal)}. Difference{" "}
+                {money(review.purchaseDifference)}. Review this discrepancy;
+                recorded receipt values are preserved.
+              </div>
+            )}
+          {review.unresolvedPaymentIds.length > 0 && (
+            <Notice>
+              Some payment entries need a role. In Edit receipt, classify Other
+              as funding or an account deduction; move any RR payment into
+              Register Rewards used. Review the receipt total basis and confirm
+              all payments are entered.
+            </Notice>
+          )}
+        </>
+      ) : (
+        <Notice>
+          Payment completeness and printed-total basis were not supplied by this
+          server.
+        </Notice>
+      )}
+      <h3 className="receipt-benefits-heading">
+        Benefits — separate from payment
+      </h3>
+      <div className="detail-row">
+        <span>Known confirmed dollar-benefit subtotal</span>
+        <strong>
+          {money(savings.knownConfirmedBenefitValue ?? savings.newlyEarned)}
+        </strong>
+      </div>
+      {savings.confirmedBenefitsComplete === false && (
+        <Notice>
+          Combined benefit value is incomplete. Native points remain recorded;
+          no USD conversion is invented.
+        </Notice>
+      )}
+      {totals.benefitObservations?.map((e) => (
+        <p className="receipt-benefit-entry" key={e.earningId}>
+          {e.provider} —{" "}
+          {totals.qualification
+            ?.filter((q) => q.earningId === e.earningId)
+            .map((q) => (
+              <span key={q.earningId}>
+                Req: {q.review.status.replaceAll("_", " ")} —{" "}
+              </span>
+            ))}
+          {e.status}:{" "}
+          {e.confirmed
+            ? `recorded confirmed amount ${e.confirmed.amount} ${e.confirmed.kind === "POINTS" ? "points" : e.confirmed.currency}`
+            : `expected ${e.expected?.amount ?? "unknown"} ${e.expected?.kind === "POINTS" ? "points" : (e.expected?.currency ?? "")}`}
+          {(e.confirmed || e.expected)?.kind === "POINTS" &&
+            (e.valuation
+              ? `; saved USD valuation ${money(e.valuation.amount)} (${e.valuation.basis})`
+              : "; USD valuation not recorded")}
+          {rewardDescriptions[e.earningId]?.trim() &&
+            ` · ${rewardDescriptions[e.earningId].trim().split(/\s+/)[0]}`}
+        </p>
+      ))}
+      <div className="detail-row receipt-paid-after-rebates">
+        <span>Total Paid after rebates</span>
+        <strong>
+          {savings.paidAfterRebates == null
+            ? "Cannot calculate yet"
+            : money(savings.paidAfterRebates)}
+        </strong>
+      </div>
+      <p className="muted">
+        Cash/card paid minus newly earned reward and rebate value, using the
+        same calculation as the CLI and your spreadsheet. Includes saved dollar
+        valuations of points. Rewards used are not subtracted again; Actual OOP
+        remains the cash/card amount paid.
+      </p>
+      {savings.paidAfterRebates == null && (
+        <Notice>
+          {savings.recordedCashCardComplete === false
+            ? "Cannot calculate yet: payment amounts are missing. Record the actual tenders, or a genuine zero checkout."
+            : savings.confirmedBenefitsComplete === false
+              ? "Cannot calculate yet: a confirmed benefit is missing its dollar valuation. Keep native points recorded and add their saved valuation when known."
+              : "Cannot calculate yet: recorded payment amounts or benefit valuations are missing."}
+        </Notice>
+      )}
+      <h3 className="receipt-total-saved-heading">Total saved</h3>
+      <div className="detail-row">
+        <span>Total saved — including confirmed benefits</span>
+        <strong>{money(savings.totalSaved)}</strong>
+      </div>
+      <p className="muted">
+        Regular merchandise plus recorded tax, minus cash/card paid, plus
+        confirmed valued benefits. Separate from actual out of pocket; rewards
+        used are not added again as earnings.
+      </p>
+      {savings.totalSaved == null && (
+        <Notice>
+          Savings inputs are incomplete. Review regular prices, payment
+          information and benefit valuations.
+        </Notice>
+      )}
+      <details>
+        <DisclosureSummary>
+          Legacy calculations — original meanings preserved
+        </DisclosureSummary>
+        {totals.difference && !/^-?0+(\.0+)?$/.test(totals.difference) && (
+          <p className="muted">
+            The legacy reported/calculated difference of{" "}
+            {money(totals.difference)} compares original checkout figures. It is
+            separate from the purchase-total and payment reconciliation above.
+          </p>
+        )}
+        <div className="key-values">
+          {Object.entries({
+            "Legacy calculated checkout": totals.calculatedDue,
+            "Recorded printed total": totals.reportedDue,
+            "Legacy reported/calculated difference": totals.difference,
+            "Legacy paid after benefits": savings.paidAfterRebates,
+            "Legacy total saved": savings.totalSaved,
+          }).map(([name, value]) => (
+            <div key={name}>
+              <span>{name}</span>
+              <strong>{money(value)}</strong>
+            </div>
+          ))}
+        </div>
+      </details>
+    </>
+  );
 }
 
-type ImportSource={requiresManualReview?:boolean;qualityIssues?:string[];subtotal?:string;websiteSavings?:string;name:string;rawText:string;scanned:boolean;registerNumber?:string;transactionNumber?:string;storeReference?:string;store:string;number:string;day:string;time:string;tax:string;reported:string;footer:Partial<FooterDraft>;wcEarned:string;warnings:string[];items:{observedStorePromotion?:string;observedRegularPrice?:string;id:string;description:string;sku:string;regular:string;sale:string;quantity:string}[];deductions:{id:string;label:string;amount:string;kind:string;lineId?:string}[];payments:Tender[]}
-type ImportReview={attachmentIds?:string[];pendingApply?:boolean;sources:ImportSource[];duplicates:{transactionId:string;receiptNumber:string;status:string}[];selected:number}
-export type ReceiptDraftState={receiptKind?:'PURCHASE'|'REWARD_ADJUSTMENT';originalReceiptId?:string;originalEarningId?:string;registerNumber?:string;transactionNumber?:string;storeReference?:string;importReview?:ImportReview|null;importChecked?:boolean;id:string;store:string;number:string;day:string;time:string;channel:string;printedTotalBasis:PrintedTotalBasis;paymentEntryStatus:PaymentEntryStatus;footer:FooterDraft;tax:string;reported:string;rrUses:{eventId:string;amount:string;recordedDescription:string}[];lines:Line[];discounts:Discount[];payments:Tender[];rewards:Reward[];evidence:Evidence[];planning?:import('../../types/platform').PlanReceiptDraft}
+type ImportSource = {
+  requiresManualReview?: boolean;
+  qualityIssues?: string[];
+  subtotal?: string;
+  websiteSavings?: string;
+  name: string;
+  rawText: string;
+  scanned: boolean;
+  registerNumber?: string;
+  transactionNumber?: string;
+  storeReference?: string;
+  store: string;
+  number: string;
+  day: string;
+  time: string;
+  tax: string;
+  reported: string;
+  footer: Partial<FooterDraft>;
+  wcEarned: string;
+  warnings: string[];
+  items: {
+    observedStorePromotion?: string;
+    observedRegularPrice?: string;
+    id: string;
+    description: string;
+    sku: string;
+    regular: string;
+    sale: string;
+    quantity: string;
+  }[];
+  deductions: {
+    id: string;
+    label: string;
+    amount: string;
+    kind: string;
+    lineId?: string;
+  }[];
+  payments: Tender[];
+};
+type ImportReview = {
+  attachmentIds?: string[];
+  pendingApply?: boolean;
+  sources: ImportSource[];
+  duplicates: {
+    transactionId: string;
+    receiptNumber: string;
+    status: string;
+  }[];
+  selected: number;
+};
+export type ReceiptDraftState = {
+  receiptKind?: "PURCHASE" | "REWARD_ADJUSTMENT";
+  originalReceiptId?: string;
+  originalEarningId?: string;
+  registerNumber?: string;
+  transactionNumber?: string;
+  storeReference?: string;
+  importReview?: ImportReview | null;
+  importChecked?: boolean;
+  id: string;
+  store: string;
+  number: string;
+  day: string;
+  time: string;
+  channel: string;
+  printedTotalBasis: PrintedTotalBasis;
+  paymentEntryStatus: PaymentEntryStatus;
+  footer: FooterDraft;
+  tax: string;
+  reported: string;
+  rrUses: { eventId: string; amount: string; recordedDescription: string }[];
+  lines: Line[];
+  discounts: Discount[];
+  payments: Tender[];
+  rewards: Reward[];
+  evidence: Evidence[];
+  planning?: import("../../types/platform").PlanReceiptDraft;
+};
 /** An unsaved web form. All totals and financial decisions come from the Java preview. */
-export function ReceiptCreate({ api, enabled, onClose, onSaved, onReview, offers=[], products=[], coupons=[], planning:providedPlanning, savedDraft, onDraftSaved,onOpenExisting,workspace }: {workspace?:import('../../types/platform').Workspace;onOpenExisting?:(id:string)=>void;savedDraft?:{state:ReceiptDraftState;revision:string};onDraftSaved?:()=>void; planning?:import('../../types/platform').PlanReceiptDraft; coupons?: import('../../types/platform').Coupon[]; products?:ProductLookup[]; offers?:RewardOffer[]; api: ApiClient; enabled: boolean; onClose: () => void; onSaved: (id: string) => void; onReview: () => void }) {
-  const planning=savedDraft?.state.planning??providedPlanning
-  const [planned]=useState(()=>{
-    if(!planning?.plan.scenario)return null
-    const s=planning.plan.scenario,ids=new Map(s.items.map(l=>[l.id,crypto.randomUUID()]))
-    return {lines:s.items.map(l=>({id:ids.get(l.id)!,description:l.name,sku:l.sku??'',regular:l.regular||'',sale:l.regular?undefined:l.sale||'',quantity:l.quantity})),discounts:[...s.items.filter(l=>(l.sale!=null||l.priceRule!=null)&&!!planning.estimate.items.find(x=>x.id===l.id)?.saleReduction&&!/^[-]|^0+(?:[.]0+)?$/.test(planning.estimate.items.find(x=>x.id===l.id)!.saleReduction!)).map(l=>({id:crypto.randomUUID(),label:`${l.name} Sale Promotion`,amount:planning.estimate.items.find(x=>x.id===l.id)?.saleReduction??'',kind:'SALE_PROMOTION',quantities:{[ids.get(l.id)!]:l.quantity},plannedLineId:l.id})),...s.coupons.filter(c=>planning.estimate.coupons.find(x=>x.id===c.id)?.applied).map(c=>({id:c.savedCouponId??crypto.randomUUID(),clippedCouponId:c.savedCouponId??undefined,shared:!!c.wholeReceipt||c.lineIds.length!==1,label:c.description,amount:c.amount,kind:c.kind??'MANUFACTURER',requiredQuantity:c.requiredQuantity,quantities:c.wholeReceipt?{}:Object.fromEntries(c.lineIds.map(id=>[ids.get(id)!,s.items.find(l=>l.id===id)!.quantity]))}))],payments:s.payments!=null?[...s.payments.filter(p=>p.type!=='REGISTER_REWARD'&&p.amount.trim()).map(p=>({id:crypto.randomUUID(),type:['ECB','WALMART_CASH'].includes(p.type)?'OTHER':p.type,amount:p.amount,notes:p.notes,...(p.type==='GIFT_CARD'&&p.rewardSourceId?{giftCardId:p.rewardSourceId}:{}),...(p.type==='ECB'?{role:'CHECKOUT_DEDUCTION',accountName:'ECB'}:p.type==='WALMART_CASH'?{role:'FUNDING',accountName:'Walmart Cash'}:{})})),...(!s.payments.some(p=>['CASH','CARD'].includes(p.type)&&p.amount.trim())&&!/^0+(?:[.]0+)?$/.test(planning.estimate.selectedOop)?[{id:crypto.randomUUID(),type:s.payments.find(p=>['CASH','CARD'].includes(p.type))?.type??s.paymentMethod,amount:planning.estimate.selectedOop,notes:''}]:[])]:[...(s.walgreensCashUsed&&!/^0+(?:[.]0+)?$/.test(s.walgreensCashUsed)?[{id:crypto.randomUUID(),type:'WALGREENS_CASH',amount:s.walgreensCashUsed,notes:s.fundingNotes}]:[]),...(s.giftCardUsed&&!/^0+(?:[.]0+)?$/.test(s.giftCardUsed)?[{id:crypto.randomUUID(),type:'GIFT_CARD',amount:s.giftCardUsed,notes:''}]:[]),...(!/^0+(?:[.]0+)?$/.test(planning.estimate.selectedOop)?[{id:crypto.randomUUID(),type:s.paymentMethod,amount:planning.estimate.selectedOop,notes:''}]:[])],rrUses:s.payments!=null?s.payments.filter(p=>p.type==='REGISTER_REWARD'&&p.amount.trim()).map(p=>({eventId:p.id,amount:p.amount,recordedDescription:[p.registerRewardType?`${p.registerRewardType} RR`:null,p.notes].filter(Boolean).join(' · ')||'Planned Register Rewards used'})):!/^0+(?:[.]0+)?$/.test(s.registerRewardsUsed)?[{eventId:crypto.randomUUID(),amount:s.registerRewardsUsed,recordedDescription:s.fundingNotes||'Planned Register Rewards used'}]:[],rewards:s.promotions.filter(p=>planning.estimate.promotions.find(x=>x.id===p.id)?.eligible).map(p=>({...newReward(),kind:p.rewardType==='REGISTER_REWARD'?'REGISTER_REWARD':p.rewardType==='WALGREENS_CASH'?'WALGREENS_CASH':'THIRD_PARTY_REBATE',provider:({WALMART_CASH:'Walmart Cash',ECB:'ECB',CASH:'Cash rebate',FETCH:'Fetch',PG_BRAND:'P&G Brand',IBOTTA:'Ibotta',PAYPAL:'PayPal',VENMO:'Venmo',SWAGBUCKS:'Swagbucks'} as Record<string,string>)[p.rewardType]??'Walgreens',form:['FETCH','PG_BRAND'].includes(p.rewardType)?'POINTS':p.rewardType==='REGISTER_REWARD'?'STORE_COUPON':['CASH','IBOTTA','PAYPAL','VENMO','SWAGBUCKS'].includes(p.rewardType)?'CASH':'STORE_REWARD',offer:p.description,amount:p.rewardAmount,status:'EXPECTED',requirementType:!/^0+(?:[.]0+)?$/.test(p.requiredSpend)?'SPEND':!/^0+$/.test(p.requiredQuantity)?'BUY':'',threshold:!/^0+(?:[.]0+)?$/.test(p.requiredSpend)?p.requiredSpend:p.requiredQuantity,spendBasis:p.spendBasis==='BEFORE_COUPONS'?'SALE_BEFORE_COUPONS':p.spendBasis==='AFTER_COUPONS'?'SALE_AFTER_COUPONS':'UNKNOWN',quantities:p.wholeReceipt?{}:Object.fromEntries(p.lineIds.map(id=>[ids.get(id)!,s.items.find(l=>l.id===id)!.quantity]))}))}
-  })
-  const [id] = useState(() => savedDraft?.state.id??crypto.randomUUID())
-  const [printedCashRewardId]=useState(()=>{
-    const previous=savedDraft?.state.rewards.find(r=>r.generatedFromPrintedFooter||r.offer==='Printed Walgreens Cash Earned This Visit'||r.id.endsWith('-printed-walgreens-cash'));
-    return previous&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(previous.id)?previous.id:crypto.randomUUID();
-  })
-  const [focusId, setFocusId] = useState('')
-  function focusedId() { const id=crypto.randomUUID(); setFocusId(id); return id }
-  function focusedLine() { const line=newLine(); setFocusId(line.id); return line }
-  const [openedAt]=useState(()=>new Date())
-  const [store, setStore] = useState(savedDraft?.state.store??planning?.plan.retailer??''), [number, setNumber] = useState(savedDraft?.state.number??''), [day, setDay] = useState(()=>savedDraft?.state.day??[openedAt.getFullYear(),String(openedAt.getMonth()+1).padStart(2,'0'),String(openedAt.getDate()).padStart(2,'0')].join('-')), [time, setTime] = useState(()=>savedDraft?.state.time??[openedAt.getHours(),openedAt.getMinutes()].map(v=>String(v).padStart(2,'0')).join(':')), [channel, setChannel] = useState(savedDraft?.state.channel??planning?.plan.scenario?.source?.purchaseChannel??'IN_STORE')
-  const [receiptKind,setReceiptKind]=useState<'PURCHASE'|'REWARD_ADJUSTMENT'>(savedDraft?.state.receiptKind??'PURCHASE')
-  const [originalReceiptId,setOriginalReceiptId]=useState(savedDraft?.state.originalReceiptId??''),[originalEarningId,setOriginalEarningId]=useState(savedDraft?.state.originalEarningId??''),[sourceSearch,setSourceSearch]=useState('')
-  function selectKind(kind:'PURCHASE'|'REWARD_ADJUSTMENT'){if(kind===receiptKind)return;if(kind==='REWARD_ADJUSTMENT'){if((lines.some(l=>l.description)||discounts.length||payments.length)&&!window.confirm('Switch to a reward-only receipt? Purchased items, discounts and payments will be removed from this draft.'))return;setLines([]);setDiscounts([]);setPayments([]);setRRUses([]);setTax('0');setReported('0');setPrintedTotalBasis('BEFORE_PAYMENT_FUNDING');setPaymentEntryStatus('COMPLETE');setRewards(rows=>rows.some(r=>r.kind==='WALGREENS_CASH')?rows:[...rows,{...newReward(),kind:'WALGREENS_CASH',provider:'Walgreens',form:'STORE_REWARD',offer:'Manager Credit — Missing Walgreens Cash'}])}else{setLines([newLine()]);setTax('');setReported('');setPaymentEntryStatus('UNKNOWN');setOriginalReceiptId('');setOriginalEarningId('')}setReceiptKind(kind)}
-  const [storeReference,setStoreReference]=useState(savedDraft?.state.storeReference??'')
-  const [transactionNumber,setTransactionNumber]=useState(savedDraft?.state.transactionNumber??'')
-  const [registerNumber,setRegisterNumber]=useState(savedDraft?.state.registerNumber??'')
-  const [printedTotalBasis, setPrintedTotalBasis] = useState<PrintedTotalBasis>(savedDraft?.state.printedTotalBasis??(planning?'BEFORE_PAYMENT_FUNDING':'UNKNOWN'))
-  const [paymentEntryStatus, setPaymentEntryStatus] = useState<PaymentEntryStatus>(savedDraft?.state.paymentEntryStatus??'UNKNOWN')
-  const [footer, setFooter] = useState(() => savedDraft?.state.footer??footerDraft())
-  const [tax, setTax] = useState(savedDraft?.state.tax??planning?.estimate.tax??''), [reported, setReported] = useState(savedDraft?.state.reported??planning?.estimate.receiptTotalBeforeFunding??'')
-  const [rrUses, setRRUses] = useState<{ eventId: string; amount: string; recordedDescription: string }[]>(savedDraft?.state.rrUses??planned?.rrUses??[])
-  const [lines, setLines] = useState<Line[]>(() => savedDraft?.state.lines??planned?.lines??[newLine()]), [discounts, setDiscounts] = useState<Discount[]>(()=> (savedDraft?.state.discounts??planned?.discounts??[]).map(d=>d.id.startsWith('promotion-')?{...d,id:crypto.randomUUID(),promotionLineId:d.id.slice('promotion-'.length)}:d)), [payments, setPayments] = useState<Tender[]>(savedDraft?.state.payments??planned?.payments??[]), [rewards, setRewards] = useState<Reward[]>(()=> (savedDraft?.state.rewards??planned?.rewards??[]).map(r=>r.id.endsWith('-printed-walgreens-cash')?{...r,id:printedCashRewardId,generatedFromPrintedFooter:true}:r)), [evidence, setEvidence] = useState<Evidence[]>(savedDraft?.state.evidence??[])
-  const [error, setError] = useState(''), [busy, setBusy] = useState(false), [ack, setAck] = useState(false)
-  const [importReview,setImportReview]=useState<ImportReview|null>(savedDraft?.state.importReview??null),[importChecked,setImportChecked]=useState(savedDraft?.state.importChecked??false)
-  const [invalidField,setInvalidField]=useState<HTMLInputElement|null>(null)
-  const formRef = useRef<HTMLFormElement>(null)
-  const errorRef=useRef<HTMLDivElement>(null)
-  const importReviewRef=useRef<HTMLDetailsElement>(null)
-  function focusUnclassifiedDeduction(){if(importReviewRef.current)importReviewRef.current.open=true;const field=importReviewRef.current?.querySelector<HTMLSelectElement>('select[aria-invalid="true"]');field?.scrollIntoView?.({block:'center',behavior:'smooth'});field?.focus()}
-  useEffect(()=>{if(error.startsWith('Classify the imported coupon deductions')){focusUnclassifiedDeduction();return}if(error&&!formRef.current?.querySelector('[aria-invalid="true"]')){errorRef.current?.scrollIntoView?.({block:'center',behavior:'smooth'});errorRef.current?.focus()}},[error])
-  const [review, setReview] = useState<{ body: Record<string, unknown>; preview: Preview } | null>(null)
-  const [pending, setPending] = useState<{ body: Record<string, unknown>; key: string } | null>(null)
-  const [draftRevision,setDraftRevision]=useState(savedDraft?.revision??'0'),[lastDraftSnapshot,setLastDraftSnapshot]=useState(savedDraft?JSON.stringify(savedDraft.state):null),[draftMessage,setDraftMessage]=useState('')
-  const [draftPending,setDraftPending]=useState<{body:{state:ReceiptDraftState};key:string;revision:string}|null>(null)
-  function snapshot():ReceiptDraftState{return {receiptKind,originalReceiptId,originalEarningId,registerNumber,transactionNumber,storeReference,importReview,importChecked,id,store,number,day,time,channel,printedTotalBasis,paymentEntryStatus,footer,tax,reported,rrUses,lines,discounts,payments,rewards,evidence,planning}}
-
-  const [cashSplitAmount,setCashSplitAmount]=useState(''),[cashSplitName,setCashSplitName]=useState(''),[cashSplitError,setCashSplitError]=useState('');
-  const receivedCash=(rows:Reward[])=>rows.filter(r=>r.kind==='WALGREENS_CASH'&&r.status==='CREDITED').reduce((sum,r)=>sum+Math.round(Number(r.amount||0)*100),0);
-  function splitCashReward(){
-    const original=rewards.find(r=>r.id===printedCashRewardId);
-    const cents=Math.round(Number(cashSplitAmount)*100),available=Math.round(Number(original?.amount||0)*100);
-    if(!/^\d+(?:\.\d{1,2})?$/.test(cashSplitAmount)||cents<=0||cents>available||!cashSplitName.trim()){
-      setCashSplitError('Enter a description and an amount greater than $0, up to the remaining Walgreens Cash earnings.');return;
-    }
-    setRewards(rows=>[...rows.filter(r=>r.id!==printedCashRewardId||available>cents).map(r=>r.id===printedCashRewardId?{...r,amount:((available-cents)/100).toFixed(2),offer:'Other Walgreens Cash earned this visit'}:r),
-      {...newReward(),kind:'WALGREENS_CASH',provider:'Walgreens',form:'STORE_REWARD',status:'CREDITED',offer:cashSplitName.trim(),amount:(cents/100).toFixed(2)}]);
-    setCashSplitAmount('');setCashSplitName('');setCashSplitError('');
+export function ReceiptCreate({
+  api,
+  enabled,
+  onClose,
+  onSaved,
+  onReview,
+  offers = [],
+  products = [],
+  coupons = [],
+  planning: providedPlanning,
+  savedDraft,
+  onDraftSaved,
+  onOpenExisting,
+  workspace,
+}: {
+  workspace?: import("../../types/platform").Workspace;
+  onOpenExisting?: (id: string) => void;
+  savedDraft?: { state: ReceiptDraftState; revision: string };
+  onDraftSaved?: () => void;
+  planning?: import("../../types/platform").PlanReceiptDraft;
+  coupons?: import("../../types/platform").Coupon[];
+  products?: ProductLookup[];
+  offers?: RewardOffer[];
+  api: ApiClient;
+  enabled: boolean;
+  onClose: () => void;
+  onSaved: (id: string) => void;
+  onReview: () => void;
+}) {
+  const planning = savedDraft?.state.planning ?? providedPlanning;
+  const [planned] = useState(() => {
+    if (!planning?.plan.scenario) return null;
+    const s = planning.plan.scenario,
+      ids = new Map(s.items.map((l) => [l.id, crypto.randomUUID()]));
+    return {
+      lines: s.items.map((l) => ({
+        id: ids.get(l.id)!,
+        description: l.name,
+        sku: l.sku ?? "",
+        regular: l.regular || "",
+        sale: l.regular ? undefined : l.sale || "",
+        quantity: l.quantity,
+      })),
+      discounts: [
+        ...s.items
+          .filter(
+            (l) =>
+              (l.sale != null || l.priceRule != null) &&
+              !!planning.estimate.items.find((x) => x.id === l.id)
+                ?.saleReduction &&
+              !/^[-]|^0+(?:[.]0+)?$/.test(
+                planning.estimate.items.find((x) => x.id === l.id)!
+                  .saleReduction!,
+              ),
+          )
+          .map((l) => ({
+            id: crypto.randomUUID(),
+            label: `${l.name} Sale Promotion`,
+            amount:
+              planning.estimate.items.find((x) => x.id === l.id)
+                ?.saleReduction ?? "",
+            kind: "SALE_PROMOTION",
+            quantities: { [ids.get(l.id)!]: l.quantity },
+            plannedLineId: l.id,
+          })),
+        ...s.coupons
+          .filter(
+            (c) =>
+              planning.estimate.coupons.find((x) => x.id === c.id)?.applied,
+          )
+          .map((c) => ({
+            id: crypto.randomUUID(),
+            plannedCouponId: c.savedCouponId ?? undefined,
+            shared: !!c.wholeReceipt || c.lineIds.length !== 1,
+            label: c.description,
+            amount: c.amount,
+            kind: c.kind ?? "MANUFACTURER",
+            requiredQuantity: c.requiredQuantity,
+            quantities: c.wholeReceipt
+              ? {}
+              : Object.fromEntries(
+                  c.lineIds.map((id) => [
+                    ids.get(id)!,
+                    s.items.find((l) => l.id === id)!.quantity,
+                  ]),
+                ),
+          })),
+      ],
+      payments:
+        s.payments != null
+          ? [
+              ...s.payments
+                .filter((p) => p.type !== "REGISTER_REWARD" && p.amount.trim())
+                .map((p) => ({
+                  id: crypto.randomUUID(),
+                  type: ["ECB", "WALMART_CASH"].includes(p.type)
+                    ? "OTHER"
+                    : p.type,
+                  amount: p.amount,
+                  notes: p.notes,
+                  ...(p.type === "GIFT_CARD" && p.rewardSourceId
+                    ? { giftCardId: p.rewardSourceId }
+                    : {}),
+                  ...(p.type === "ECB"
+                    ? { role: "CHECKOUT_DEDUCTION", accountName: "ECB" }
+                    : p.type === "WALMART_CASH"
+                      ? { role: "FUNDING", accountName: "Walmart Cash" }
+                      : {}),
+                })),
+              ...(!s.payments.some(
+                (p) => ["CASH", "CARD"].includes(p.type) && p.amount.trim(),
+              ) && !/^0+(?:[.]0+)?$/.test(planning.estimate.selectedOop)
+                ? [
+                    {
+                      id: crypto.randomUUID(),
+                      type:
+                        s.payments.find((p) =>
+                          ["CASH", "CARD"].includes(p.type),
+                        )?.type ?? s.paymentMethod,
+                      amount: planning.estimate.selectedOop,
+                      notes: "",
+                    },
+                  ]
+                : []),
+            ]
+          : [
+              ...(s.walgreensCashUsed &&
+              !/^0+(?:[.]0+)?$/.test(s.walgreensCashUsed)
+                ? [
+                    {
+                      id: crypto.randomUUID(),
+                      type: "WALGREENS_CASH",
+                      amount: s.walgreensCashUsed,
+                      notes: s.fundingNotes,
+                    },
+                  ]
+                : []),
+              ...(s.giftCardUsed && !/^0+(?:[.]0+)?$/.test(s.giftCardUsed)
+                ? [
+                    {
+                      id: crypto.randomUUID(),
+                      type: "GIFT_CARD",
+                      amount: s.giftCardUsed,
+                      notes: "",
+                    },
+                  ]
+                : []),
+              ...(!/^0+(?:[.]0+)?$/.test(planning.estimate.selectedOop)
+                ? [
+                    {
+                      id: crypto.randomUUID(),
+                      type: s.paymentMethod,
+                      amount: planning.estimate.selectedOop,
+                      notes: "",
+                    },
+                  ]
+                : []),
+            ],
+      rrUses:
+        s.payments != null
+          ? s.payments
+              .filter((p) => p.type === "REGISTER_REWARD" && p.amount.trim())
+              .map((p) => ({
+                eventId: p.id,
+                amount: p.amount,
+                recordedDescription:
+                  [
+                    p.registerRewardType ? `${p.registerRewardType} RR` : null,
+                    p.notes,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "Planned Register Rewards used",
+              }))
+          : !/^0+(?:[.]0+)?$/.test(s.registerRewardsUsed)
+            ? [
+                {
+                  eventId: crypto.randomUUID(),
+                  amount: s.registerRewardsUsed,
+                  recordedDescription:
+                    s.fundingNotes || "Planned Register Rewards used",
+                },
+              ]
+            : [],
+      rewards: s.promotions
+        .filter(
+          (p) =>
+            planning.estimate.promotions.find((x) => x.id === p.id)?.eligible,
+        )
+        .map((p) => ({
+          ...newReward(),
+          kind:
+            p.rewardType === "REGISTER_REWARD"
+              ? "REGISTER_REWARD"
+              : p.rewardType === "WALGREENS_CASH"
+                ? "WALGREENS_CASH"
+                : "THIRD_PARTY_REBATE",
+          provider:
+            (
+              {
+                WALMART_CASH: "Walmart Cash",
+                ECB: "ECB",
+                CASH: "Cash rebate",
+                FETCH: "Fetch",
+                PG_BRAND: "P&G Brand",
+                IBOTTA: "Ibotta",
+                PAYPAL: "PayPal",
+                VENMO: "Venmo",
+                SWAGBUCKS: "Swagbucks",
+              } as Record<string, string>
+            )[p.rewardType] ?? "Walgreens",
+          form: ["FETCH", "PG_BRAND"].includes(p.rewardType)
+            ? "POINTS"
+            : p.rewardType === "REGISTER_REWARD"
+              ? "STORE_COUPON"
+              : ["CASH", "IBOTTA", "PAYPAL", "VENMO", "SWAGBUCKS"].includes(
+                    p.rewardType,
+                  )
+                ? "CASH"
+                : "STORE_REWARD",
+          offer: p.description,
+          amount: p.rewardAmount,
+          status: "EXPECTED",
+          requirementType: !/^0+(?:[.]0+)?$/.test(p.requiredSpend)
+            ? "SPEND"
+            : !/^0+$/.test(p.requiredQuantity)
+              ? "BUY"
+              : "",
+          threshold: !/^0+(?:[.]0+)?$/.test(p.requiredSpend)
+            ? p.requiredSpend
+            : p.requiredQuantity,
+          spendBasis:
+            p.spendBasis === "BEFORE_COUPONS"
+              ? "SALE_BEFORE_COUPONS"
+              : p.spendBasis === "AFTER_COUPONS"
+                ? "SALE_AFTER_COUPONS"
+                : "UNKNOWN",
+          quantities: p.wholeReceipt
+            ? {}
+            : Object.fromEntries(
+                p.lineIds.map((id) => [
+                  ids.get(id)!,
+                  s.items.find((l) => l.id === id)!.quantity,
+                ]),
+              ),
+        })),
+    };
+  });
+  const [id] = useState(() => savedDraft?.state.id ?? crypto.randomUUID());
+  const [printedCashRewardId] = useState(() => {
+    const previous = savedDraft?.state.rewards.find(
+      (r) =>
+        r.generatedFromPrintedFooter ||
+        r.offer === "Printed Walgreens Cash Earned This Visit" ||
+        r.id.endsWith("-printed-walgreens-cash"),
+    );
+    return previous &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        previous.id,
+      )
+      ? previous.id
+      : crypto.randomUUID();
+  });
+  const [focusId, setFocusId] = useState("");
+  function focusedId() {
+    const id = crypto.randomUUID();
+    setFocusId(id);
+    return id;
   }
-  function updatePrintedFooter(next:FooterDraft) {
+  function focusedLine() {
+    const line = newLine();
+    setFocusId(line.id);
+    return line;
+  }
+  const [openedAt] = useState(() => new Date());
+  const [store, setStore] = useState(
+      savedDraft?.state.store ?? planning?.plan.retailer ?? "",
+    ),
+    [number, setNumber] = useState(savedDraft?.state.number ?? ""),
+    [day, setDay] = useState(
+      () =>
+        savedDraft?.state.day ??
+        [
+          openedAt.getFullYear(),
+          String(openedAt.getMonth() + 1).padStart(2, "0"),
+          String(openedAt.getDate()).padStart(2, "0"),
+        ].join("-"),
+    ),
+    [time, setTime] = useState(
+      () =>
+        savedDraft?.state.time ??
+        [openedAt.getHours(), openedAt.getMinutes()]
+          .map((v) => String(v).padStart(2, "0"))
+          .join(":"),
+    ),
+    [channel, setChannel] = useState(
+      savedDraft?.state.channel ??
+        planning?.plan.scenario?.source?.purchaseChannel ??
+        "IN_STORE",
+    );
+  const [receiptKind, setReceiptKind] = useState<
+    "PURCHASE" | "REWARD_ADJUSTMENT"
+  >(savedDraft?.state.receiptKind ?? "PURCHASE");
+  const [originalReceiptId, setOriginalReceiptId] = useState(
+      savedDraft?.state.originalReceiptId ?? "",
+    ),
+    [originalEarningId, setOriginalEarningId] = useState(
+      savedDraft?.state.originalEarningId ?? "",
+    ),
+    [sourceSearch, setSourceSearch] = useState("");
+  function selectKind(kind: "PURCHASE" | "REWARD_ADJUSTMENT") {
+    if (kind === receiptKind) return;
+    if (kind === "REWARD_ADJUSTMENT") {
+      if (
+        (lines.some((l) => l.description) ||
+          discounts.length ||
+          payments.length) &&
+        !window.confirm(
+          "Switch to a reward-only receipt? Purchased items, discounts and payments will be removed from this draft.",
+        )
+      )
+        return;
+      setLines([]);
+      setDiscounts([]);
+      setPayments([]);
+      setRRUses([]);
+      setTax("0");
+      setReported("0");
+      setPrintedTotalBasis("BEFORE_PAYMENT_FUNDING");
+      setPaymentEntryStatus("COMPLETE");
+      setRewards((rows) =>
+        rows.some((r) => r.kind === "WALGREENS_CASH")
+          ? rows
+          : [
+              ...rows,
+              {
+                ...newReward(),
+                kind: "WALGREENS_CASH",
+                provider: "Walgreens",
+                form: "STORE_REWARD",
+                offer: "Manager Credit — Missing Walgreens Cash",
+              },
+            ],
+      );
+    } else {
+      setLines([newLine()]);
+      setTax("");
+      setReported("");
+      setPaymentEntryStatus("UNKNOWN");
+      setOriginalReceiptId("");
+      setOriginalEarningId("");
+    }
+    setReceiptKind(kind);
+  }
+  const [storeReference, setStoreReference] = useState(
+    savedDraft?.state.storeReference ?? "",
+  );
+  const [transactionNumber, setTransactionNumber] = useState(
+    savedDraft?.state.transactionNumber ?? "",
+  );
+  const [registerNumber, setRegisterNumber] = useState(
+    savedDraft?.state.registerNumber ?? "",
+  );
+  const [printedTotalBasis, setPrintedTotalBasis] = useState<PrintedTotalBasis>(
+    savedDraft?.state.printedTotalBasis ??
+      (planning ? "BEFORE_PAYMENT_FUNDING" : "UNKNOWN"),
+  );
+  const [paymentEntryStatus, setPaymentEntryStatus] =
+    useState<PaymentEntryStatus>(
+      savedDraft?.state.paymentEntryStatus ?? "UNKNOWN",
+    );
+  const [footer, setFooter] = useState(
+    () => savedDraft?.state.footer ?? footerDraft(),
+  );
+  const [tax, setTax] = useState(
+      savedDraft?.state.tax ?? planning?.estimate.tax ?? "",
+    ),
+    [reported, setReported] = useState(
+      savedDraft?.state.reported ??
+        planning?.estimate.receiptTotalBeforeFunding ??
+        "",
+    );
+  const [rrUses, setRRUses] = useState<
+    { eventId: string; amount: string; recordedDescription: string }[]
+  >(savedDraft?.state.rrUses ?? planned?.rrUses ?? []);
+  const [lines, setLines] = useState<Line[]>(
+      () => savedDraft?.state.lines ?? planned?.lines ?? [newLine()],
+    ),
+    [discounts, setDiscounts] = useState<Discount[]>(() =>
+      (savedDraft?.state.discounts ?? planned?.discounts ?? []).map((d) =>
+        d.id.startsWith("promotion-")
+          ? {
+              ...d,
+              id: crypto.randomUUID(),
+              promotionLineId: d.id.slice("promotion-".length),
+            }
+          : d,
+      ),
+    ),
+    [payments, setPayments] = useState<Tender[]>(
+      savedDraft?.state.payments ?? planned?.payments ?? [],
+    ),
+    [rewards, setRewards] = useState<Reward[]>(() =>
+      (savedDraft?.state.rewards ?? planned?.rewards ?? []).map((r) =>
+        r.id.endsWith("-printed-walgreens-cash")
+          ? { ...r, id: printedCashRewardId, generatedFromPrintedFooter: true }
+          : r,
+      ),
+    ),
+    [evidence, setEvidence] = useState<Evidence[]>(
+      savedDraft?.state.evidence ?? [],
+    );
+  const [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [ack, setAck] = useState(false);
+  const [importReview, setImportReview] = useState<ImportReview | null>(
+      savedDraft?.state.importReview ?? null,
+    ),
+    [importChecked, setImportChecked] = useState(
+      savedDraft?.state.importChecked ?? false,
+    );
+  const [invalidField, setInvalidField] = useState<HTMLInputElement | null>(
+    null,
+  );
+  const formRef = useRef<HTMLFormElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const importReviewRef = useRef<HTMLDetailsElement>(null);
+  function focusUnclassifiedDeduction() {
+    if (importReviewRef.current) importReviewRef.current.open = true;
+    const field = importReviewRef.current?.querySelector<HTMLSelectElement>(
+      'select[aria-invalid="true"]',
+    );
+    field?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    field?.focus();
+  }
+  useEffect(() => {
+    if (error.startsWith("Classify the imported coupon deductions")) {
+      focusUnclassifiedDeduction();
+      return;
+    }
+    if (error && !formRef.current?.querySelector('[aria-invalid="true"]')) {
+      errorRef.current?.scrollIntoView?.({
+        block: "center",
+        behavior: "smooth",
+      });
+      errorRef.current?.focus();
+    }
+  }, [error]);
+  const [review, setReview] = useState<{
+    body: Record<string, unknown>;
+    preview: Preview;
+  } | null>(null);
+  const [pending, setPending] = useState<{
+    body: Record<string, unknown>;
+    key: string;
+  } | null>(null);
+  const [draftRevision, setDraftRevision] = useState(
+      savedDraft?.revision ?? "0",
+    ),
+    [lastDraftSnapshot, setLastDraftSnapshot] = useState(
+      savedDraft ? JSON.stringify(savedDraft.state) : null,
+    ),
+    [draftMessage, setDraftMessage] = useState("");
+  const [draftPending, setDraftPending] = useState<{
+    body: { state: ReceiptDraftState };
+    key: string;
+    revision: string;
+  } | null>(null);
+  function snapshot(): ReceiptDraftState {
+    return {
+      receiptKind,
+      originalReceiptId,
+      originalEarningId,
+      registerNumber,
+      transactionNumber,
+      storeReference,
+      importReview,
+      importChecked,
+      id,
+      store,
+      number,
+      day,
+      time,
+      channel,
+      printedTotalBasis,
+      paymentEntryStatus,
+      footer,
+      tax,
+      reported,
+      rrUses,
+      lines,
+      discounts,
+      payments,
+      rewards,
+      evidence,
+      planning,
+    };
+  }
+
+  const [cashSplitAmount, setCashSplitAmount] = useState(""),
+    [cashSplitName, setCashSplitName] = useState(""),
+    [cashSplitError, setCashSplitError] = useState("");
+  const receivedCash = (rows: Reward[]) =>
+    rows
+      .filter((r) => r.kind === "WALGREENS_CASH" && r.status === "CREDITED")
+      .reduce((sum, r) => sum + Math.round(Number(r.amount || 0) * 100), 0);
+  function splitCashReward() {
+    const original = rewards.find((r) => r.id === printedCashRewardId);
+    const cents = Math.round(Number(cashSplitAmount) * 100),
+      available = Math.round(Number(original?.amount || 0) * 100);
+    if (
+      !/^\d+(?:\.\d{1,2})?$/.test(cashSplitAmount) ||
+      cents <= 0 ||
+      cents > available ||
+      !cashSplitName.trim()
+    ) {
+      setCashSplitError(
+        "Enter a description and an amount greater than $0, up to the remaining Walgreens Cash earnings.",
+      );
+      return;
+    }
+    setRewards((rows) => [
+      ...rows
+        .filter((r) => r.id !== printedCashRewardId || available > cents)
+        .map((r) =>
+          r.id === printedCashRewardId
+            ? {
+                ...r,
+                amount: ((available - cents) / 100).toFixed(2),
+                offer: "Other Walgreens Cash earned this visit",
+              }
+            : r,
+        ),
+      {
+        ...newReward(),
+        kind: "WALGREENS_CASH",
+        provider: "Walgreens",
+        form: "STORE_REWARD",
+        status: "CREDITED",
+        offer: cashSplitName.trim(),
+        amount: (cents / 100).toFixed(2),
+      },
+    ]);
+    setCashSplitAmount("");
+    setCashSplitName("");
+    setCashSplitError("");
+  }
+  function updatePrintedFooter(next: FooterDraft) {
     setFooter(next);
-    if(next.wcEarned===footer.wcEarned)return;
-    const entered=next.wcEarned.trim();
-    if(entered)setFooter({...next,status:'PRINTED'});
-    setRewards(rows=>{
-      if(!entered||/^0+(?:[.]0*)?$/.test(entered))return rows.filter(r=>r.id!==printedCashRewardId);
-      const existing=rows.find(r=>r.id===printedCashRewardId)??rows.find(r=>r.kind==='WALGREENS_CASH'&&!r.amount.trim());
-      return [...rows.filter(r=>r.id!==printedCashRewardId&&r.id!==existing?.id),
-        {...(existing??newReward()),id:printedCashRewardId,generatedFromPrintedFooter:true,kind:'WALGREENS_CASH',provider:'Walgreens',form:'STORE_REWARD',offer:existing?.offer||'Printed Walgreens Cash Earned This Visit',amount:rows.some(r=>r.kind==='WALGREENS_CASH'&&r.id!==printedCashRewardId&&r.id!==existing?.id)?(Math.max(0,Math.round(Number(entered)*100)-receivedCash(rows.filter(r=>r.id!==printedCashRewardId&&r.id!==existing?.id)))/100).toFixed(2):entered,status:'CREDITED'}];
+    if (next.wcEarned === footer.wcEarned) return;
+    const entered = next.wcEarned.trim();
+    if (entered) setFooter({ ...next, status: "PRINTED" });
+    setRewards((rows) => {
+      if (!entered || /^0+(?:[.]0*)?$/.test(entered))
+        return rows.filter((r) => r.id !== printedCashRewardId);
+      const existing =
+        rows.find((r) => r.id === printedCashRewardId) ??
+        rows.find((r) => r.kind === "WALGREENS_CASH" && !r.amount.trim());
+      return [
+        ...rows.filter(
+          (r) => r.id !== printedCashRewardId && r.id !== existing?.id,
+        ),
+        {
+          ...(existing ?? newReward()),
+          id: printedCashRewardId,
+          generatedFromPrintedFooter: true,
+          kind: "WALGREENS_CASH",
+          provider: "Walgreens",
+          form: "STORE_REWARD",
+          offer: existing?.offer || "Printed Walgreens Cash Earned This Visit",
+          amount: rows.some(
+            (r) =>
+              r.kind === "WALGREENS_CASH" &&
+              r.id !== printedCashRewardId &&
+              r.id !== existing?.id,
+          )
+            ? (
+                Math.max(
+                  0,
+                  Math.round(Number(entered) * 100) -
+                    receivedCash(
+                      rows.filter(
+                        (r) =>
+                          r.id !== printedCashRewardId && r.id !== existing?.id,
+                      ),
+                    ),
+                ) / 100
+              ).toFixed(2)
+            : entered,
+          status: "CREDITED",
+        },
+      ];
     });
   }
-  async function saveDraft(){if(!enabled||busy||pending)return;setError('');setBusy(true);const request=draftPending??{body:{state:snapshot()},key:crypto.randomUUID(),revision:draftRevision};setDraftPending(request);try{const result=await api.mutate(`/receipt-drafts/${id}`,'PUT',request.body,request.key,request.revision) as {revision:string};setDraftRevision(result.revision);setLastDraftSnapshot(JSON.stringify(request.body.state));setDraftPending(null);setDraftMessage('Draft saved. You can close and resume it from Saved receipt drafts.');onDraftSaved?.()}catch(e){setError((e as Error).message);if(e instanceof ApiError&&[400,404,409,412].includes(e.status))setDraftPending(null)}finally{setBusy(false)}}
-  const close = () => {
-    if (busy) return
-    if(lastDraftSnapshot===JSON.stringify(snapshot())&&!pending&&!draftPending){onClose();return}
-    if (window.confirm(draftPending?'The draft save outcome is uncertain. Close and check Saved receipt drafts before editing again?':lastDraftSnapshot?'Discard changes since your last saved draft? Your saved draft will remain available.':pending ? 'The save outcome may be uncertain. Close and refresh saved receipts before entering it again?' : 'Discard this unsaved receipt?')) { if (pending) onReview(); onClose() }
-  }
-  async function deleteEntry(){if(!enabled||busy||pending||draftPending)return;if(!window.confirm('Delete this unfinished receipt or saved draft? Existing saved receipts will not be deleted.'))return
-    if(draftRevision==='0'){onClose();return}setBusy(true);setError('');try{await api.mutate(`/receipt-drafts/${id}`,'DELETE',{},crypto.randomUUID(),draftRevision);onDraftSaved?.();onClose()}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
-  function change<T extends { id: string }>(rows: T[], id: string, field: keyof T, value: T[keyof T], set: (rows: T[]) => void) { setPaymentEntryStatus('UNKNOWN'); if(field==='regular'||field==='quantity'){setDiscounts(current=>current.map(d=>d.promotionLineId===id?{...d,amount:''}:d))} set(rows.map(row => row.id === id ? { ...row, [field]: value, ...(field==='regular'?{sale:''}:{}) } : row)) }
-  const promotionVersions=useRef<Record<string,number>>({})
-  const [calculatingPromotions,setCalculatingPromotions]=useState<string[]>([])
-  async function selectProductPromotion(line:Line, rule:Line['priceRule']) {
-    const version=(promotionVersions.current[line.id]??0)+1;promotionVersions.current[line.id]=version;
-    const id=discounts.find(d=>d.promotionLineId===line.id)?.id??crypto.randomUUID();
-    setPaymentEntryStatus('UNKNOWN');setLines(rows=>rows.map(row=>row.id===line.id?{...row,priceRule:rule}:row));
-    setDiscounts(rows=>[...rows.filter(d=>d.promotionLineId!==line.id),{id,promotionLineId:line.id,label:productDiscountLabel(line.description,'SALE_PROMOTION'),amount:'',kind:'SALE_PROMOTION',quantities:{[line.id]:line.quantity}}]);
-    setCalculatingPromotions(rows=>rows.filter(id=>id!==line.id));
-    if(!rule||(rule.type==='TWO_FOR'&&!rule.bundlePrice?.trim()))return;
-    setCalculatingPromotions(rows=>[...rows,line.id]);
+  async function saveDraft() {
+    if (!enabled || busy || pending) return;
+    setError("");
+    setBusy(true);
+    const request = draftPending ?? {
+      body: { state: snapshot() },
+      key: crypto.randomUUID(),
+      revision: draftRevision,
+    };
+    setDraftPending(request);
     try {
-      const scenario:PlanScenario={items:[{id:line.id,name:line.description,sku:line.sku,regular:'',sale:line.regular,quantity:line.quantity,priceRule:rule}],coupons:[],promotions:[],tax:'0',walgreensCashUsed:'0',registerRewardsUsed:'0',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:''};
-      const calculated=await api.mutate('/shopping-plans/scenario/preview','POST',{scenario:scenarioRequest(scenario),retailer:store.trim()},crypto.randomUUID()) as ScenarioEstimate;
-      if(promotionVersions.current[line.id]!==version)return;
-      const amount=calculated.items.find(item=>item.id===line.id)?.saleReduction??'';
-      setDiscounts(rows=>rows.map(d=>d.id===id?{...d,amount}:d));
-    } catch(e){if(promotionVersions.current[line.id]===version)setError((e as Error).message)}
-    finally{if(promotionVersions.current[line.id]===version)setCalculatingPromotions(rows=>rows.filter(id=>id!==line.id))}
+      const result = (await api.mutate(
+        `/receipt-drafts/${id}`,
+        "PUT",
+        request.body,
+        request.key,
+        request.revision,
+      )) as { revision: string };
+      setDraftRevision(result.revision);
+      setLastDraftSnapshot(JSON.stringify(request.body.state));
+      setDraftPending(null);
+      setDraftMessage(
+        "Draft saved. You can close and resume it from Saved receipt drafts.",
+      );
+      onDraftSaved?.();
+    } catch (e) {
+      setError((e as Error).message);
+      if (e instanceof ApiError && [400, 404, 409, 412].includes(e.status))
+        setDraftPending(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+  const close = () => {
+    if (busy) return;
+    if (
+      lastDraftSnapshot === JSON.stringify(snapshot()) &&
+      !pending &&
+      !draftPending
+    ) {
+      onClose();
+      return;
+    }
+    if (
+      window.confirm(
+        draftPending
+          ? "The draft save outcome is uncertain. Close and check Saved receipt drafts before editing again?"
+          : lastDraftSnapshot
+            ? "Discard changes since your last saved draft? Your saved draft will remain available."
+            : pending
+              ? "The save outcome may be uncertain. Close and refresh saved receipts before entering it again?"
+              : "Discard this unsaved receipt?",
+      )
+    ) {
+      if (pending) onReview();
+      onClose();
+    }
+  };
+  async function deleteEntry() {
+    if (!enabled || busy || pending || draftPending) return;
+    if (
+      !window.confirm(
+        "Delete this unfinished receipt or saved draft? Existing saved receipts will not be deleted.",
+      )
+    )
+      return;
+    if (draftRevision === "0") {
+      onClose();
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await api.mutate(
+        `/receipt-drafts/${id}`,
+        "DELETE",
+        {},
+        crypto.randomUUID(),
+        draftRevision,
+      );
+      onDraftSaved?.();
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  function change<T extends { id: string }>(
+    rows: T[],
+    id: string,
+    field: keyof T,
+    value: T[keyof T],
+    set: (rows: T[]) => void,
+  ) {
+    setPaymentEntryStatus("UNKNOWN");
+    if (field === "regular" || field === "quantity") {
+      setDiscounts((current) =>
+        current.map((d) =>
+          d.promotionLineId === id ? { ...d, amount: "" } : d,
+        ),
+      );
+    }
+    set(
+      rows.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              [field]: value,
+              ...(field === "regular" ? { sale: "" } : {}),
+            }
+          : row,
+      ),
+    );
+  }
+  const promotionVersions = useRef<Record<string, number>>({});
+  const [calculatingPromotions, setCalculatingPromotions] = useState<string[]>(
+    [],
+  );
+  async function selectProductPromotion(line: Line, rule: Line["priceRule"]) {
+    const version = (promotionVersions.current[line.id] ?? 0) + 1;
+    promotionVersions.current[line.id] = version;
+    const id =
+      discounts.find((d) => d.promotionLineId === line.id)?.id ??
+      crypto.randomUUID();
+    setPaymentEntryStatus("UNKNOWN");
+    setLines((rows) =>
+      rows.map((row) =>
+        row.id === line.id ? { ...row, priceRule: rule } : row,
+      ),
+    );
+    setDiscounts((rows) => [
+      ...rows.filter((d) => d.promotionLineId !== line.id),
+      {
+        id,
+        promotionLineId: line.id,
+        label: productDiscountLabel(line.description, "SALE_PROMOTION"),
+        amount: "",
+        kind: "SALE_PROMOTION",
+        quantities: { [line.id]: line.quantity },
+      },
+    ]);
+    setCalculatingPromotions((rows) => rows.filter((id) => id !== line.id));
+    if (!rule || (rule.type === "TWO_FOR" && !rule.bundlePrice?.trim())) return;
+    setCalculatingPromotions((rows) => [...rows, line.id]);
+    try {
+      const scenario: PlanScenario = {
+        items: [
+          {
+            id: line.id,
+            name: line.description,
+            sku: line.sku,
+            regular: "",
+            sale: line.regular,
+            quantity: line.quantity,
+            priceRule: rule,
+          },
+        ],
+        coupons: [],
+        promotions: [],
+        tax: "0",
+        walgreensCashUsed: "0",
+        registerRewardsUsed: "0",
+        giftCardUsed: "0",
+        manualOop: null,
+        paymentMethod: "CASH",
+        fundingNotes: "",
+      };
+      const calculated = (await api.mutate(
+        "/shopping-plans/scenario/preview",
+        "POST",
+        { scenario: scenarioRequest(scenario), retailer: store.trim() },
+        crypto.randomUUID(),
+      )) as ScenarioEstimate;
+      if (promotionVersions.current[line.id] !== version) return;
+      const amount =
+        calculated.items.find((item) => item.id === line.id)?.saleReduction ??
+        "";
+      setDiscounts((rows) =>
+        rows.map((d) => (d.id === id ? { ...d, amount } : d)),
+      );
+    } catch (e) {
+      if (promotionVersions.current[line.id] === version)
+        setError((e as Error).message);
+    } finally {
+      if (promotionVersions.current[line.id] === version)
+        setCalculatingPromotions((rows) => rows.filter((id) => id !== line.id));
+    }
   }
   // Copied associations describe purchased units, not the coupon's required quantity.
   // Keep them current when actual receipt quantities differ from the shopping plan.
-  useEffect(()=>{
-    const cap=(quantities:Record<string,string>)=>Object.fromEntries(Object.entries(quantities).map(([id,q])=>{
-      const purchased=lines.find(line=>line.id===id)?.quantity;
-      return [id,purchased&&/^[1-9][0-9]*$/.test(purchased)&&Number(q)>Number(purchased)?purchased:q];
-    }));
-    setDiscounts(rows=>rows.map(row=>({...row,quantities:cap(row.quantities)})));
-    setRewards(rows=>rows.map(row=>({...row,quantities:cap(row.quantities)})));
-  },[lines]);
-  function amount(label: string, value: string, onChange: (s: string) => void, required = true) { return <label>{label}<input aria-label={label} required={required} inputMode="decimal" pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)" value={value} onChange={e => onChange(e.target.value)} /></label> }
+  useEffect(() => {
+    const cap = (quantities: Record<string, string>) =>
+      Object.fromEntries(
+        Object.entries(quantities).map(([id, q]) => {
+          const purchased = lines.find((line) => line.id === id)?.quantity;
+          return [
+            id,
+            purchased &&
+            /^[1-9][0-9]*$/.test(purchased) &&
+            Number(q) > Number(purchased)
+              ? purchased
+              : q,
+          ];
+        }),
+      );
+    setDiscounts((rows) =>
+      rows.map((row) => ({ ...row, quantities: cap(row.quantities) })),
+    );
+    setRewards((rows) =>
+      rows.map((row) => ({ ...row, quantities: cap(row.quantities) })),
+    );
+  }, [lines]);
+  function amount(
+    label: string,
+    value: string,
+    onChange: (s: string) => void,
+    required = true,
+  ) {
+    return (
+      <label>
+        {label}
+        <input
+          aria-label={label}
+          required={required}
+          inputMode="decimal"
+          pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </label>
+    );
+  }
   function removeLine(id: string) {
-    if ([...discounts, ...rewards].some(row => id in row.quantities)) { setError('Reassign or remove linked discounts/rewards before deleting this product.'); return }
-    setLines(lines.filter(l => l.id !== id))
+    if ([...discounts, ...rewards].some((row) => id in row.quantities)) {
+      setError(
+        "Reassign or remove linked discounts/rewards before deleting this product.",
+      );
+      return;
+    }
+    setLines(lines.filter((l) => l.id !== id));
   }
-  function couponSelector(name:string,line?:Line) {
-    const selectorId=`${id}-clipped-coupon-${line?.id??'shared'}`
-    return <div className="clipped-coupon-field"><div className="clipped-coupon-heading"><label htmlFor={selectorId}>{name}</label><SectionHelp title="Using a clipped coupon" label={`About ${name}`}>Selection adds one editable discount. Do not enter it again manually. Saving the receipt marks this coupon used; preview does not. For percentage coupons, enter the actual deduction printed on the receipt.</SectionHelp></div><select id={selectorId} aria-label={name} value="" onChange={e=>{const c=coupons.find(c=>c.couponId===e.target.value);if(!c)return;setDiscounts([...discounts,{id:c.couponId,clippedCouponId:c.couponId,label:c.description,amount:c.terms?.discount==='PERCENT'?'':c.discountAmount??'',kind:c.couponType==='MANUFACTURER'?'MANUFACTURER':'STORE_COUPON',requiredQuantity:c.requiredQuantity==null?null:String(c.requiredQuantity),shared:!line,quantities:line?{[line.id]:line.quantity}:{}}]);setPaymentEntryStatus('UNKNOWN')}}><option value="">Choose a saved coupon (optional)</option>{coupons.filter(c=>c.status==='CLIPPED'&&!discounts.some(d=>d.clippedCouponId===c.couponId)&&(!day||!c.expirationDate||c.expirationDate>=day)).map(c=><option key={c.couponId} value={c.couponId}>{c.provider} · {c.description} · {c.terms?.discount==='PERCENT'?`${c.discountAmount}%`:money(c.discountAmount)}</option>)}</select></div>
+  function confirmUsed({
+    coupon: c,
+    kind,
+    lineIds,
+    replacementId,
+  }: CouponSelection) {
+    if (discounts.some((d) => d.clippedCouponId === c.couponId)) return;
+    const candidates = discounts.filter(
+      (d) =>
+        !d.clippedCouponId &&
+        d.kind !== "SALE_PROMOTION" &&
+        (d.plannedCouponId === c.couponId ||
+          (d.label === c.description && d.amount === c.discountAmount)),
+    );
+    if (!replacementId && candidates.length > 1) {
+      setError(
+        "Choose which existing printed discount to link to this coupon.",
+      );
+      return;
+    }
+    const existing =
+      replacementId === "NEW"
+        ? undefined
+        : replacementId
+          ? discounts.find((d) => d.id === replacementId)
+          : candidates[0];
+    const linked = existing
+      ? {
+          ...existing,
+          id: c.couponId,
+          clippedCouponId: c.couponId,
+          kind: existing.kind === "UNKNOWN" ? kind : existing.kind,
+        }
+      : {
+          id: c.couponId,
+          clippedCouponId: c.couponId,
+          label: c.description,
+          amount:
+            c.terms?.discount === "PERCENT" ? "" : (c.discountAmount ?? ""),
+          kind,
+          requiredQuantity: c.requiredQuantity || null,
+          shared: lineIds.length !== 1,
+          quantities: Object.fromEntries(
+            lineIds.map((id) => [
+              id,
+              lines.find((l) => l.id === id)?.quantity || "1",
+            ]),
+          ),
+        };
+    setDiscounts([...discounts.filter((d) => d !== existing), linked]);
+    setPaymentEntryStatus("UNKNOWN");
   }
+  function couponSelector(_name: string, line?: Line) {
+    const relevant = discounts.filter(
+      (d) =>
+        !line || !Object.keys(d.quantities).length || line.id in d.quantities,
+    );
+    return (
+      <CouponPicker
+        api={api}
+        mode="RECEIPT"
+        coupons={coupons}
+        store={store}
+        day={day}
+        products={(line ? [line] : lines).map((l) => ({
+          id: l.id,
+          name: l.description,
+          sku: l.sku,
+          quantity: l.quantity,
+        }))}
+        selectedIds={relevant.flatMap((d) =>
+          d.clippedCouponId ? [d.clippedCouponId] : [],
+        )}
+        onSelect={confirmUsed}
+        onRemove={(id) =>
+          setDiscounts(
+            discounts.map((d) =>
+              d.clippedCouponId === id
+                ? { ...d, id: crypto.randomUUID(), clippedCouponId: undefined }
+                : d,
+            ),
+          )
+        }
+        discountOptions={relevant
+          .filter((d) => !d.clippedCouponId && d.kind !== "SALE_PROMOTION")
+          .map((d) => ({ id: d.id, label: d.label, amount: d.amount }))}
+      />
+    );
+  }
+
   function body(): Record<string, unknown> {
-    return { ...(draftRevision!=='0'?{receiptDraftId:id,receiptDraftRevision:draftRevision}:{}), ...(planning?{shoppingPlanId:planning.plan.planId,shoppingPlanRevision:planning.plan.revision}:{}), clippedCouponIds: discounts.filter(d=>d.amount.trim()&&!/^(?:0+(?:[.]0*)?|[.]0+)$/.test(d.amount.trim())).flatMap(d=>d.clippedCouponId?[d.clippedCouponId]:[]), printedFooter: isWalgreensStore(store) ? footerBody(footer) : undefined, receiptKind, transactionId: id, storeReference:nullable(storeReference), registerNumber:nullable(registerNumber), transactionNumber:nullable(transactionNumber), retailer: store.trim(), receiptNumber: nullable(formatReceiptNumber(store,number)), purchaseDate: nullable(day), printedTime: nullable(time), purchaseChannel: channel, printedTotalBasis, paymentEntryStatus, tax, reportedTotal: reported,
-      items: lines.map(l => ({ lineItemId: l.id, description: l.description.trim(), sku: nullable(l.sku), regularUnitPrice: nullable(l.regular), unitPrice: l.sale?.trim()||l.regular, quantity: integer(l.quantity),...(l.packageDetails?{packageDetails:packageDetailsBody(l.packageDetails)}:{}) })),
-      discounts: discounts.filter(d => d.amount.trim()&&!/^(?:0+(?:[.]0*)?|[.]0+)$/.test(d.amount.trim())).map(d => ({ applicationId: d.id, label: d.label.trim(), amount: d.amount, kind: d.kind, requiredQuantity: d.requiredQuantity ? integer(d.requiredQuantity) : null, lineItemIds: Object.keys(d.quantities), qualifyingQuantities: Object.fromEntries(Object.entries(d.quantities).map(([id,q])=>[id,Math.min(integer(q),integer(lines.find(line=>line.id===id)?.quantity??q))])), wholeReceipt: !Object.keys(d.quantities).length })),
-      payments: payments.map(p => ({ paymentId: p.id, type: p.type, amount: p.amount, notes: nullable(p.notes), ...(p.accountName ? {accountName:p.accountName} : {}), ...(p.type==='GIFT_CARD'&&p.giftCardId?{giftCardId:p.giftCardId}:{}), ...(p.type === 'OTHER' ? { role: p.role || 'UNRESOLVED' } : {}) })), rrUses: rrUses.map(r => ({ ...r, recordedDescription: r.recordedDescription.trim() || 'Register Rewards used' })),
-      earnings: rewards.map(r => rewardBody(r.kind==='WALGREENS_CASH'&&receiptKind==='REWARD_ADJUSTMENT'?{...r,originalReceiptId,originalEarningId}:r)),
-      evidence: [...evidence.map(({ evidenceId, mediaType, contentBase64 }) => ({ evidenceId, mediaType, contentBase64 })),...rewards.flatMap(r=>r.attachment?[r.attachment]:[])] }
+    return {
+      ...(draftRevision !== "0"
+        ? { receiptDraftId: id, receiptDraftRevision: draftRevision }
+        : {}),
+      ...(planning
+        ? {
+            shoppingPlanId: planning.plan.planId,
+            shoppingPlanRevision: planning.plan.revision,
+          }
+        : {}),
+      clippedCouponIds: discounts
+        .filter(
+          (d) =>
+            d.amount.trim() &&
+            !/^(?:0+(?:[.]0*)?|[.]0+)$/.test(d.amount.trim()),
+        )
+        .flatMap((d) => (d.clippedCouponId ? [d.clippedCouponId] : [])),
+      printedFooter: isWalgreensStore(store) ? footerBody(footer) : undefined,
+      receiptKind,
+      transactionId: id,
+      storeReference: nullable(storeReference),
+      registerNumber: nullable(registerNumber),
+      transactionNumber: nullable(transactionNumber),
+      retailer: store.trim(),
+      receiptNumber: nullable(formatReceiptNumber(store, number)),
+      purchaseDate: nullable(day),
+      printedTime: nullable(time),
+      purchaseChannel: channel,
+      printedTotalBasis,
+      paymentEntryStatus,
+      tax,
+      reportedTotal: reported,
+      items: lines.map((l) => {
+        const weighted = l.pricingMethod === "WEIGHT",
+          total = weightedLineTotal(l);
+        return {
+          lineItemId: l.id,
+          description: l.description.trim(),
+          sku: nullable(l.sku),
+          regularUnitPrice: weighted ? nullable(total) : nullable(l.regular),
+          unitPrice: total,
+          quantity: integer(receiptLineQuantity(l)),
+          ...(l.packageDetails || weighted
+            ? {
+                packageDetails: packageDetailsBody({
+                  ...l.packageDetails,
+                  ...(weighted ? { size: l.weight, unit: l.weightUnit } : {}),
+                }),
+              }
+            : {}),
+        };
+      }),
+      discounts: discounts
+        .filter(
+          (d) =>
+            d.amount.trim() &&
+            !/^(?:0+(?:[.]0*)?|[.]0+)$/.test(d.amount.trim()),
+        )
+        .map((d) => ({
+          applicationId: d.id,
+          label: d.label.trim(),
+          amount: d.amount,
+          kind: d.kind,
+          requiredQuantity: d.requiredQuantity
+            ? integer(d.requiredQuantity)
+            : null,
+          lineItemIds: Object.keys(d.quantities),
+          qualifyingQuantities: Object.fromEntries(
+            Object.entries(d.quantities).map(([id, q]) => [
+              id,
+              Math.min(
+                integer(q),
+                integer(lines.find((line) => line.id === id)?.quantity ?? q),
+              ),
+            ]),
+          ),
+          wholeReceipt: !Object.keys(d.quantities).length,
+        })),
+      payments: payments.map((p) => ({
+        paymentId: p.id,
+        type: p.type,
+        amount: p.amount,
+        notes: nullable(p.notes),
+        ...(p.accountName ? { accountName: p.accountName } : {}),
+        ...(p.type === "GIFT_CARD" && p.giftCardId
+          ? { giftCardId: p.giftCardId }
+          : {}),
+        ...(p.type === "OTHER" ? { role: p.role || "UNRESOLVED" } : {}),
+      })),
+      rrUses: rrUses.map((r) => ({
+        ...r,
+        recordedDescription:
+          r.recordedDescription.trim() || "Register Rewards used",
+      })),
+      earnings: rewards.map((r) =>
+        rewardBody(
+          r.kind === "WALGREENS_CASH" && receiptKind === "REWARD_ADJUSTMENT"
+            ? { ...r, originalReceiptId, originalEarningId }
+            : r,
+        ),
+      ),
+      evidence: [
+        ...evidence.map(({ evidenceId, mediaType, contentBase64 }) => ({
+          evidenceId,
+          mediaType,
+          contentBase64,
+        })),
+        ...rewards.flatMap((r) => (r.attachment ? [r.attachment] : [])),
+      ],
+    };
   }
   async function preview(event: FormEvent) {
-    event.preventDefault(); if (!enabled) return
-    if(isWalgreensStore(store)&&footer.wcEarned.trim()&&rewards.some(r=>r.kind==='WALGREENS_CASH')&&receivedCash(rewards)!==Math.round(Number(footer.wcEarned)*100)){
-      setError('The received Walgreens Cash breakdown must equal Earned This Visit. Adjust the total or the individual reward amounts.');return;
+    event.preventDefault();
+    if (!enabled) return;
+    if (
+      isWalgreensStore(store) &&
+      footer.wcEarned.trim() &&
+      rewards.some((r) => r.kind === "WALGREENS_CASH") &&
+      receivedCash(rewards) !== Math.round(Number(footer.wcEarned) * 100)
+    ) {
+      setError(
+        "The received Walgreens Cash breakdown must equal Earned This Visit. Adjust the total or the individual reward amounts.",
+      );
+      return;
     }
-    if(receiptKind==='REWARD_ADJUSTMENT'&&!!originalReceiptId!==!!originalEarningId){setError('Choose both the original receipt and reward, or leave both unlinked.');return}
-    if(importReview){
-      if(importReview.pendingApply){setError('The image extraction is incomplete. Resolve Import Review before continuing.');return}
-      if(importReview.duplicates.some(r=>r.receiptNumber.replace(/[^0-9]/g,'')===number.replace(/[^0-9]/g,''))){setError('This receipt already exists. Open the existing receipt instead of saving a duplicate.');return}
+    if (
+      receiptKind === "REWARD_ADJUSTMENT" &&
+      !!originalReceiptId !== !!originalEarningId
+    ) {
+      setError(
+        "Choose both the original receipt and reward, or leave both unlinked.",
+      );
+      return;
+    }
+    if (importReview) {
+      if (importReview.pendingApply) {
+        setError(
+          "The image extraction is incomplete. Resolve Import Review before continuing.",
+        );
+        return;
+      }
+      if (
+        importReview.duplicates.some(
+          (r) =>
+            r.receiptNumber.replace(/[^0-9]/g, "") ===
+            number.replace(/[^0-9]/g, ""),
+        )
+      ) {
+        setError(
+          "This receipt already exists. Open the existing receipt instead of saving a duplicate.",
+        );
+        return;
+      }
     }
     if (formRef.current && !formRef.current.checkValidity()) {
-      const first = Array.from(formRef.current.elements).find((node): node is HTMLInputElement => ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName) && !(node as HTMLInputElement).validity.valid)
-      for (let parent = first?.parentElement; parent; parent = parent.parentElement) { if (parent.tagName === 'DETAILS') parent.setAttribute('open', '') }
-      first?.scrollIntoView?.({ block: 'center', behavior: 'smooth' }); first?.focus()
-      return
-    }
-    setError(''); setBusy(true)
-    try { if(calculatingPromotions.length)throw Error('Wait for the store promotion calculation to finish, then review again.');const input = body();
-      if (lines.some(l=>l.priceRule&&!discounts.some(d=>d.promotionLineId===l.id&&d.amount.trim()))) {
-        const scenario:PlanScenario={items:lines.map(l=>({id:l.id,name:l.description,sku:l.sku,regular:'',sale:l.sale?.trim()||l.regular,quantity:l.quantity,priceRule:l.priceRule})),coupons:[],promotions:[],tax:'0',walgreensCashUsed:'0',registerRewardsUsed:'0',giftCardUsed:'0',manualOop:null,paymentMethod:'CASH',fundingNotes:''}
-        const calculated=await api.mutate('/shopping-plans/scenario/preview','POST',{scenario:scenarioRequest(scenario),retailer:store.trim()},crypto.randomUUID()) as ScenarioEstimate
-        const reductions=calculated.items.filter(l=>!discounts.some(d=>d.promotionLineId===l.id&&d.amount.trim())&&l.saleReduction&&!/^-?0+(?:[.]0+)?$/.test(l.saleReduction)).map(l=>({applicationId:crypto.randomUUID(),label:`${lines.find(row=>row.id===l.id)!.description} Sale Promotion`,amount:l.saleReduction,kind:'SALE_PROMOTION',requiredQuantity:null,lineItemIds:[l.id],qualifyingQuantities:{[l.id]:integer(lines.find(row=>row.id===l.id)!.quantity)},wholeReceipt:false}))
-        input.discounts=[...(input.discounts as unknown[]),...reductions]
+      const first = Array.from(formRef.current.elements).find(
+        (node): node is HTMLInputElement =>
+          ["INPUT", "SELECT", "TEXTAREA"].includes(node.tagName) &&
+          !(node as HTMLInputElement).validity.valid,
+      );
+      for (
+        let parent = first?.parentElement;
+        parent;
+        parent = parent.parentElement
+      ) {
+        if (parent.tagName === "DETAILS") parent.setAttribute("open", "");
       }
-      const result = await api.mutate('/receipts/preview', 'POST', input, crypto.randomUUID()) as Preview; setReview({ body: input, preview: result }); setAck(false); setPending(null) }
-    catch (e) { const message = (e as Error).message; setError(/UUID string too large/i.test(message)?'The app could not prepare an internal receipt ID. Your entries are still here. Save this draft, then reopen it in the updated app to repair the ID.':message === 'Unknown request field.' ? 'The running API does not recognize this receipt form. Restart the updated Java API, then select Review entered breakdown again. Keep this draft open; do not refresh.' : message) } finally { setBusy(false) }
+      first?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+      first?.focus();
+      return;
+    }
+    setError("");
+    setBusy(true);
+    try {
+      if (calculatingPromotions.length)
+        throw Error(
+          "Wait for the store promotion calculation to finish, then review again.",
+        );
+      const input = body();
+      if (
+        lines.some(
+          (l) =>
+            l.priceRule &&
+            !discounts.some(
+              (d) => d.promotionLineId === l.id && d.amount.trim(),
+            ),
+        )
+      ) {
+        const scenario: PlanScenario = {
+          items: lines.map((l) => ({
+            id: l.id,
+            name: l.description,
+            sku: l.sku,
+            regular: "",
+            sale: l.sale?.trim() || l.regular,
+            quantity: l.quantity,
+            priceRule: l.priceRule,
+          })),
+          coupons: [],
+          promotions: [],
+          tax: "0",
+          walgreensCashUsed: "0",
+          registerRewardsUsed: "0",
+          giftCardUsed: "0",
+          manualOop: null,
+          paymentMethod: "CASH",
+          fundingNotes: "",
+        };
+        const calculated = (await api.mutate(
+          "/shopping-plans/scenario/preview",
+          "POST",
+          { scenario: scenarioRequest(scenario), retailer: store.trim() },
+          crypto.randomUUID(),
+        )) as ScenarioEstimate;
+        const reductions = calculated.items
+          .filter(
+            (l) =>
+              !discounts.some(
+                (d) => d.promotionLineId === l.id && d.amount.trim(),
+              ) &&
+              l.saleReduction &&
+              !/^-?0+(?:[.]0+)?$/.test(l.saleReduction),
+          )
+          .map((l) => ({
+            applicationId: crypto.randomUUID(),
+            label: `${lines.find((row) => row.id === l.id)!.description} Sale Promotion`,
+            amount: l.saleReduction,
+            kind: "SALE_PROMOTION",
+            requiredQuantity: null,
+            lineItemIds: [l.id],
+            qualifyingQuantities: {
+              [l.id]: integer(lines.find((row) => row.id === l.id)!.quantity),
+            },
+            wholeReceipt: false,
+          }));
+        input.discounts = [...(input.discounts as unknown[]), ...reductions];
+      }
+      const result = (await api.mutate(
+        "/receipts/preview",
+        "POST",
+        input,
+        crypto.randomUUID(),
+      )) as Preview;
+      setReview({ body: input, preview: result });
+      setAck(false);
+      setPending(null);
+    } catch (e) {
+      const message = (e as Error).message;
+      setError(
+        /UUID string too large/i.test(message)
+          ? "The app could not prepare an internal receipt ID. Your entries are still here. Save this draft, then reopen it in the updated app to repair the ID."
+          : message === "Unknown request field."
+            ? "The running API does not recognize this receipt form. Restart the updated Java API, then select Review entered breakdown again. Keep this draft open; do not refresh."
+            : message,
+      );
+    } finally {
+      setBusy(false);
+    }
   }
   async function save() {
-    if (!enabled || !review) return
-    setError(''); setBusy(true)
-    const request = { key: pending?.key ?? crypto.randomUUID(), body: { ...review.body, reviewToken: review.preview.reviewToken, acknowledgeDifference: ack } }
-    setPending(request)
-    try { await api.mutate('/receipts', 'POST', request.body, request.key); onSaved(id) }
-    catch (e) { setError((e as Error).message); if (e instanceof ApiError && e.status >= 400 && e.status < 500) setPending(null) }
-    finally { setBusy(false) }
+    if (!enabled || !review) return;
+    setError("");
+    setBusy(true);
+    const request = {
+      key: pending?.key ?? crypto.randomUUID(),
+      body: {
+        ...review.body,
+        reviewToken: review.preview.reviewToken,
+        acknowledgeDifference: ack,
+      },
+    };
+    setPending(request);
+    try {
+      await api.mutate("/receipts", "POST", request.body, request.key);
+      onSaved(id);
+    } catch (e) {
+      setError((e as Error).message);
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500)
+        setPending(null);
+    } finally {
+      setBusy(false);
+    }
   }
   async function files(selected: FileList | File[] | null) {
-    if (!selected) return
-    setError(''); setBusy(true)
+    if (!selected) return;
+    setError("");
+    setBusy(true);
     try {
-      const added = [...selected]
-      if (evidence.length + added.length > 4 || [...evidence.map(e => e.size), ...added.map(f => f.size)].reduce((a, b) => a + b, 0) > 10 * 1024 * 1024) throw new Error('Attach up to four files, 10 MiB total.')
-      const rows = await Promise.all(added.map(async file => {
-        if (file.size > 5 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp', 'application/pdf'].includes(file.type)) throw new Error('Use JPEG, PNG, WebP or PDF, up to 5 MiB each.')
-        const content = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('Could not read the selected attachment.')); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.readAsDataURL(file) })
-        return { evidenceId: crypto.randomUUID(), name: file.name, mediaType: file.type, contentBase64: content, size: file.size }
-      }))
-      setEvidence([...evidence, ...rows])
-    } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
+      const added = [...selected];
+      if (
+        evidence.length + added.length > 4 ||
+        [...evidence.map((e) => e.size), ...added.map((f) => f.size)].reduce(
+          (a, b) => a + b,
+          0,
+        ) >
+          10 * 1024 * 1024
+      )
+        throw new Error("Attach up to four files, 10 MiB total.");
+      const rows = await Promise.all(
+        added.map(async (file) => {
+          if (
+            file.size > 5 * 1024 * 1024 ||
+            ![
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+              "application/pdf",
+            ].includes(file.type)
+          )
+            throw new Error("Use JPEG, PNG, WebP or PDF, up to 5 MiB each.");
+          const content = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () =>
+              reject(new Error("Could not read the selected attachment."));
+            reader.onload = () => resolve(String(reader.result).split(",")[1]);
+            reader.readAsDataURL(file);
+          });
+          return {
+            evidenceId: crypto.randomUUID(),
+            name: file.name,
+            mediaType: file.type,
+            contentBase64: content,
+            size: file.size,
+          };
+        }),
+      );
+      setEvidence([...evidence, ...rows]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function applyImport(source:ImportSource){
-    setStore(source.store);setStoreReference(source.storeReference??'');setTransactionNumber(source.transactionNumber??'');setRegisterNumber(source.registerNumber??'');setNumber(formatReceiptNumber(source.store,source.number));setDay(source.day);const t=/^(\d{1,2}):(\d{2})\s*([AP]M)$/i.exec(source.time);setTime(t?`${String(Number(t[1])%12+(t[3].toUpperCase()==='PM'?12:0)).padStart(2,'0')}:${t[2]}`:source.time);
-    setChannel('IN_STORE');setTax(source.tax);setReported(source.reported);setPrintedTotalBasis('UNKNOWN');setPaymentEntryStatus('UNKNOWN');setFooter({...footerDraft(),...source.footer});
-    const importedDeductions=[...source.deductions];
-    const importedItems=source.items.map(item=>{
-      if(item.observedStorePromotion&&!importedDeductions.some(d=>d.kind==='SALE_PROMOTION'&&d.lineId===item.id)) importedDeductions.push({id:crypto.randomUUID(),label:receiptStorePromoLabel(item.description),amount:item.observedStorePromotion,kind:'SALE_PROMOTION',lineId:item.id});
-      return {...item,sale:''};
+  function applyImport(source: ImportSource) {
+    setStore(source.store);
+    setStoreReference(source.storeReference ?? "");
+    setTransactionNumber(source.transactionNumber ?? "");
+    setRegisterNumber(source.registerNumber ?? "");
+    setNumber(formatReceiptNumber(source.store, source.number));
+    setDay(source.day);
+    const t = /^(\d{1,2}):(\d{2})\s*([AP]M)$/i.exec(source.time);
+    setTime(
+      t
+        ? `${String((Number(t[1]) % 12) + (t[3].toUpperCase() === "PM" ? 12 : 0)).padStart(2, "0")}:${t[2]}`
+        : source.time,
+    );
+    setChannel("IN_STORE");
+    setTax(source.tax);
+    setReported(source.reported);
+    setPrintedTotalBasis("UNKNOWN");
+    setPaymentEntryStatus("UNKNOWN");
+    setFooter({ ...footerDraft(), ...source.footer });
+    const importedDeductions = [...source.deductions];
+    const importedItems = source.items.map((item) => {
+      if (
+        item.observedStorePromotion &&
+        !importedDeductions.some(
+          (d) => d.kind === "SALE_PROMOTION" && d.lineId === item.id,
+        )
+      )
+        importedDeductions.push({
+          id: crypto.randomUUID(),
+          label: receiptStorePromoLabel(item.description),
+          amount: item.observedStorePromotion,
+          kind: "SALE_PROMOTION",
+          lineId: item.id,
+        });
+      return { ...item, sale: "" };
     });
-    setLines(importedItems.length?importedItems:[newLine()]);    setDiscounts(importedDeductions.filter(d=>d.kind!=='REGISTER_REWARD'&&d.kind!=='OMIT'&&d.kind!=='UNCLASSIFIED').map(d=>({id:d.id,label:d.kind==='SALE_PROMOTION'&&d.lineId?receiptStorePromoLabel(source.items.find(item=>item.id===d.lineId)?.description??'Product'):d.label,amount:d.amount,kind:d.kind,shared:!d.lineId,quantities:d.lineId?{[d.lineId]:source.items.find(l=>l.id===d.lineId)?.quantity??'1'}:{}})));setRRUses(source.deductions.filter(d=>d.kind==='REGISTER_REWARD').map(d=>({eventId:d.id,amount:d.amount,recordedDescription:d.label})));setPayments(source.payments);
-    const importedCash=source.wcEarned||source.footer.wcEarned||'';
-    setRewards(importedCash&&!/^0+(?:[.]0+)?$/.test(importedCash)?[{...newReward(),id:printedCashRewardId,generatedFromPrintedFooter:true,provider:'Walgreens',kind:'WALGREENS_CASH',form:'STORE_REWARD',offer:'Printed Walgreens Cash Earned This Visit',amount:importedCash,status:'CREDITED'}]:[]);setReview(null);setImportChecked(false)
+    setLines(importedItems.length ? importedItems : [newLine()]);
+    setDiscounts(
+      importedDeductions
+        .filter(
+          (d) =>
+            d.kind !== "REGISTER_REWARD" &&
+            d.kind !== "OMIT" &&
+            d.kind !== "UNCLASSIFIED",
+        )
+        .map((d) => ({
+          id: d.id,
+          label:
+            d.kind === "SALE_PROMOTION" && d.lineId
+              ? receiptStorePromoLabel(
+                  source.items.find((item) => item.id === d.lineId)
+                    ?.description ?? "Product",
+                )
+              : d.label,
+          amount: d.amount,
+          kind: d.kind,
+          shared: !d.lineId,
+          quantities: d.lineId
+            ? {
+                [d.lineId]:
+                  source.items.find((l) => l.id === d.lineId)?.quantity ?? "1",
+              }
+            : {},
+        })),
+    );
+    setRRUses(
+      source.deductions
+        .filter((d) => d.kind === "REGISTER_REWARD")
+        .map((d) => ({
+          eventId: d.id,
+          amount: d.amount,
+          recordedDescription: d.label,
+        })),
+    );
+    setPayments(source.payments);
+    const importedCash = source.wcEarned || source.footer.wcEarned || "";
+    setRewards(
+      importedCash && !/^0+(?:[.]0+)?$/.test(importedCash)
+        ? [
+            {
+              ...newReward(),
+              id: printedCashRewardId,
+              generatedFromPrintedFooter: true,
+              provider: "Walgreens",
+              kind: "WALGREENS_CASH",
+              form: "STORE_REWARD",
+              offer: "Printed Walgreens Cash Earned This Visit",
+              amount: importedCash,
+              status: "CREDITED",
+            },
+          ]
+        : [],
+    );
+    setReview(null);
+    setImportChecked(false);
   }
-  async function importFiles(selected:FileList|File[]|null){
-    if(!selected?.length||!enabled||busy)return;
-    if((store||lines.some(l=>l.description)||discounts.length||payments.length)&&!window.confirm('Replace the current form fields with an imported draft? Existing attachments will remain.'))return;
-    setBusy(true);setError('');try{
-      const added=[...selected];if(evidence.length+added.length>4||evidence.reduce((n,e)=>n+e.size,0)+added.reduce((n,f)=>n+f.size,0)>10*1024*1024)throw Error('Attach up to four files, 10 MiB total.');
-      const attachments=await Promise.all(added.map(async f=>{if(f.size>5*1024*1024||!['application/pdf','image/jpeg','image/png','image/webp'].includes(f.type))throw Error('Import PDF, JPEG, PNG or WebP up to 5 MiB each.');const contentBase64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(Error('Could not read receipt file.'));reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(f)});return {evidenceId:crypto.randomUUID(),name:f.name,mediaType:f.type,contentBase64,size:f.size}}));
-      const response=await api.mutate('/receipts/import-preview','POST',{files:attachments.map(({name,mediaType,contentBase64})=>({name,mediaType,contentBase64}))},crypto.randomUUID()) as Omit<ImportReview,'selected'>;
-      if(!response.sources.length)throw Error('No readable receipt was found.');
-      const sourceScore=(source:ImportSource)=>[source.requiresManualReview?0:1,source.items.filter(item=>item.regular&&item.sku).length,-(source.qualityIssues?.length??0),source.items.filter(item=>item.regular).length];
-      const selectedSource=response.sources.reduce((best,source,index)=>{
-        const candidate=sourceScore(source),current=sourceScore(response.sources[best]);
-        const difference=candidate.findIndex((value,i)=>value!==current[i]);
-        return difference>=0&&candidate[difference]>current[difference]?index:best;
-      },0);
-      const source=response.sources[selectedSource],pendingApply=!!source.requiresManualReview;
-      setEvidence([...evidence,...attachments]);setImportChecked(false);setImportReview({...response,selected:selectedSource,pendingApply,attachmentIds:attachments.map(a=>a.evidenceId)});if(!pendingApply)applyImport(source);
-    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  async function importFiles(selected: FileList | File[] | null) {
+    if (!selected?.length || !enabled || busy) return;
+    if (
+      (store ||
+        lines.some((l) => l.description) ||
+        discounts.length ||
+        payments.length) &&
+      !window.confirm(
+        "Replace the current form fields with an imported draft? Existing attachments will remain.",
+      )
+    )
+      return;
+    setBusy(true);
+    setError("");
+    try {
+      const added = [...selected];
+      if (
+        evidence.length + added.length > 4 ||
+        evidence.reduce((n, e) => n + e.size, 0) +
+          added.reduce((n, f) => n + f.size, 0) >
+          10 * 1024 * 1024
+      )
+        throw Error("Attach up to four files, 10 MiB total.");
+      const attachments = await Promise.all(
+        added.map(async (f) => {
+          if (
+            f.size > 5 * 1024 * 1024 ||
+            ![
+              "application/pdf",
+              "image/jpeg",
+              "image/png",
+              "image/webp",
+            ].includes(f.type)
+          )
+            throw Error("Import PDF, JPEG, PNG or WebP up to 5 MiB each.");
+          const contentBase64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () =>
+              reject(Error("Could not read receipt file."));
+            reader.onload = () => resolve(String(reader.result).split(",")[1]);
+            reader.readAsDataURL(f);
+          });
+          return {
+            evidenceId: crypto.randomUUID(),
+            name: f.name,
+            mediaType: f.type,
+            contentBase64,
+            size: f.size,
+          };
+        }),
+      );
+      const response = (await api.mutate(
+        "/receipts/import-preview",
+        "POST",
+        {
+          files: attachments.map(({ name, mediaType, contentBase64 }) => ({
+            name,
+            mediaType,
+            contentBase64,
+          })),
+        },
+        crypto.randomUUID(),
+      )) as Omit<ImportReview, "selected">;
+      if (!response.sources.length)
+        throw Error("No readable receipt was found.");
+      const sourceScore = (source: ImportSource) => [
+        source.requiresManualReview ? 0 : 1,
+        source.items.filter((item) => item.regular && item.sku).length,
+        -(source.qualityIssues?.length ?? 0),
+        source.items.filter((item) => item.regular).length,
+      ];
+      const selectedSource = response.sources.reduce((best, source, index) => {
+        const candidate = sourceScore(source),
+          current = sourceScore(response.sources[best]);
+        const difference = candidate.findIndex(
+          (value, i) => value !== current[i],
+        );
+        return difference >= 0 && candidate[difference] > current[difference]
+          ? index
+          : best;
+      }, 0);
+      const source = response.sources[selectedSource],
+        pendingApply = !!source.requiresManualReview;
+      setEvidence([...evidence, ...attachments]);
+      setImportChecked(false);
+      setImportReview({
+        ...response,
+        selected: selectedSource,
+        pendingApply,
+        attachmentIds: attachments.map((a) => a.evidenceId),
+      });
+      if (!pendingApply) applyImport(source);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
-  function classifyImport(id:string,kind:string){if(!importReview)return;if(error.startsWith('Classify the imported coupon deductions')&&importReview.sources[importReview.selected].deductions.every(d=>d.id===id||d.kind!=='UNCLASSIFIED'))setError('');const source=importReview.sources[importReview.selected],d=source.deductions.find(d=>d.id===id)!;setImportReview({...importReview,sources:importReview.sources.map((s,i)=>i===importReview.selected?{...s,deductions:s.deductions.map(d=>d.id===id?{...d,kind}:d)}:s)});setDiscounts(rows=>[...rows.filter(r=>r.id!==id),...(kind==='REGISTER_REWARD'||kind==='OMIT'?[]:[{id:d.id,label:kind==='SALE_PROMOTION'&&d.lineId?receiptStorePromoLabel(source.items.find(item=>item.id===d.lineId)?.description??'Product'):d.label,amount:d.amount,kind,shared:!d.lineId,quantities:d.lineId?{[d.lineId]:source.items.find(l=>l.id===d.lineId)?.quantity??'1'}:{}}])]);setRRUses(rows=>[...rows.filter(r=>r.eventId!==id),...(kind==='REGISTER_REWARD'?[{eventId:d.id,amount:d.amount,recordedDescription:d.label}]:[])]);setImportChecked(false)}
-  const difference = review?.preview.totals.difference
-  const different = review?.preview.totals.paymentReview?.acknowledgementRequired ?? (!!difference && !/^-?0+([.]0+)?$/.test(difference))
-  return <Modal title={review ? 'Review new receipt' : 'Add receipt'} onClose={close}>
+  function classifyImport(id: string, kind: string) {
+    if (!importReview) return;
+    if (
+      error.startsWith("Classify the imported coupon deductions") &&
+      importReview.sources[importReview.selected].deductions.every(
+        (d) => d.id === id || d.kind !== "UNCLASSIFIED",
+      )
+    )
+      setError("");
+    const source = importReview.sources[importReview.selected],
+      d = source.deductions.find((d) => d.id === id)!;
+    setImportReview({
+      ...importReview,
+      sources: importReview.sources.map((s, i) =>
+        i === importReview.selected
+          ? {
+              ...s,
+              deductions: s.deductions.map((d) =>
+                d.id === id ? { ...d, kind } : d,
+              ),
+            }
+          : s,
+      ),
+    });
+    setDiscounts((rows) => [
+      ...rows.filter((r) => r.id !== id),
+      ...(kind === "REGISTER_REWARD" || kind === "OMIT"
+        ? []
+        : [
+            {
+              id: d.id,
+              label:
+                kind === "SALE_PROMOTION" && d.lineId
+                  ? receiptStorePromoLabel(
+                      source.items.find((item) => item.id === d.lineId)
+                        ?.description ?? "Product",
+                    )
+                  : d.label,
+              amount: d.amount,
+              kind,
+              shared: !d.lineId,
+              quantities: d.lineId
+                ? {
+                    [d.lineId]:
+                      source.items.find((l) => l.id === d.lineId)?.quantity ??
+                      "1",
+                  }
+                : {},
+            },
+          ]),
+    ]);
+    setRRUses((rows) => [
+      ...rows.filter((r) => r.eventId !== id),
+      ...(kind === "REGISTER_REWARD"
+        ? [{ eventId: d.id, amount: d.amount, recordedDescription: d.label }]
+        : []),
+    ]);
+    setImportChecked(false);
+  }
+  const difference = review?.preview.totals.difference;
+  const different =
+    review?.preview.totals.paymentReview?.acknowledgementRequired ??
+    (!!difference && !/^-?0+([.]0+)?$/.test(difference));
+  return (
+    <Modal
+      title={review ? "Review new receipt" : "Add receipt"}
+      onClose={close}
+    >
+      {planning && (
+        <Notice>
+          Copied from your shopping scenario, including sale-price reductions
+          and coupon deductions. Those discounts are already entered below: edit
+          them rather than entering them again. Review actual prices, coupon
+          terms, reward uses and payments. Register Rewards default to Printed
+          at register; change the status if they did not print. Other planned
+          rewards remain Expected until confirmed received.
+        </Notice>
+      )}
+      <p className="muted">
+        {draftRevision !== "0"
+          ? "A draft is saved. Changes since Save Draft are not saved automatically. Review the breakdown, then select Save Receipt to record the purchase."
+          : "Your receipt is not saved yet. Save Draft to keep unfinished entries, or review the breakdown and select Save Receipt to record the purchase."}
+      </p>
+      {draftMessage && <Notice>{draftMessage}</Notice>}
+      {!review && (
+        <nav className="receipt-section-nav" aria-label="Receipt sections">
+          {[
+            ["Import Review", ".receipt-import-review"],
+            ["Products", '[data-receipt-section="products"]'],
+            ["Rewards Used", '[data-receipt-section="used"]'],
+            ["Payment", '[data-receipt-section="payment"]'],
+            ["Printed Savings", '[data-receipt-section="printed"]'],
+            ["Earnings", '[data-receipt-section="earnings"]'],
+          ].map(([label, selector]) => (
+            <button
+              type="button"
+              key={label}
+              onClick={(event) => {
+                const scope = event.currentTarget.closest("nav")?.parentElement;
+                const target =
+                  scope?.querySelector<HTMLDetailsElement>(selector) ||
+                  scope?.querySelector<HTMLDetailsElement>(
+                    label === "Import Review"
+                      ? '[data-receipt-section="import"]'
+                      : label === "Rewards Used"
+                        ? '[data-receipt-section="payment"]'
+                        : selector,
+                  );
+                if (target) {
+                  target.open = true;
+                  let parent = target.parentElement;
+                  while (parent && parent !== scope) {
+                    if (parent instanceof HTMLDetailsElement)
+                      parent.open = true;
+                    parent = parent.parentElement;
+                  }
+                  target.scrollIntoView?.({
+                    block: "start",
+                    behavior: "smooth",
+                  });
+                }
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+      )}
+      {invalidField?.isConnected &&
+        invalidField.labels?.[0] &&
+        createPortal(
+          <span id="receipt-field-error" className="receipt-field-error">
+            {error}
+          </span>,
+          invalidField.labels[0],
+        )}
+      {error && (
+        <div
+          ref={errorRef}
+          id="receipt-entry-error"
+          className="error receipt-blocking-error"
+          role="alert"
+          tabIndex={-1}
+        >
+          <strong>Action required</strong>
+          <p>{error}</p>
+        </div>
+      )}
+      {!enabled && (
+        <Notice>Reconnect with write access before continuing.</Notice>
+      )}
+      {!review && (
+        <>
+          <label className="receipt-type-field">
+            Receipt Type
+            <select
+              aria-label="Receipt Type"
+              value={receiptKind}
+              disabled={!!planning || busy}
+              onChange={(e) => selectKind(e.target.value as typeof receiptKind)}
+            >
+              <option value="PURCHASE">Purchase</option>
+              <option value="REWARD_ADJUSTMENT">
+                Reward Credit / Adjustment — No Purchase
+              </option>
+            </select>
+          </label>
+          {receiptKind === "REWARD_ADJUSTMENT" && (
+            <section className="receipt-input-row">
+              <h3>Connect Manager Credit</h3>
+              <p>
+                Record Each Adjustment Receipt Separately. Link Its Actual
+                Credit To The Original Unpaid Or Rejected Reward. Received Fetch
+                Points Stay On Each Adjustment Receipt.
+              </p>
+              <label>
+                Search Original Receipt
+                <input
+                  type="search"
+                  value={sourceSearch}
+                  onChange={(e) => setSourceSearch(e.target.value)}
+                />
+              </label>
+              <label>
+                Original Receipt
+                <select
+                  value={originalReceiptId}
+                  onChange={(e) => {
+                    setOriginalReceiptId(e.target.value);
+                    setOriginalEarningId("");
+                  }}
+                >
+                  <option value="">Not Linked</option>
+                  {workspace?.receipts
+                    .filter(
+                      (row) =>
+                        row.status === "ACTIVE" &&
+                        row.transactionId !== id &&
+                        `${row.metadata?.receiptNumber ?? ""} ${row.metadata?.retailer ?? ""} ${row.date ?? ""}`
+                          .replace(/[^a-z0-9]/gi, "")
+                          .toLowerCase()
+                          .includes(
+                            sourceSearch
+                              .replace(/[^a-z0-9]/gi, "")
+                              .toLowerCase(),
+                          ),
+                    )
+                    .map((row) => (
+                      <option value={row.transactionId} key={row.transactionId}>
+                        {row.metadata?.receiptNumber ?? row.transactionId} ·{" "}
+                        {row.date}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {originalReceiptId && (
+                <label>
+                  Original Walgreens Cash Reward
+                  <select
+                    required
+                    value={originalEarningId}
+                    onChange={(e) => setOriginalEarningId(e.target.value)}
+                  >
+                    <option value="">Choose The Missing Reward</option>
+                    {workspace?.receiptEarnings
+                      ?.filter(
+                        (row) =>
+                          row.receiptId === originalReceiptId &&
+                          row.earning.kind === "WALGREENS_CASH" &&
+                          !["CREDITED", "PAID"].includes(row.earning.status),
+                      )
+                      .map((row) => (
+                        <option
+                          key={row.earning.earningId}
+                          value={row.earning.earningId}
+                        >
+                          {row.earning.offerReference} ·{" "}
+                          {money(row.earning.expected?.amount)} ·{" "}
+                          {row.earning.status}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+            </section>
+          )}
+        </>
+      )}
+      {!review && (
+        <details
+          open
+          className="receipt-input-row"
+          data-receipt-section="import"
+        >
+          <DisclosureSummary>
+            Import Receipt — PDF Or Image
+            <InfoHelp>
+              Creates an editable draft only. Attach pages or alternate copies
+              of one receipt together. Original files stay attached. Review
+              unclear values and coupon/RR classifications before saving.
+            </InfoHelp>
+          </DisclosureSummary>
+          <FileDropZone
+            label="Receipt import drop area"
+            multiple
+            disabled={!enabled || busy || !!pending || !!planning}
+            onFiles={(selected) => void importFiles(selected)}
+          >
+            <label>
+              Import Receipt Files
+              <input
+                type="file"
+                multiple
+                accept="application/pdf,image/jpeg,image/png,image/webp"
+                disabled={!enabled || busy || !!pending || !!planning}
+                onChange={(e) => {
+                  void importFiles(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </FileDropZone>
+          {busy && <p role="status">Working… Please keep this draft open.</p>}
+        </details>
+      )}
+      {importReview && (
+        <details
+          open={!review}
+          ref={importReviewRef}
+          className="receipt-input-row receipt-import-review"
+        >
+          <DisclosureSummary>
+            <h3>Import Review</h3>
+          </DisclosureSummary>
+          {importReview.duplicates.map((r) => (
+            <div className="error" role="alert" key={r.transactionId}>
+              Receipt {r.receiptNumber} already exists ({r.status}).{" "}
+              {onOpenExisting && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onOpenExisting(r.transactionId)}
+                >
+                  Open Existing Receipt
+                </button>
+              )}
+            </div>
+          ))}
+          {importReview.pendingApply && (
+            <div className="error" role="alert">
+              <strong>
+                Image import incomplete — form fields have not been replaced.
+              </strong>
+              <p>
+                The image reader could not reliably extract this receipt. Review
+                the original photo and the partial extraction below before using
+                it.
+              </p>
+              <ul>
+                {importReview.sources[importReview.selected].qualityIssues?.map(
+                  (issue, i) => (
+                    <li key={i}>{issue}</li>
+                  ),
+                )}
+              </ul>
+              <details>
+                <DisclosureSummary>View partial extraction</DisclosureSummary>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Recovered product</th>
+                        <th>Quantity</th>
+                        <th>Unit price</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importReview.sources[importReview.selected].items.map(
+                        (item) => (
+                          <tr key={item.id}>
+                            <td>
+                              {item.description}
+                              {item.observedStorePromotion && (
+                                <small>
+                                  Printed store promotion:{" "}
+                                  {money(item.observedStorePromotion)}
+                                </small>
+                              )}
+                              {item.observedRegularPrice && (
+                                <small>
+                                  Regular price read by OCR:{" "}
+                                  {item.observedRegularPrice}
+                                </small>
+                              )}
+                            </td>
+                            <td>{item.quantity}</td>
+                            <td>
+                              {item.sale ? money(item.sale) : "Needs review"}
+                            </td>
+                          </tr>
+                        ),
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
+                onClick={() => {
+                  applyImport(importReview.sources[importReview.selected]);
+                  setImportReview({ ...importReview, pendingApply: false });
+                }}
+              >
+                Use partial draft for manual correction
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                disabled={busy}
+                onClick={() => {
+                  setEvidence((rows) =>
+                    rows.filter(
+                      (row) =>
+                        !importReview.attachmentIds?.includes(row.evidenceId),
+                    ),
+                  );
+                  setImportReview(null);
+                  setImportChecked(false);
+                }}
+              >
+                Keep current form
+              </button>
+            </div>
+          )}
+          {importReview.sources.length > 1 && (
+            <label>
+              Source To Use
+              <select
+                value={importReview.selected}
+                disabled={busy || !!review}
+                onChange={(e) => {
+                  if (
+                    !window.confirm(
+                      "Replace editable fields with this source? Its differences will remain available in Extracted Text.",
+                    )
+                  )
+                    return;
+                  const selected = Number(e.target.value);
+                  const source = importReview.sources[selected],
+                    pendingApply = !!source.requiresManualReview;
+                  setImportChecked(false);
+                  setImportReview({ ...importReview, selected, pendingApply });
+                  if (!pendingApply) applyImport(source);
+                }}
+              >
+                {importReview.sources.map((s, i) => (
+                  <option key={i} value={i}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {importReview.sources.length > 1 && (
+            <details>
+              <DisclosureSummary>Compare Imported Sources</DisclosureSummary>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Field</th>
+                      {importReview.sources.map((s, i) => (
+                        <th key={i}>{s.name}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      "number",
+                      "day",
+                      "time",
+                      "subtotal",
+                      "tax",
+                      "reported",
+                      "websiteSavings",
+                      "wcEarned",
+                    ].map((key) => (
+                      <tr key={key}>
+                        <td>
+                          {
+                            (
+                              {
+                                number: "RFN",
+                                day: "Date",
+                                time: "Time",
+                                subtotal:
+                                  "Printed Subtotal — Basis Needs Review",
+                                tax: "Tax",
+                                reported: "Receipt Total",
+                                websiteSavings:
+                                  "Website You Saved — Reported Only",
+                                wcEarned: "WC Earned",
+                              } as Record<string, string>
+                            )[key]
+                          }
+                        </td>
+                        {importReview.sources.map((s, i) => (
+                          <td key={i}>
+                            {String(s[key as keyof ImportSource] || "Not Read")}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+          {!importReview.pendingApply && (
+            <p role="status">Receipt details filled below.</p>
+          )}
+          {!!importReview.sources[importReview.selected].warnings.length && (
+            <details>
+              <DisclosureSummary>Import details (optional)</DisclosureSummary>
+              {importReview.sources[importReview.selected].warnings.map(
+                (w, i) => (
+                  <p key={i}>
+                    {w.replace(
+                      "Payment completeness and printed-total basis need your confirmation.",
+                      "Check recorded payments and the printed-total basis.",
+                    )}
+                  </p>
+                ),
+              )}
+              {importReview.sources.length > 1 && (
+                <p>
+                  Sources may use different subtotal/savings meanings. One
+                  source fills the form at a time; amounts from different copies
+                  are not added together.
+                </p>
+              )}
+            </details>
+          )}
+          {importReview.sources[importReview.selected].deductions.map((d) => (
+            <label key={d.id}>
+              {d.label} · {money(d.amount)}
+              {d.kind === "UNCLASSIFIED" && (
+                <small>Not added unless you choose a type.</small>
+              )}
+              <select
+                disabled={!!importReview.pendingApply || !!review}
+                aria-label={`Classify Imported Deduction ${d.id}`}
+                value={d.kind}
+                onChange={(e) => classifyImport(d.id, e.target.value)}
+              >
+                <option value="UNCLASSIFIED">Leave Out Of Receipt</option>
+                <option value="MANUFACTURER">Manufacturer Coupon</option>
+                <option value="STORE_COUPON">Store Coupon</option>
+                <option value="SALE_PROMOTION">Store Promotion</option>
+                <option value="REGISTER_REWARD">Register Rewards Used</option>
+                <option value="OMIT">Omit This Extracted Deduction</option>
+              </select>
+            </label>
+          ))}
+          <details>
+            <DisclosureSummary>
+              Extracted Text / Source Differences
+            </DisclosureSummary>
+            {importReview.sources.map((s, i) => (
+              <section key={i}>
+                <h4>{s.name}</h4>
+                <pre className="import-source-text">{s.rawText}</pre>
+              </section>
+            ))}
+          </details>
+          <p className="muted">
+            Import is a starting point only. Unclassified OCR deductions are
+            left out of the receipt until you optionally assign a type; the
+            extracted text remains available for reference. All imported fields
+            remain editable.
+          </p>
+        </details>
+      )}
 
-    {planning&&<Notice>Copied from your shopping scenario, including sale-price reductions and coupon deductions. Those discounts are already entered below: edit them rather than entering them again. Review actual prices, coupon terms, reward uses and payments. Register Rewards default to Printed at register; change the status if they did not print. Other planned rewards remain Expected until confirmed received.</Notice>}
-    <p className="muted">{draftRevision!=='0'?'A draft is saved. Changes since Save Draft are not saved automatically. Review the breakdown, then select Save Receipt to record the purchase.':'Your receipt is not saved yet. Save Draft to keep unfinished entries, or review the breakdown and select Save Receipt to record the purchase.'}</p>{draftMessage&&<Notice>{draftMessage}</Notice>}
-    {!review&&<nav className="receipt-section-nav" aria-label="Receipt sections">{[['Import Review','.receipt-import-review'],['Products','[data-receipt-section="products"]'],['Rewards Used','[data-receipt-section="used"]'],['Payment','[data-receipt-section="payment"]'],['Printed Savings','[data-receipt-section="printed"]'],['Earnings','[data-receipt-section="earnings"]']].map(([label,selector])=><button type="button" key={label} onClick={event=>{const scope=event.currentTarget.closest('nav')?.parentElement;const target=scope?.querySelector<HTMLDetailsElement>(selector)||scope?.querySelector<HTMLDetailsElement>(label==='Import Review'?'[data-receipt-section="import"]':label==='Rewards Used'?'[data-receipt-section="payment"]':selector);if(target){target.open=true;let parent=target.parentElement;while(parent&&parent!==scope){if(parent instanceof HTMLDetailsElement)parent.open=true;parent=parent.parentElement}target.scrollIntoView?.({block:'start',behavior:'smooth'})}}}>{label}</button>)}</nav>}
-    {invalidField?.isConnected && invalidField.labels?.[0] && createPortal(<span id="receipt-field-error" className="receipt-field-error">{error}</span>,invalidField.labels[0])}
-    {error && <div ref={errorRef} id="receipt-entry-error" className="error receipt-blocking-error" role="alert" tabIndex={-1}><strong>Action required</strong><p>{error}</p></div>}
-    {!enabled && <Notice>Reconnect with write access before continuing.</Notice>}
-    {!review&&<><label className="receipt-type-field">Receipt Type<select aria-label="Receipt Type" value={receiptKind} disabled={!!planning||busy} onChange={e=>selectKind(e.target.value as typeof receiptKind)}><option value="PURCHASE">Purchase</option><option value="REWARD_ADJUSTMENT">Reward Credit / Adjustment — No Purchase</option></select></label>{receiptKind==='REWARD_ADJUSTMENT'&&<section className="receipt-input-row"><h3>Connect Manager Credit</h3><p>Record Each Adjustment Receipt Separately. Link Its Actual Credit To The Original Unpaid Or Rejected Reward. Received Fetch Points Stay On Each Adjustment Receipt.</p><label>Search Original Receipt<input type="search" value={sourceSearch} onChange={e=>setSourceSearch(e.target.value)}/></label><label>Original Receipt<select value={originalReceiptId} onChange={e=>{setOriginalReceiptId(e.target.value);setOriginalEarningId('')}}><option value="">Not Linked</option>{workspace?.receipts.filter(row=>row.status==='ACTIVE'&&row.transactionId!==id&&`${row.metadata?.receiptNumber??''} ${row.metadata?.retailer??''} ${row.date??''}`.replace(/[^a-z0-9]/gi,'').toLowerCase().includes(sourceSearch.replace(/[^a-z0-9]/gi,'').toLowerCase())).map(row=><option value={row.transactionId} key={row.transactionId}>{row.metadata?.receiptNumber??row.transactionId} · {row.date}</option>)}</select></label>{originalReceiptId&&<label>Original Walgreens Cash Reward<select required value={originalEarningId} onChange={e=>setOriginalEarningId(e.target.value)}><option value="">Choose The Missing Reward</option>{workspace?.receiptEarnings?.filter(row=>row.receiptId===originalReceiptId&&row.earning.kind==='WALGREENS_CASH'&&!['CREDITED','PAID'].includes(row.earning.status)).map(row=><option key={row.earning.earningId} value={row.earning.earningId}>{row.earning.offerReference} · {money(row.earning.expected?.amount)} · {row.earning.status}</option>)}</select></label>}</section>}</>}
-    {!review&&<details open className="receipt-input-row" data-receipt-section="import"><summary>Import Receipt — PDF Or Image<InfoHelp>Creates an editable draft only. Attach pages or alternate copies of one receipt together. Original files stay attached. Review unclear values and coupon/RR classifications before saving.</InfoHelp></summary><FileDropZone label="Receipt import drop area" multiple disabled={!enabled||busy||!!pending||!!planning} onFiles={selected=>void importFiles(selected)}><label>Import Receipt Files<input type="file" multiple accept="application/pdf,image/jpeg,image/png,image/webp" disabled={!enabled||busy||!!pending||!!planning} onChange={e=>{void importFiles(e.target.files);e.target.value=''}}/></label></FileDropZone>{busy&&<p role="status">Working… Please keep this draft open.</p>}</details>}
-    {importReview&&<details open={!review} ref={importReviewRef} className="receipt-input-row receipt-import-review"><summary><h3>Import Review</h3></summary>{importReview.duplicates.map(r=><div className="error" role="alert" key={r.transactionId}>Receipt {r.receiptNumber} already exists ({r.status}). {onOpenExisting&&<button type="button" className="secondary" onClick={()=>onOpenExisting(r.transactionId)}>Open Existing Receipt</button>}</div>)}
-      {importReview.pendingApply&&<div className="error" role="alert"><strong>Image import incomplete — form fields have not been replaced.</strong><p>The image reader could not reliably extract this receipt. Review the original photo and the partial extraction below before using it.</p><ul>{importReview.sources[importReview.selected].qualityIssues?.map((issue,i)=><li key={i}>{issue}</li>)}</ul><details><summary>View partial extraction</summary><div className="table-wrap"><table><thead><tr><th>Recovered product</th><th>Quantity</th><th>Unit price</th></tr></thead><tbody>{importReview.sources[importReview.selected].items.map(item=><tr key={item.id}><td>{item.description}{item.observedStorePromotion&&<small>Printed store promotion: {money(item.observedStorePromotion)}</small>}{item.observedRegularPrice&&<small>Regular price read by OCR: {item.observedRegularPrice}</small>}</td><td>{item.quantity}</td><td>{item.sale?money(item.sale):'Needs review'}</td></tr>)}</tbody></table></div></details><button type="button" className="secondary" disabled={busy} onClick={()=>{applyImport(importReview.sources[importReview.selected]);setImportReview({...importReview,pendingApply:false})}}>Use partial draft for manual correction</button><button type="button" className="text-button" disabled={busy} onClick={()=>{setEvidence(rows=>rows.filter(row=>!importReview.attachmentIds?.includes(row.evidenceId)));setImportReview(null);setImportChecked(false)}}>Keep current form</button></div>}
-      {importReview.sources.length>1&&<label>Source To Use<select value={importReview.selected} disabled={busy||!!review} onChange={e=>{if(!window.confirm('Replace editable fields with this source? Its differences will remain available in Extracted Text.'))return;const selected=Number(e.target.value);const source=importReview.sources[selected],pendingApply=!!source.requiresManualReview;setImportChecked(false);setImportReview({...importReview,selected,pendingApply});if(!pendingApply)applyImport(source)}}>{importReview.sources.map((s,i)=><option key={i} value={i}>{s.name}</option>)}</select></label>}
-      {importReview.sources.length>1&&<details><summary>Compare Imported Sources</summary><div className="table-wrap"><table><thead><tr><th>Field</th>{importReview.sources.map((s,i)=><th key={i}>{s.name}</th>)}</tr></thead><tbody>{['number','day','time','subtotal','tax','reported','websiteSavings','wcEarned'].map(key=><tr key={key}><td>{({number:'RFN',day:'Date',time:'Time',subtotal:'Printed Subtotal — Basis Needs Review',tax:'Tax',reported:'Receipt Total',websiteSavings:'Website You Saved — Reported Only',wcEarned:'WC Earned'} as Record<string,string>)[key]}</td>{importReview.sources.map((s,i)=><td key={i}>{String(s[key as keyof ImportSource]||'Not Read')}</td>)}</tr>)}</tbody></table></div></details>}
-      {!importReview.pendingApply&&<p role="status">Receipt details filled below.</p>}
-      {!!importReview.sources[importReview.selected].warnings.length&&<details><summary>Import details (optional)</summary>{importReview.sources[importReview.selected].warnings.map((w,i)=><p key={i}>{w.replace('Payment completeness and printed-total basis need your confirmation.','Check recorded payments and the printed-total basis.')}</p>)}{importReview.sources.length>1&&<p>Sources may use different subtotal/savings meanings. One source fills the form at a time; amounts from different copies are not added together.</p>}</details>}
-      {importReview.sources[importReview.selected].deductions.map(d=><label key={d.id}>{d.label} · {money(d.amount)}{d.kind==='UNCLASSIFIED'&&<small>Not added unless you choose a type.</small>}<select disabled={!!importReview.pendingApply||!!review} aria-label={`Classify Imported Deduction ${d.id}`} value={d.kind} onChange={e=>classifyImport(d.id,e.target.value)}><option value="UNCLASSIFIED">Leave Out Of Receipt</option><option value="MANUFACTURER">Manufacturer Coupon</option><option value="STORE_COUPON">Store Coupon</option><option value="SALE_PROMOTION">Store Promotion</option><option value="REGISTER_REWARD">Register Rewards Used</option><option value="OMIT">Omit This Extracted Deduction</option></select></label>)}
-      <details><summary>Extracted Text / Source Differences</summary>{importReview.sources.map((s,i)=><section key={i}><h4>{s.name}</h4><pre className="import-source-text">{s.rawText}</pre></section>)}</details>
-      <p className="muted">Import is a starting point only. Unclassified OCR deductions are left out of the receipt until you optionally assign a type; the extracted text remains available for reference. All imported fields remain editable.</p>
-    </details>}
+      {review ? (
+        <>
+          <p>
+            <strong>{store}</strong> · {day} · {number || "No printed number"}
+          </p>
+          {receiptKind === "REWARD_ADJUSTMENT" ? (
+            <details>
+              <DisclosureSummary>
+                Reward Credit / Adjustment — No Purchase
+              </DisclosureSummary>
+              <p>
+                Actual Out Of Pocket: $0.00 · No Purchased Items Or Inventory
+                Added.
+              </p>
+              {review.preview.totals.benefitObservations?.map((r) => (
+                <p key={r.earningId}>
+                  {r.provider} · {(r.confirmed ?? r.expected)?.amount}{" "}
+                  {(r.confirmed ?? r.expected)?.kind === "POINTS"
+                    ? "Points"
+                    : "USD"}{" "}
+                  · {r.status}
+                </p>
+              ))}
+              <p>
+                Confirmed Benefit Value:{" "}
+                {money(review.preview.totals.savings.newlyEarned)}
+              </p>
+            </details>
+          ) : (
+            <details>
+              <DisclosureSummary>
+                Purchase totals, payments and rewards
+              </DisclosureSummary>
+              <ReceiptFinancialReview
+                rewardDescriptions={Object.fromEntries(
+                  rewards.map((r) => [r.id, r.offer]),
+                )}
+                totals={review.preview.totals}
+                cvs={/^cvs/i.test(store.trim())}
+              />
+            </details>
+          )}
+          <details>
+            <DisclosureSummary>Products and discounts</DisclosureSummary>
+            <div className="table-wrap receipt-review-products">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Regular price</th>
+                    <th>Quantity</th>
+                    <th>Regular extended total</th>
+                    <th>Attached discounts</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((l) => (
+                    <tr key={l.id}>
+                      <td>{l.description}</td>
+                      <td>{money(l.regular)}</td>
+                      <td>{l.quantity}</td>
+                      <td>
+                        {money(
+                          review.preview.totals.lineTotals?.[l.id] || null,
+                        )}
+                      </td>
+                      <td>
+                        {discounts
+                          .filter(
+                            (d) =>
+                              !d.shared &&
+                              Object.keys(d.quantities).length === 1 &&
+                              l.id in d.quantities,
+                          )
+                          .map((d) => (
+                            <p key={d.id}>
+                              {d.label} · {money(d.amount)}
+                            </p>
+                          ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+          <details>
+            <DisclosureSummary>Checkout discounts</DisclosureSummary>
+            {payments.some((p) => p.accountName === "ECB") && (
+              <>
+                <h3>ExtraBucks (ECB) used — Whole receipt</h3>
+                {payments
+                  .filter((p) => p.accountName === "ECB")
+                  .map((p) => (
+                    <p key={p.id}>
+                      {p.notes || "ECB used"} · {money(p.amount)}
+                    </p>
+                  ))}
+              </>
+            )}
+            {(!/^cvs/i.test(store.trim()) || rrUses.length > 0) && (
+              <h3>Register Rewards used breakdown</h3>
+            )}
+            {rrUses.map((r, i) => (
+              <p key={r.eventId}>
+                RR {i + 1} · {r.recordedDescription || "Register Rewards used"}{" "}
+                · {money(r.amount)}
+              </p>
+            ))}
+            <h3>Shared or receipt-wide discount breakdown</h3>
+            {discounts
+              .filter((d) => d.shared || Object.keys(d.quantities).length !== 1)
+              .map((d) => (
+                <p key={d.id}>
+                  {d.label} · {money(d.amount)} ·{" "}
+                  {Object.keys(d.quantities).length
+                    ? lines
+                        .filter((l) => l.id in d.quantities)
+                        .map((l) => l.description)
+                        .join(", ")
+                    : "Whole receipt"}
+                </p>
+              ))}
+          </details>
+          <details>
+            <DisclosureSummary>
+              Reward requirements — spend and quantity
+            </DisclosureSummary>
+            {review.preview.totals.qualification?.map((q) => {
+              const reward = rewards.find((r) => r.id === q.earningId);
+              return (
+                <div className="information-box" key={q.earningId}>
+                  <strong>
+                    {reward?.offer || reward?.provider || "Reward"} ·{" "}
+                    {q.review.status.replaceAll("_", " ")}
+                  </strong>
+                  <p>
+                    {reward?.requirementType
+                      ? `Required ${reward.requirementType === "SPEND" ? "spend" : "quantity"}: ${reward.threshold || "not entered"}. `
+                      : "No requirement entered. "}
+                    Qualifying quantity: {q.review.qualifyingQuantity} ·
+                    Qualifying spend: {money(q.review.qualifyingSpend)}
+                  </p>
+                  <p>{q.review.reason}</p>
+                </div>
+              );
+            })}
+          </details>
+          <p>
+            {lines.length} product lines · {discounts.length} deductions ·{" "}
+            {rewards.length} reward observations ·{" "}
+            {review.preview.evidence.length} attachments
+          </p>
+          {review.preview.totals.savings.issues.map((issue) => (
+            <Notice key={issue}>{issue}</Notice>
+          ))}
+          {!number && !time && (
+            <Notice>
+              Without a printed number or time, duplicate lookup is limited.
+            </Notice>
+          )}
+          {review.preview.possibleDuplicates.length > 0 && (
+            <Notice>
+              A possible existing receipt was found. Close this draft and review
+              saved receipts before adding another.
+            </Notice>
+          )}
+          {different && (
+            <Notice>
+              A recorded purchase/payment difference requires review. Printed
+              values will be preserved.
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={ack}
+                  disabled={busy || !!pending}
+                  onChange={(e) => setAck(e.target.checked)}
+                />
+                I reviewed the receipt evidence and want to preserve the
+                reported difference.
+              </label>
+            </Notice>
+          )}
+          {pending && !busy && (
+            <Notice>
+              Save outcome may be unresolved. Retry sends the exact same
+              request. Close and refresh to reconcile before making another
+              entry.
+            </Notice>
+          )}
+          <FormActions>
+            <button
+              className="secondary"
+              disabled={busy || !!pending}
+              onClick={() => setReview(null)}
+            >
+              Back to edit
+            </button>
+            <button
+              className="primary"
+              disabled={
+                !enabled ||
+                busy ||
+                review.preview.possibleDuplicates.length > 0 ||
+                (different && !ack)
+              }
+              onClick={() => void save()}
+            >
+              {busy ? "Saving…" : pending ? "Retry same save" : "Save receipt"}
+            </button>
+          </FormActions>
+        </>
+      ) : (
+        <form
+          noValidate
+          ref={formRef}
+          onInvalidCapture={(event) => {
+            event.preventDefault();
+            const field = event.target as HTMLInputElement;
+            field.setAttribute("aria-invalid", "true");
+            field.setAttribute("aria-describedby", "receipt-entry-error");
+            const first = Array.from(formRef.current?.elements ?? []).find(
+              (node): node is HTMLInputElement =>
+                ["INPUT", "SELECT", "TEXTAREA"].includes(node.tagName) &&
+                !(node as HTMLInputElement).validity.valid,
+            );
+            if (first === field) {
+              if (!field.hasAttribute("aria-label"))
+                field.setAttribute(
+                  "aria-label",
+                  field.labels?.[0]?.textContent || "Required field",
+                );
+              setInvalidField(field);
+              field.setAttribute("aria-describedby", "receipt-field-error");
+              setError(
+                `${field.getAttribute("aria-label") || field.labels?.[0]?.textContent || "Required field"}: ${field.validity.patternMismatch && field.inputMode === "decimal" ? "Enter a nonnegative number, for example 10.50, without a dollar sign or commas." : field.validationMessage}`,
+              );
+              for (
+                let parent = field.parentElement;
+                parent;
+                parent = parent.parentElement
+              ) {
+                if (parent.tagName === "DETAILS")
+                  parent.setAttribute("open", "");
+              }
+              field.scrollIntoView?.({ block: "center", behavior: "smooth" });
+              field.focus();
+            }
+          }}
+          onInputCapture={(event) => {
+            const field = event.target as HTMLInputElement;
+            if (field.validity?.valid) {
+              field.removeAttribute("aria-invalid");
+              if (field === invalidField) {
+                setInvalidField(null);
+                setError("");
+              }
+            }
+          }}
+          className="receipt-entry-form"
+          onSubmit={preview}
+        >
+          <fieldset disabled={!enabled || busy}>
+            <details open className="receipt-details">
+              <DisclosureSummary>Receipt details</DisclosureSummary>
+              <div className="receipt-details-grid">
+                <StoreInput required value={store} onChange={setStore} />
+                <label>
+                  Printed receipt number (optional)
+                  <input
+                    placeholder={
+                      isWalgreensStore(store)
+                        ? "0000-0000-0000-0000-0000"
+                        : undefined
+                    }
+                    value={number}
+                    onChange={(e) => setNumber(e.target.value)}
+                    onBlur={() => setNumber(formatReceiptNumber(store, number))}
+                  />
+                </label>
+                <label>
+                  Transaction number (optional)
+                  <input
+                    value={transactionNumber}
+                    onChange={(e) => setTransactionNumber(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Register number (optional)
+                  <input
+                    value={registerNumber}
+                    onChange={(e) => setRegisterNumber(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Store / Address Reference (Optional)
+                  <AutoSizeTextArea
+                    value={storeReference}
+                    onChange={(e) => setStoreReference(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Purchase date
+                  <input
+                    aria-label="Purchase date"
+                    type="date"
+                    value={day}
+                    onChange={(e) => setDay(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Purchase time (optional)
+                  <input
+                    type="time"
+                    value={time}
+                    onChange={(e) => setTime(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Purchase channel
+                  <select
+                    aria-label="Order type"
+                    value={channel}
+                    onChange={(e) => setChannel(e.target.value)}
+                  >
+                    <option value="IN_STORE">In store</option>
+                    <option value="ONLINE">Online</option>
+                    <option value="UNKNOWN">Unknown</option>
+                  </select>
+                </label>
+                <label>
+                  Printed-total basis
+                  <select
+                    aria-label="Printed total represents"
+                    value={printedTotalBasis}
+                    onChange={(e) =>
+                      setPrintedTotalBasis(e.target.value as PrintedTotalBasis)
+                    }
+                  >
+                    <option value="UNKNOWN">Unknown</option>
+                    <option value="BEFORE_PAYMENT_FUNDING">
+                      Before funding
+                    </option>
+                    <option value="AFTER_REWARD_REDEMPTIONS">
+                      Remaining total after reward redemptions
+                    </option>
+                  </select>
+                </label>
+              </div>
+              <InfoHelp>
+                Enter the printed total exactly. Before funding means before
+                reward and other payment funding; After reward use means the
+                remaining total after reward redemptions. Choose Unknown if
+                unclear.
+              </InfoHelp>
+            </details>
+            {receiptKind === "PURCHASE" && (
+              <>
+                <details
+                  className="receipt-products"
+                  data-receipt-section="products"
+                  open
+                >
+                  <DisclosureSummary>
+                    <span
+                      className="receipt-disclosure-arrow"
+                      aria-hidden="true"
+                    >
+                      ▾
+                    </span>
+                    Products
+                  </DisclosureSummary>
+                  <div className="product-disclosure-actions">
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() =>
+                        formRef.current
+                          ?.querySelectorAll<HTMLDetailsElement>(
+                            "details.receipt-product",
+                          )
+                          .forEach((d) => {
+                            d.open = false;
+                          })
+                      }
+                    >
+                      Collapse all products
+                    </button>
+                    <button
+                      type="button"
+                      className="text-button"
+                      onClick={() =>
+                        formRef.current
+                          ?.querySelectorAll<HTMLDetailsElement>(
+                            "details.receipt-product",
+                          )
+                          .forEach((d) => {
+                            d.open = true;
+                          })
+                      }
+                    >
+                      Expand all products
+                    </button>
+                  </div>
+                  {lines.map((l, i) => (
+                    <details
+                      className="receipt-input-row receipt-product"
+                      key={l.id}
+                      open
+                    >
+                      <DisclosureSummary>
+                        <span className="receipt-expanded-label">
+                          Product description {i + 1}
+                        </span>
+                        <span className="receipt-collapsed-label">
+                          Product {i + 1} · {l.description.trim() || "New product"}
+                          {l.pricingMethod === "WEIGHT"
+                            ? ` · ${l.weight || "weight not entered"} ${l.weightUnit || ""} at ${money(l.regular || null)} per ${l.weightUnit || "weight unit"}`
+                            : ` · Quantity ${l.quantity || "not entered"} · Regular price ${money(l.regular || null)}`}
+                        </span>
+                      </DisclosureSummary>
+                      <div className="receipt-fields-row receipt-product-identity">
+                        <label>
+                          Product description {i + 1}
+                          <AutoSizeTextArea
+                            aria-label={`Product description ${i + 1}`}
+                            autoFocus={focusId === l.id}
+                            required
+                            value={l.description}
+                            onBlur={() =>
+                              change(
+                                lines,
+                                l.id,
+                                "description",
+                                titleWords(l.description),
+                                setLines,
+                              )
+                            }
+                            onChange={(e) =>
+                              change(
+                                lines,
+                                l.id,
+                                "description",
+                                e.target.value,
+                                setLines,
+                              )
+                            }
+                          />
+                        </label>
+                        <label>
+                          SKU / UPC {i + 1} (optional)
+                          <input
+                            value={l.sku}
+                            onChange={(e) =>
+                              change(
+                                lines,
+                                l.id,
+                                "sku",
+                                e.target.value,
+                                setLines,
+                              )
+                            }
+                          />
+                        </label>
+                        <label>
+                          Sold by {i + 1}
+                          <select
+                            aria-label={`Sold by ${i + 1}`}
+                            value={l.pricingMethod ?? "EACH"}
+                            onChange={(e) =>
+                              setLines((rows) =>
+                                rows.map((row) =>
+                                  row.id === l.id
+                                    ? {
+                                        ...row,
+                                        pricingMethod: e.target.value as "EACH" | "WEIGHT",
+                                        quantity: e.target.value === "WEIGHT" ? "1" : row.quantity,
+                                        weightUnit: e.target.value === "WEIGHT" ? row.weightUnit ?? "lb" : row.weightUnit,
+                                        priceRule: e.target.value === "WEIGHT" ? undefined : row.priceRule,
+                                      }
+                                    : row,
+                                ),
+                              )
+                            }
+                          >
+                            <option value="EACH">Each / package quantity</option>
+                            <option value="WEIGHT">Weight</option>
+                          </select>
+                        </label>
+                        {l.pricingMethod === "WEIGHT" ? (
+                          <>
+                            <label>
+                              Weight {i + 1}
+                              <input aria-label={`Weight ${i + 1}`} required inputMode="decimal" pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)" value={l.weight ?? ""} onChange={(e) => setLines((rows) => rows.map((row) => row.id === l.id ? { ...row, weight: e.target.value } : row))} />
+                            </label>
+                            <label>
+                              Weight unit {i + 1}
+                              <select aria-label={`Weight unit ${i + 1}`} required value={l.weightUnit ?? "lb"} onChange={(e) => setLines((rows) => rows.map((row) => row.id === l.id ? { ...row, weightUnit: e.target.value as Line["weightUnit"] } : row))}>
+                                <option value="lb">lb</option><option value="oz">oz</option><option value="kg">kg</option><option value="g">g</option>
+                              </select>
+                            </label>
+                            {amount(`Price per ${l.weightUnit ?? "lb"} ${i + 1}`, l.regular, (v) => change(lines, l.id, "regular", v, setLines))}
+                            <div className="planning-calculated"><span>Weighted line total</span><strong>{weightedLineTotal(l) ? money(weightedLineTotal(l)) : "—"}</strong></div>
+                          </>
+                        ) : (
+                          <>
+                            <label>
+                              Quantity {i + 1}
+                              <input required inputMode="numeric" pattern="[1-9][0-9]*" value={l.quantity} onChange={(e) => change(lines, l.id, "quantity", e.target.value, setLines)} />
+                            </label>
+                            {amount(`Regular price ${i + 1}`, l.regular, (v) => change(lines, l.id, "regular", v, setLines))}
+                          </>
+                        )}
+                        {amount(
+                          `Store promotion ${i + 1}`,
+                          discounts.find(
+                            (d) =>
+                              d.kind === "SALE_PROMOTION" &&
+                              !d.shared &&
+                              Object.keys(d.quantities).length === 1 &&
+                              l.id in d.quantities,
+                          )?.amount ?? "",
+                          (value) => {
+                            const existing = discounts.find(
+                              (d) =>
+                                d.kind === "SALE_PROMOTION" &&
+                                !d.shared &&
+                                Object.keys(d.quantities).length === 1 &&
+                                l.id in d.quantities,
+                            );
+                            setPaymentEntryStatus("UNKNOWN");
+                            setDiscounts((rows) =>
+                              existing
+                                ? rows.map((d) =>
+                                    d.id === existing.id
+                                      ? { ...d, amount: value }
+                                      : d,
+                                  )
+                                : [
+                                    ...rows,
+                                    {
+                                      id: crypto.randomUUID(),
+                                      label: productDiscountLabel(
+                                        l.description,
+                                        "SALE_PROMOTION",
+                                      ),
+                                      amount: value,
+                                      kind: "SALE_PROMOTION",
+                                      quantities: { [l.id]: l.quantity },
+                                    },
+                                  ],
+                            );
+                          },
+                          false,
+                        )}
+                      </div>
+                      {l.sku.trim() &&
+                        products.some((p) =>
+                          p.sku
+                            .toLowerCase()
+                            .startsWith(l.sku.trim().toLowerCase()),
+                        ) && (
+                          <div className="field-full">
+                            <strong>Previously purchased products</strong>
+                            {products
+                              .filter((p) =>
+                                p.sku
+                                  .toLowerCase()
+                                  .startsWith(l.sku.trim().toLowerCase()),
+                              )
+                              .slice(0, 8)
+                              .map((p, n) => (
+                                <div
+                                  className="receipt-input-row"
+                                  key={`${p.sku}-${p.description}-${n}`}
+                                >
+                                  <span>
+                                    {p.description} · SKU {p.sku} · Last regular
+                                    price {money(p.regularPrice)}
+                                  </span>
+                                  <small>
+                                    Last purchased{" "}
+                                    {p.purchaseDate || "date not recorded"} ·
+                                    Receipt {p.receiptNumber || "not recorded"}
+                                  </small>
+                                  <button
+                                    type="button"
+                                    className="secondary"
+                                    onClick={() => {
+                                      setPaymentEntryStatus("UNKNOWN");
+                                      setLines(
+                                        lines.map((row) =>
+                                          row.id === l.id
+                                            ? {
+                                                ...row,
+                                                description: p.description,
+                                                sku: p.sku,
+                                                regular: p.regularPrice ?? "",
+                                                quantity: "1",
+                                              }
+                                            : row,
+                                        ),
+                                      );
+                                    }}
+                                  >
+                                    Use this product: {p.description}
+                                  </button>
+                                </div>
+                              ))}
+                            <small>
+                              Previous prices are a reference. Review price and
+                              quantity; enter this purchase’s discounts
+                              separately.
+                            </small>
+                          </div>
+                        )}
+                      {(l.observedStorePromotion || l.observedRegularPrice) && (
+                        <div className="information-box" role="note">
+                          {l.observedRegularPrice && (
+                            <p>
+                              Regular price read by OCR:{" "}
+                              {l.observedRegularPrice}
+                            </p>
+                          )}
+                          {l.observedStorePromotion && (
+                            <p>
+                              Printed store promotion:{" "}
+                              {money(l.observedStorePromotion)}. Entered below
+                              as a store promotion. Use the regular unit price
+                              above; deduct these savings once.
+                            </p>
+                          )}
+                        </div>
+                      )}{" "}
+                      <PackageDetailsFields
+                        index={i + 1}
+                        value={l.packageDetails}
+                        onChange={(value) =>
+                          setLines((rows) =>
+                            rows.map((row) =>
+                              row.id === l.id
+                                ? { ...row, packageDetails: value }
+                                : row,
+                            ),
+                          )
+                        }
+                      />
+                      {couponSelector(
+                        `Use a clipped coupon for product ${i + 1}`,
+                        l,
+                      )}
+                      {discounts
+                        .filter(
+                          (d) =>
+                            !d.shared &&
+                            Object.keys(d.quantities).length === 1 &&
+                            l.id in d.quantities,
+                        )
+                        .map((d, n) => (
+                          <ItemDiscountFields
+                            key={d.id}
+                            name={`Product ${i + 1} discount ${n + 1}`}
+                            autoFocus={focusId === d.id}
+                            productDescription={l.description}
+                            discount={d}
+                            onChange={(value) => {
+                              setPaymentEntryStatus("UNKNOWN");
+                              setDiscounts(
+                                discounts.map((row) =>
+                                  row.id === d.id ? { ...row, ...value } : row,
+                                ),
+                              );
+                            }}
+                            onRemove={() =>
+                              setDiscounts(
+                                discounts.filter((row) => row.id !== d.id),
+                              )
+                            }
+                          />
+                        ))}
+                      {l.pricingMethod !== "WEIGHT" ? <div className="receipt-sale-controls">
+                        <SaleButtons
+                          baseLabel="Price"
+                          line={{
+                            id: l.id,
+                            name: l.description,
+                            sku: l.sku,
+                            regular: l.regular,
+                            sale: l.sale ?? "",
+                            quantity: l.quantity,
+                            priceRule: l.priceRule,
+                          }}
+                          onChange={(value) =>
+                            void selectProductPromotion(l, value.priceRule)
+                          }
+                        />
+                        <InfoHelp>
+                          Promotion buttons calculate a reduction from the
+                          regular prices and quantities entered. Complete groups
+                          only; remaining units keep their unit price. Enter
+                          each reduction once. For Other, enter a discount
+                          amount.
+                        </InfoHelp>
+                      </div> : <p className="muted">Quantity-based BOGO controls do not apply to this weighed line. Enter any printed reduction as the store promotion or product discount.</p>}
+                      <ReceiptProductTotals
+                        line={l}
+                        discounts={discounts.filter(
+                          (d) =>
+                            !d.shared &&
+                            Object.keys(d.quantities).length === 1 &&
+                            l.id in d.quantities,
+                        )}
+                        api={api}
+                      />
+                      <div className="product-entry-actions">
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() =>
+                            setDiscounts([
+                              ...discounts,
+                              {
+                                id: focusedId(),
+                                label: productDiscountLabel(
+                                  l.description,
+                                  "SALE_PROMOTION",
+                                ),
+                                amount: "",
+                                kind: "SALE_PROMOTION",
+                                quantities: { [l.id]: l.quantity },
+                              },
+                            ])
+                          }
+                        >
+                          Add discount to product {i + 1}
+                        </button>
+                        <button
+                          className="secondary"
+                          type="button"
+                          onClick={() =>
+                            setLines([...lines, { ...l, id: focusedId() }])
+                          }
+                        >
+                          Add another line for this product
+                        </button>
+                        <button
+                          className="secondary product-remove-action"
+                          type="button"
+                          disabled={lines.length === 1}
+                          onClick={() => removeLine(l.id)}
+                        >
+                          <Trash2 size={14} />
+                          Remove product {i + 1}
+                        </button>
+                      </div>
+                    </details>
+                  ))}
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => setLines([...lines, focusedLine()])}
+                  >
+                    <Plus size={15} />
+                    Add product
+                  </button>
+                </details>
+                <details open>
+                  <DisclosureSummary>
+                    Shared or receipt-wide discounts
+                  </DisclosureSummary>
+                  {couponSelector(
+                    "Use a clipped coupon across products or the whole receipt",
+                  )}
+                  {planning?.plan.scenario?.coupons.some(
+                    (c) => c.pendingVerification,
+                  ) && (
+                    <p className="notice">
+                      Confirm only the planned coupons actually used on this
+                      receipt.
+                    </p>
+                  )}
+                  <div className="information-box" role="note">
+                    Applies to the selected products, or all products when Whole
+                    Receipt is selected. Recalculate after changing prices,
+                    quantities or selection. Do not also enter the same sale on
+                    a product.
+                  </div>
+                  {discounts
+                    .filter(
+                      (d) => d.shared || Object.keys(d.quantities).length !== 1,
+                    )
+                    .map((d, i) => (
+                      <details open className="receipt-input-row" key={d.id}>
+                        <DisclosureSummary>
+                          Discount {i + 1} · {d.label || "New discount"}
+                        </DisclosureSummary>
+                        <label>
+                          Discount label {i + 1}
+                          <input
+                            required={
+                              !!d.amount.trim() &&
+                              !/^(?:0+(?:[.]0*)?|[.]0+)$/.test(d.amount.trim())
+                            }
+                            autoFocus={focusId === d.id}
+                            value={d.label}
+                            onChange={(e) =>
+                              change(
+                                discounts,
+                                d.id,
+                                "label",
+                                e.target.value,
+                                setDiscounts,
+                              )
+                            }
+                          />
+                        </label>
+                        <div className="form-grid">
+                          <label>
+                            Discount type
+                            <select
+                              aria-label={`Discount type ${i + 1}`}
+                              required={
+                                !!d.amount.trim() &&
+                                !zeroScenarioAmount(d.amount)
+                              }
+                              value={d.kind === "UNKNOWN" ? "" : d.kind}
+                              onChange={(e) =>
+                                change(
+                                  discounts,
+                                  d.id,
+                                  "kind",
+                                  e.target.value,
+                                  setDiscounts,
+                                )
+                              }
+                            >
+                              {d.kind === "UNKNOWN" && (
+                                <option value="" disabled>
+                                  Choose printed coupon type
+                                </option>
+                              )}
+                              <option value="MANUFACTURER">
+                                Manufacturer coupon
+                              </option>
+                              <option value="STORE_COUPON">
+                                Store / IVC / online coupon
+                              </option>
+                              <option value="SALE_PROMOTION">
+                                Sale/promotion reduction from prices above
+                              </option>
+                            </select>
+                          </label>
+                          {amount(
+                            `Discount amount ${i + 1}`,
+                            d.amount,
+                            (v) =>
+                              change(
+                                discounts,
+                                d.id,
+                                "amount",
+                                v,
+                                setDiscounts,
+                              ),
+                            false,
+                          )}
+                          <ReceiptDiscountSale
+                            api={api}
+                            items={lines
+                              .filter(
+                                (l) =>
+                                  !Object.keys(d.quantities).length ||
+                                  d.quantities[l.id],
+                              )
+                              .map((l) => ({
+                                id: l.id,
+                                name: l.description,
+                                sku: l.sku,
+                                regular: "",
+                                sale: l.sale?.trim() || l.regular,
+                                quantity: d.quantities[l.id] || l.quantity,
+                              }))}
+                            onCalculated={(amount, name) =>
+                              setDiscounts((current) =>
+                                current.map((row) =>
+                                  row.id === d.id
+                                    ? {
+                                        ...row,
+                                        amount,
+                                        kind: "SALE_PROMOTION",
+                                        label: row.label || name,
+                                      }
+                                    : row,
+                                ),
+                              )
+                            }
+                          />
+                          <ReceiptLineSelector
+                            lines={lines.map((l) => ({
+                              ...l,
+                              price: l.regular,
+                            }))}
+                            value={d.quantities}
+                            onChange={(v) =>
+                              change(
+                                discounts,
+                                d.id,
+                                "quantities",
+                                v,
+                                setDiscounts,
+                              )
+                            }
+                            name={`Discount products ${i + 1}`}
+                          />
+                        </div>
+                        <button
+                          className="text-button"
+                          type="button"
+                          onClick={() =>
+                            setDiscounts(
+                              discounts.filter((row) => row.id !== d.id),
+                            )
+                          }
+                        >
+                          Delete
+                        </button>
+                      </details>
+                    ))}
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() =>
+                      setDiscounts([
+                        ...discounts,
+                        {
+                          id: focusedId(),
+                          shared: true,
+                          label: "",
+                          amount: "",
+                          kind: "MANUFACTURER",
+                          quantities: {},
+                        },
+                      ])
+                    }
+                  >
+                    <Plus size={15} />
+                    Add shared or receipt-wide discount
+                  </button>
+                </details>
+                <details data-receipt-section="payment" open>
+                  <DisclosureSummary>
+                    Tax, rewards used, and payment
+                  </DisclosureSummary>
+                  <div className="receipt-fields-row">
+                    {amount("Sales tax", tax, setTax)}
+                    {amount(
+                      "Reported total due at register",
+                      reported,
+                      setReported,
+                    )}
+                  </div>
+                  {isWalgreensStore(store) && (
+                    <details data-receipt-section="used" open>
+                      <DisclosureSummary>
+                        Register Rewards used · {rrUses.length} coupon
+                        {rrUses.length === 1 ? "" : "s"}
+                        <InfoHelp>
+                          Enter each coupon separately, even when two have the
+                          same value. For $5, $5 and $4, add three rows. Each
+                          use can be matched to its original reward after
+                          saving. Do not repeat these amounts as discounts or
+                          payments.
+                        </InfoHelp>
+                      </DisclosureSummary>
+                      {rrUses.map((r, i) => (
+                        <section className="receipt-input-row" key={r.eventId}>
+                          <div className="receipt-fields-row receipt-rr-use-row">
+                            {amount(
+                              `RR used amount ${i + 1}`,
+                              r.amount,
+                              (value) => {
+                                setPaymentEntryStatus("UNKNOWN");
+                                setRRUses(
+                                  rrUses.map((row) =>
+                                    row.eventId === r.eventId
+                                      ? { ...row, amount: value }
+                                      : row,
+                                  ),
+                                );
+                              },
+                            )}
+                            <label>
+                              RR used description {i + 1} (optional)
+                              <input
+                                value={r.recordedDescription}
+                                onChange={(e) =>
+                                  setRRUses(
+                                    rrUses.map((row) =>
+                                      row.eventId === r.eventId
+                                        ? {
+                                            ...row,
+                                            recordedDescription: e.target.value,
+                                          }
+                                        : row,
+                                    ),
+                                  )
+                                }
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => {
+                                setPaymentEntryStatus("UNKNOWN");
+                                setRRUses(
+                                  rrUses.filter(
+                                    (row) => row.eventId !== r.eventId,
+                                  ),
+                                );
+                              }}
+                            >
+                              Remove RR use {i + 1}
+                            </button>
+                          </div>
+                        </section>
+                      ))}
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={rrUses.length >= 100}
+                        onClick={() => {
+                          setPaymentEntryStatus("UNKNOWN");
+                          setRRUses([
+                            ...rrUses,
+                            {
+                              eventId: crypto.randomUUID(),
+                              amount: "",
+                              recordedDescription: "",
+                            },
+                          ]);
+                        }}
+                      >
+                        Add RR used
+                      </button>
+                    </details>
+                  )}
 
-    {review ? <>
-      <p><strong>{store}</strong> · {day} · {number || 'No printed number'}</p>
-      {receiptKind==='REWARD_ADJUSTMENT'?<details><summary>Reward Credit / Adjustment — No Purchase</summary><p>Actual Out Of Pocket: $0.00 · No Purchased Items Or Inventory Added.</p>{review.preview.totals.benefitObservations?.map(r=><p key={r.earningId}>{r.provider} · {(r.confirmed??r.expected)?.amount} {(r.confirmed??r.expected)?.kind==='POINTS'?'Points':'USD'} · {r.status}</p>)}<p>Confirmed Benefit Value: {money(review.preview.totals.savings.newlyEarned)}</p></details>:<details><summary>Purchase totals, payments and rewards</summary><ReceiptFinancialReview rewardDescriptions={Object.fromEntries(rewards.map(r=>[r.id,r.offer]))} totals={review.preview.totals} cvs={/^cvs/i.test(store.trim())} /></details>}
-      <details><summary>Products and discounts</summary><div className="table-wrap receipt-review-products"><table><thead><tr><th>Product</th><th>Regular price</th><th>Quantity</th><th>Regular extended total</th><th>Attached discounts</th></tr></thead><tbody>{lines.map(l=><tr key={l.id}><td>{l.description}</td><td>{money(l.regular)}</td><td>{l.quantity}</td><td>{money(review.preview.totals.lineTotals?.[l.id]||null)}</td><td>{discounts.filter(d => !d.shared && Object.keys(d.quantities).length === 1 && l.id in d.quantities).map(d => <p key={d.id}>{d.label} · {money(d.amount)}</p>)}</td></tr>)}</tbody></table></div></details>
-      <details><summary>Checkout discounts</summary>
-      {payments.some(p=>p.accountName==='ECB') && <><h3>ExtraBucks (ECB) used — Whole receipt</h3>{payments.filter(p=>p.accountName==='ECB').map(p=><p key={p.id}>{p.notes || 'ECB used'} · {money(p.amount)}</p>)}</>}
-      {(!/^cvs/i.test(store.trim())||rrUses.length>0)&&<h3>Register Rewards used breakdown</h3>}{rrUses.map((r, i) => <p key={r.eventId}>RR {i+1} · {r.recordedDescription || 'Register Rewards used'} · {money(r.amount)}</p>)}
-      <h3>Shared or receipt-wide discount breakdown</h3>
-      {discounts.filter(d => (d.shared || Object.keys(d.quantities).length !== 1)).map(d => <p key={d.id}>{d.label} · {money(d.amount)} · {Object.keys(d.quantities).length ? lines.filter(l => l.id in d.quantities).map(l => l.description).join(', ') : 'Whole receipt'}</p>)}
-      </details><details><summary>Reward requirements — spend and quantity</summary>{review.preview.totals.qualification?.map(q=>{
-        const reward=rewards.find(r=>r.id===q.earningId);
-        return <div className="information-box" key={q.earningId}><strong>{reward?.offer||reward?.provider||'Reward'} · {q.review.status.replaceAll('_',' ')}</strong><p>{reward?.requirementType?`Required ${reward.requirementType==='SPEND'?'spend':'quantity'}: ${reward.threshold||'not entered'}. `:'No requirement entered. '}Qualifying quantity: {q.review.qualifyingQuantity} · Qualifying spend: {money(q.review.qualifyingSpend)}</p><p>{q.review.reason}</p></div>
-      })}
-      </details>
-      <p>{lines.length} product lines · {discounts.length} deductions · {rewards.length} reward observations · {review.preview.evidence.length} attachments</p>
-      {review.preview.totals.savings.issues.map(issue => <Notice key={issue}>{issue}</Notice>)}
-      {!number && !time && <Notice>Without a printed number or time, duplicate lookup is limited.</Notice>}
-      {review.preview.possibleDuplicates.length > 0 && <Notice>A possible existing receipt was found. Close this draft and review saved receipts before adding another.</Notice>}
-      {different && <Notice>A recorded purchase/payment difference requires review. Printed values will be preserved.<label className="check"><input type="checkbox" checked={ack} disabled={busy || !!pending} onChange={e => setAck(e.target.checked)} />I reviewed the receipt evidence and want to preserve the reported difference.</label></Notice>}
-      {pending && !busy && <Notice>Save outcome may be unresolved. Retry sends the exact same request. Close and refresh to reconcile before making another entry.</Notice>}
-      <FormActions><button className="secondary" disabled={busy || !!pending} onClick={() => setReview(null)}>Back to edit</button><button className="primary" disabled={!enabled || busy || review.preview.possibleDuplicates.length > 0 || (different && !ack)} onClick={() => void save()}>{busy ? 'Saving…' : pending ? 'Retry same save' : 'Save receipt'}</button></FormActions>
-    </> : <form noValidate ref={formRef} onInvalidCapture={event => {
-      event.preventDefault()
-      const field = event.target as HTMLInputElement
-      field.setAttribute('aria-invalid', 'true');field.setAttribute('aria-describedby','receipt-entry-error')
-      const first = Array.from(formRef.current?.elements ?? []).find((node): node is HTMLInputElement => ['INPUT', 'SELECT', 'TEXTAREA'].includes(node.tagName) && !(node as HTMLInputElement).validity.valid)
-      if (first === field) {
-        if(!field.hasAttribute('aria-label'))field.setAttribute('aria-label',field.labels?.[0]?.textContent || 'Required field')
-        setInvalidField(field)
-        field.setAttribute('aria-describedby','receipt-field-error')
-        setError(`${field.getAttribute('aria-label') || field.labels?.[0]?.textContent || 'Required field'}: ${field.validity.patternMismatch && field.inputMode==='decimal' ? 'Enter a nonnegative number, for example 10.50, without a dollar sign or commas.' : field.validationMessage}`)
-        for (let parent = field.parentElement; parent; parent = parent.parentElement) { if (parent.tagName === 'DETAILS') parent.setAttribute('open', '') }
-        field.scrollIntoView?.({ block: 'center', behavior: 'smooth' }); field.focus()
-      }
-    }} onInputCapture={event => { const field = event.target as HTMLInputElement; if (field.validity?.valid) {field.removeAttribute('aria-invalid');if(field===invalidField){setInvalidField(null);setError('')}} }} className="receipt-entry-form" onSubmit={preview}><fieldset disabled={!enabled || busy}>
-      <details open className="receipt-details"><summary>Receipt details</summary><div className="receipt-details-grid"><StoreInput required value={store} onChange={setStore}/><label>Printed receipt number (optional)<input placeholder={isWalgreensStore(store)?'0000-0000-0000-0000-0000':undefined} value={number} onChange={e => setNumber(e.target.value)} onBlur={()=>setNumber(formatReceiptNumber(store,number))} /></label><label>Transaction number (optional)<input value={transactionNumber} onChange={e=>setTransactionNumber(e.target.value)}/></label><label>Register number (optional)<input value={registerNumber} onChange={e=>setRegisterNumber(e.target.value)}/></label><label>Store / Address Reference (Optional)<AutoSizeTextArea value={storeReference} onChange={e=>setStoreReference(e.target.value)}/></label><label>Purchase date<input aria-label="Purchase date" type="date" value={day} onChange={e => setDay(e.target.value)} /></label><label>Purchase time (optional)<input type="time" value={time} onChange={e => setTime(e.target.value)} /></label>
-      <label>Purchase channel<select aria-label="Order type" value={channel} onChange={e=>setChannel(e.target.value)}><option value="IN_STORE">In store</option><option value="ONLINE">Online</option><option value="UNKNOWN">Unknown</option></select></label><label>Printed-total basis<select aria-label="Printed total represents" value={printedTotalBasis} onChange={e=>setPrintedTotalBasis(e.target.value as PrintedTotalBasis)}><option value="UNKNOWN">Unknown</option><option value="BEFORE_PAYMENT_FUNDING">Before funding</option><option value="AFTER_REWARD_REDEMPTIONS">Remaining total after reward redemptions</option></select></label></div><InfoHelp>Enter the printed total exactly. Before funding means before reward and other payment funding; After reward use means the remaining total after reward redemptions. Choose Unknown if unclear.</InfoHelp>
-      </details>{receiptKind==='PURCHASE'&&<><details className="receipt-products" data-receipt-section="products" open><summary><span className="receipt-disclosure-arrow" aria-hidden="true">▾</span>Products</summary><div className="product-disclosure-actions"><button type="button" className="text-button" onClick={()=>formRef.current?.querySelectorAll<HTMLDetailsElement>('details.receipt-product').forEach(d=>{d.open=false})}>Collapse all products</button><button type="button" className="text-button" onClick={()=>formRef.current?.querySelectorAll<HTMLDetailsElement>('details.receipt-product').forEach(d=>{d.open=true})}>Expand all products</button></div>
-      {lines.map((l, i) => <details className="receipt-input-row receipt-product" key={l.id} open><summary><span className="receipt-disclosure-arrow" aria-hidden="true">▾</span><span className="receipt-expanded-label">Product description {i + 1}</span><span className="receipt-collapsed-label">Product {i + 1} · {l.description.trim() || 'New product'} · Quantity {l.quantity || 'not entered'} · Regular price {money(l.regular || null)}</span></summary><div className="receipt-fields-row receipt-product-identity"><label>Product description {i + 1}<AutoSizeTextArea aria-label={`Product description ${i + 1}`} autoFocus={focusId===l.id} required value={l.description} onBlur={() => change(lines, l.id, 'description', titleWords(l.description), setLines)} onChange={e => change(lines, l.id, 'description', e.target.value, setLines)} /></label><label>SKU / UPC {i + 1} (optional)<input value={l.sku} onChange={e => change(lines, l.id, 'sku', e.target.value, setLines)} /></label><label>Quantity {i + 1}<input required inputMode="numeric" pattern="[1-9][0-9]*" value={l.quantity} onChange={e => change(lines, l.id, 'quantity', e.target.value, setLines)} /></label>{amount(`Regular price ${i + 1}`, l.regular, v => change(lines, l.id, 'regular', v, setLines))}{amount(`Store promotion ${i + 1}`,discounts.find(d=>d.kind==='SALE_PROMOTION'&&!d.shared&&Object.keys(d.quantities).length===1&&l.id in d.quantities)?.amount??'',value=>{
- const existing=discounts.find(d=>d.kind==='SALE_PROMOTION'&&!d.shared&&Object.keys(d.quantities).length===1&&l.id in d.quantities);
- setPaymentEntryStatus('UNKNOWN');setDiscounts(rows=>existing?rows.map(d=>d.id===existing.id?{...d,amount:value}:d):[...rows,{id:crypto.randomUUID(),label:productDiscountLabel(l.description,'SALE_PROMOTION'),amount:value,kind:'SALE_PROMOTION',quantities:{[l.id]:l.quantity}}]);
- },false)}</div>{l.sku.trim() && products.some(p=>p.sku.toLowerCase().startsWith(l.sku.trim().toLowerCase())) && <div className="field-full"><strong>Previously purchased products</strong>{products.filter(p=>p.sku.toLowerCase().startsWith(l.sku.trim().toLowerCase())).slice(0,8).map((p,n)=><div className="receipt-input-row" key={`${p.sku}-${p.description}-${n}`}><span>{p.description} · SKU {p.sku} · Last regular price {money(p.regularPrice)}</span><small>Last purchased {p.purchaseDate || 'date not recorded'} · Receipt {p.receiptNumber || 'not recorded'}</small><button type="button" className="secondary" onClick={()=>{setPaymentEntryStatus('UNKNOWN');setLines(lines.map(row=>row.id===l.id?{...row,description:p.description,sku:p.sku,regular:p.regularPrice??'',quantity:'1'}:row))}}>Use this product: {p.description}</button></div>)}<small>Previous prices are a reference. Review price and quantity; enter this purchase’s discounts separately.</small></div>}{(l.observedStorePromotion||l.observedRegularPrice)&&<div className="information-box" role="note">{l.observedRegularPrice&&<p>Regular price read by OCR: {l.observedRegularPrice}</p>}{l.observedStorePromotion&&<p>Printed store promotion: {money(l.observedStorePromotion)}. Entered below as a store promotion. Use the regular unit price above; deduct these savings once.</p>}</div>}      <PackageDetailsFields index={i+1} value={l.packageDetails} onChange={value=>setLines(rows=>rows.map(row=>row.id===l.id?{...row,packageDetails:value}:row))}/>{couponSelector(`Use a clipped coupon for product ${i+1}`,l)}
-      {discounts.filter(d => !d.shared && Object.keys(d.quantities).length === 1 && l.id in d.quantities).map((d, n) => <ItemDiscountFields key={d.id} name={`Product ${i + 1} discount ${n + 1}`} autoFocus={focusId===d.id} productDescription={l.description} discount={d} onChange={value => { setPaymentEntryStatus('UNKNOWN'); setDiscounts(discounts.map(row => row.id === d.id ? { ...row, ...value } : row)) }} onRemove={() => setDiscounts(discounts.filter(row => row.id !== d.id))} />)}
-      <div className="receipt-sale-controls"><SaleButtons baseLabel="Price" line={{id:l.id,name:l.description,sku:l.sku,regular:l.regular,sale:l.sale??'',quantity:l.quantity,priceRule:l.priceRule}} onChange={value=>void selectProductPromotion(l,value.priceRule)}/><InfoHelp>Promotion buttons calculate a reduction from the regular prices and quantities entered. Complete groups only; remaining units keep their unit price. Enter each reduction once. For Other, enter a discount amount.</InfoHelp></div>
-      <ReceiptProductTotals line={l} discounts={discounts.filter(d=>!d.shared&&Object.keys(d.quantities).length===1&&l.id in d.quantities)} api={api}/>
-      <div className="product-entry-actions"><button type="button" className="secondary" onClick={() => setDiscounts([...discounts, { id: focusedId(), label: productDiscountLabel(l.description, 'SALE_PROMOTION'), amount: '', kind: 'SALE_PROMOTION', quantities: { [l.id]: l.quantity } }])}>Add discount to product {i + 1}</button><button className="secondary" type="button" onClick={() => setLines([...lines,{...l,id:focusedId()}])}>Add another line for this product</button><button className="secondary product-remove-action" type="button" disabled={lines.length === 1} onClick={() => removeLine(l.id)}><Trash2 size={14} />Remove product {i + 1}</button></div></details>)}
-      <button className="secondary" type="button" onClick={() => setLines([...lines, focusedLine()])}><Plus size={15} />Add product</button>
-      </details><details open><summary>Shared or receipt-wide discounts</summary>{couponSelector('Use a clipped coupon across products or the whole receipt')}<div className="information-box" role="note">Applies to the selected products, or all products when Whole Receipt is selected. Recalculate after changing prices, quantities or selection. Do not also enter the same sale on a product.</div>
-      {discounts.filter(d => (d.shared || Object.keys(d.quantities).length !== 1)).map((d, i) => <details open className="receipt-input-row" key={d.id}><summary>Discount {i + 1} · {d.label||'New discount'}</summary><label>Discount label {i + 1}<input required={!!d.amount.trim()&&!/^(?:0+(?:[.]0*)?|[.]0+)$/.test(d.amount.trim())} autoFocus={focusId===d.id} value={d.label} onChange={e => change(discounts, d.id, 'label', e.target.value, setDiscounts)} /></label><div className="form-grid"><label>Discount type<select aria-label={`Discount type ${i + 1}`} value={d.kind} onChange={e => change(discounts, d.id, 'kind', e.target.value, setDiscounts)}><option value="MANUFACTURER">Manufacturer coupon</option><option value="STORE_COUPON">Store / IVC / online coupon</option><option value="SALE_PROMOTION">Sale/promotion reduction from prices above</option></select></label>{amount(`Discount amount ${i + 1}`, d.amount, v => change(discounts, d.id, 'amount', v, setDiscounts), false)}<ReceiptDiscountSale api={api} items={lines.filter(l=>!Object.keys(d.quantities).length||d.quantities[l.id]).map(l=>({id:l.id,name:l.description,sku:l.sku,regular:'',sale:l.sale?.trim()||l.regular,quantity:d.quantities[l.id]||l.quantity}))} onCalculated={(amount,name)=>setDiscounts(current=>current.map(row=>row.id===d.id?{...row,amount,kind:'SALE_PROMOTION',label:row.label||name}:row))}/>
-<ReceiptLineSelector lines={lines.map(l => ({ ...l, price: l.regular }))} value={d.quantities} onChange={v => change(discounts,d.id,'quantities',v,setDiscounts)} name={`Discount products ${i+1}`} /></div><button className="text-button" type="button" onClick={() => setDiscounts(discounts.filter(row => row.id !== d.id))}>Delete</button></details>)}
-      <button className="secondary" type="button" onClick={() => setDiscounts([...discounts, { id: focusedId(), shared: true, label: '', amount: '', kind: 'MANUFACTURER', quantities: {} }])}><Plus size={15} />Add shared or receipt-wide discount</button>
-      </details><details data-receipt-section="payment" open><summary>Tax, rewards used, and payment</summary><div className="receipt-fields-row">{amount('Sales tax', tax, setTax)}{amount('Reported total due at register', reported, setReported)}</div>
-      {isWalgreensStore(store)&&<details data-receipt-section="used" open><summary>Register Rewards used · {rrUses.length} coupon{rrUses.length===1?'':'s'}<InfoHelp>Enter each coupon separately, even when two have the same value. For $5, $5 and $4, add three rows. Each use can be matched to its original reward after saving. Do not repeat these amounts as discounts or payments.</InfoHelp></summary>
-      {rrUses.map((r, i) => <section className="receipt-input-row" key={r.eventId}><div className="receipt-fields-row receipt-rr-use-row">{amount(`RR used amount ${i+1}`, r.amount, value => { setPaymentEntryStatus('UNKNOWN'); setRRUses(rrUses.map(row => row.eventId === r.eventId ? { ...row, amount: value } : row)) })}<label>RR used description {i+1} (optional)<input value={r.recordedDescription} onChange={e => setRRUses(rrUses.map(row => row.eventId === r.eventId ? { ...row, recordedDescription: e.target.value } : row))} /></label><button type="button" className="text-button" onClick={() => { setPaymentEntryStatus('UNKNOWN'); setRRUses(rrUses.filter(row => row.eventId !== r.eventId)) }}>Remove RR use {i+1}</button></div></section>)}
-      <button type="button" className="secondary" disabled={rrUses.length >= 100} onClick={() => { setPaymentEntryStatus('UNKNOWN'); setRRUses([...rrUses, { eventId: crypto.randomUUID(), amount: '', recordedDescription: '' }]) }}>Add RR used</button></details>}
-
-
-      {(/^cvs(?:\s|#|$)/i.test(store.trim()) || payments.some(p=>p.accountName==='ECB')) && <ECBUseFields rows={payments.filter(p=>p.accountName==='ECB')} onChange={rows=>{setPaymentEntryStatus('UNKNOWN');setPayments([...payments.filter(p=>p.accountName!=='ECB'),...rows.map(r=>({...r,type:'OTHER',role:'CHECKOUT_DEDUCTION',accountName:'ECB'}))])}} />}
-      {payments.filter(p=>p.accountName!=='ECB').map((p, i) => <details open className="receipt-input-row payment-entry" key={p.id}><summary>Payment {i + 1} · {p.type.replaceAll('_',' ')} · {money(p.amount||null)}</summary><div className={`form-grid payment-fields ${p.type==='GIFT_CARD'||p.type==='OTHER'&&p.accountName!=='Target Circle'?'payment-with-account':''}`}><label>Payment type<select aria-label={`Payment type ${i + 1}`} value={p.type==='GIFT_CARD'&&p.accountName==='Target Gift Card'?'TARGET_GIFT_CARD':p.type==='OTHER'&&p.accountName==='Target Circle'?'TARGET_CIRCLE':p.type} onChange={e=>{const value=e.target.value;setPaymentEntryStatus('UNKNOWN');setPayments(rows=>rows.map(row=>row.id===p.id?{...row,type:value==='TARGET_GIFT_CARD'?'GIFT_CARD':value==='TARGET_CIRCLE'?'OTHER':value,accountName:value==='TARGET_GIFT_CARD'?'Target Gift Card':value==='TARGET_CIRCLE'?'Target Circle':'',role:value==='TARGET_CIRCLE'?'FUNDING':value==='OTHER'?'UNRESOLVED':'FUNDING'}:row))}}><option value="CASH">Cash</option><option value="CARD">Card</option><option value="GIFT_CARD">Gift card payment</option><option value="TARGET_GIFT_CARD">Target gift card</option>{(/^target(?:\s|#|$)/i.test(store.trim())||p.accountName==='Target Circle')&&<option value="TARGET_CIRCLE">Target Circle</option>}<option value="OTHER">Other tender</option>{((!/^cvs/i.test(store.trim())&&!/^target(?:\s|#|$)/i.test(store.trim()))||p.type==='WALGREENS_CASH')&&<option value="WALGREENS_CASH">Walgreens Cash used</option>}</select></label>{p.type==='GIFT_CARD'&&<GiftCardSelect api={api} cards={workspace?.rewardInstruments} value={p.giftCardId??''} label={`Gift card used ${i+1}`} onChange={(giftCardId,card)=>setPayments(rows=>rows.map(row=>row.id===p.id?{...row,giftCardId,accountName:card?.provider==='Target Gift Card'?'Target Gift Card':'Gift Cards'}:row))}/>}{p.type==='GIFT_CARD'&&<label>Gift card account {i+1} (optional)<input placeholder="Target Gift Card" value={p.accountName??''} onChange={e=>change(payments,p.id,'accountName',e.target.value,setPayments)}/></label>}{p.type === 'OTHER' && p.accountName!=='Target Circle' && <label>Other payment role<select value={p.role || 'UNRESOLVED'} onChange={e => change(payments, p.id, 'role', e.target.value, setPayments)}><option value="UNRESOLVED">Unknown / needs review</option><option value="FUNDING">Funds the printed total</option><option value="CHECKOUT_DEDUCTION">Deducted before the printed total</option></select></label>}{amount(`Payment amount ${i + 1}`, p.amount, v => change(payments, p.id, 'amount', v, setPayments))}<button className="text-button" type="button" onClick={() => { setPaymentEntryStatus('UNKNOWN'); setPayments(payments.filter(row => row.id !== p.id)) }}>Remove payment {i + 1}</button><label className="field-full">Payment notes {i + 1} (optional)<input value={p.notes} onChange={e => change(payments, p.id, 'notes', e.target.value, setPayments)} /></label></div></details>)}
-      <button className="secondary" type="button" onClick={() => { setPaymentEntryStatus('UNKNOWN'); setPayments([...payments, { id: crypto.randomUUID(), type: 'CASH', amount: '', notes: '' }]) }}><Plus size={15} />Add payment</button>
-      </details></>}{isWalgreensStore(store) && <PrintedFooterFields value={footer} onChange={updatePrintedFooter} />}<details data-receipt-section="earnings" open><summary>Rewards earned or expected<InfoHelp><p>25 received Fetch points are included automatically when saved. Printed Walgreens Cash Earned This Visit is also recorded automatically. Enter your own reward for either program to replace its automatic entry and status.</p><p>For a P&amp;G rebate, choose P&amp;G Brand under Reward Program, enter the offer description and points, and add any optional product or promotion details.</p></InfoHelp></summary>
-      {isWalgreensStore(store)&&rewards.some(r=>r.id===printedCashRewardId)&&<details className="receipt-input-row"><summary>Split out a booster or promotion</summary><p>Keep the total earned above. Enter the part earned from a booster or promotion; the remaining earnings are calculated automatically.</p><div className="receipt-fields-row"><label>Walgreens Cash breakdown description<input value={cashSplitName} onChange={e=>setCashSplitName(e.target.value)} placeholder="Spend 35 Get 7 booster" /></label><label>Walgreens Cash breakdown amount<input inputMode="decimal" value={cashSplitAmount} onChange={e=>setCashSplitAmount(e.target.value)} /></label><button type="button" className="secondary" onClick={splitCashReward}>Split earnings</button></div>{cashSplitError&&<p role="alert">{cashSplitError}</p>}</details>}
-      {rewards.map((r,i) => <details open className="receipt-input-row receipt-reward" key={r.id}><summary>Reward {i+1} · {r.provider||'Choose reward program'} · {r.amount||'Amount not entered'}</summary><RewardFields onMemberEstimate={()=>estimateReceiptMemberReward(api,store,body() as unknown as import('./rewardStatus').MemberEstimateInput)} retailer={store} onFileBusy={setBusy} offers={offers} value={r} onChange={next => {const changed=r.id===printedCashRewardId&&next.kind!=='WALGREENS_CASH'?{...next,id:crypto.randomUUID(),generatedFromPrintedFooter:false}:next;setRewards(rewards.map(old => old.id===r.id?changed:old));if(r.kind==='WALGREENS_CASH'||next.kind==='WALGREENS_CASH')setFooter(current=>({...current,wcEarned:rewards.map(old=>old.id===r.id?changed:old).some(row=>row.kind==='WALGREENS_CASH'&&row.status==='CREDITED')?(receivedCash(rewards.map(old=>old.id===r.id?changed:old))/100).toFixed(2):''}))}} lines={lines.map(l=>({...l,price:l.regular}))} index={i+1} /><button className="text-button" type="button" onClick={()=>{setRewards(rewards.filter(row=>row.id!==r.id));if(r.kind==='WALGREENS_CASH')setFooter(current=>({...current,wcEarned:rewards.some(row=>row.id!==r.id&&row.kind==='WALGREENS_CASH'&&row.status==='CREDITED')?(receivedCash(rewards.filter(row=>row.id!==r.id))/100).toFixed(2):''}))}}>Remove reward {i+1}</button></details>)}
-      <button className="secondary" type="button" onClick={()=>setRewards([...rewards,/^cvs/i.test(store.trim())?{...newReward(),provider:'ECB',form:'STORE_REWARD',requirementType:'PURCHASE'}:newReward()])}><Plus size={15} />Add rebate or reward</button>
-      </details><details open><summary>Original evidence (optional)</summary><p className="muted">Attach up to four JPEG, PNG, WebP or PDF files (5 MiB each, 10 MiB total). Use Import Receipt above to extract an editable draft; attaching files here keeps evidence only.</p><FileDropZone label="Receipt evidence drop area" multiple disabled={!enabled||busy||!!pending} onFiles={selected=>void files(selected)}><label>Receipt files<input type="file" multiple accept="image/jpeg,image/png,image/webp,application/pdf" onChange={e => { void files(e.target.files); e.target.value = '' }} /></label></FileDropZone>{evidence.map(file => <div className="detail-row" key={file.evidenceId}>{file.name}<button type="button" className="text-button" onClick={() => setEvidence(evidence.filter(row => row.evidenceId !== file.evidenceId))}>Remove attachment</button></div>)}
-      </details><FormActions topChildren={<><button type="button" className="secondary" disabled={!enabled||busy||!!pending||!!draftPending} onClick={()=>void deleteEntry()}>Delete</button><button type="button" className="secondary" disabled={busy} onClick={close}>Cancel</button></>}><button className="secondary" type="button" disabled={!enabled||busy||!!pending} onClick={()=>void saveDraft()}>{draftPending?'Retry Save Draft':'Save Draft'}</button><button className="primary" type="submit" disabled={busy||!!draftPending}>{busy ? 'Calculating…' : 'Review calculated totals'}</button><button type="button" className="secondary" disabled={!enabled||busy||!!pending||!!draftPending} onClick={()=>void deleteEntry()}>Delete</button><button type="button" className="secondary" disabled={busy} onClick={close}>Cancel</button></FormActions>
-    </fieldset></form>}
-  </Modal>
+                  {(/^cvs(?:\s|#|$)/i.test(store.trim()) ||
+                    payments.some((p) => p.accountName === "ECB")) && (
+                    <ECBUseFields
+                      rows={payments.filter((p) => p.accountName === "ECB")}
+                      onChange={(rows) => {
+                        setPaymentEntryStatus("UNKNOWN");
+                        setPayments([
+                          ...payments.filter((p) => p.accountName !== "ECB"),
+                          ...rows.map((r) => ({
+                            ...r,
+                            type: "OTHER",
+                            role: "CHECKOUT_DEDUCTION",
+                            accountName: "ECB",
+                          })),
+                        ]);
+                      }}
+                    />
+                  )}
+                  {payments
+                    .filter((p) => p.accountName !== "ECB")
+                    .map((p, i) => (
+                      <details
+                        open
+                        className="receipt-input-row payment-entry"
+                        key={p.id}
+                      >
+                        <DisclosureSummary>
+                          Payment {i + 1} · {p.accountName === "Walmart Cash" ? "WALMART CASH" : p.type.replaceAll("_", " ")} ·{" "}
+                          {money(p.amount || null)}
+                        </DisclosureSummary>
+                        <div
+                          className={`form-grid payment-fields ${p.type === "GIFT_CARD" || (p.type === "OTHER" && p.accountName !== "Target Circle") ? "payment-with-account" : ""}`}
+                        >
+                          <label>
+                            Payment type
+                            <select
+                              aria-label={`Payment type ${i + 1}`}
+                              value={
+                                p.type === "GIFT_CARD" &&
+                                p.accountName === "Target Gift Card"
+                                  ? "TARGET_GIFT_CARD"
+                                  : p.type === "OTHER" &&
+                                      p.accountName === "Walmart Cash"
+                                    ? "WALMART_CASH"
+                                  : p.type === "OTHER" &&
+                                      p.accountName === "Target Circle"
+                                    ? "TARGET_CIRCLE"
+                                    : p.type
+                              }
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                setPaymentEntryStatus("UNKNOWN");
+                                setPayments((rows) =>
+                                  rows.map((row) =>
+                                    row.id === p.id
+                                      ? {
+                                          ...row,
+                                          type:
+                                            value === "TARGET_GIFT_CARD"
+                                              ? "GIFT_CARD"
+                                              : value === "WALMART_CASH"
+                                                ? "OTHER"
+                                              : value === "TARGET_CIRCLE"
+                                                ? "OTHER"
+                                                : value,
+                                          accountName:
+                                            value === "TARGET_GIFT_CARD"
+                                              ? "Target Gift Card"
+                                              : value === "WALMART_CASH"
+                                                ? "Walmart Cash"
+                                              : value === "TARGET_CIRCLE"
+                                                ? "Target Circle"
+                                                : "",
+                                          role:
+                                            value === "TARGET_CIRCLE" ||
+                                            value === "WALMART_CASH"
+                                              ? "FUNDING"
+                                              : value === "OTHER"
+                                                ? "UNRESOLVED"
+                                                : "FUNDING",
+                                        }
+                                      : row,
+                                  ),
+                                );
+                              }}
+                            >
+                              <option value="CASH">Cash</option>
+                              <option value="CARD">Card</option>
+                              <option value="GIFT_CARD">
+                                Gift card payment
+                              </option>
+                              <option value="TARGET_GIFT_CARD">
+                                Target gift card
+                              </option>
+                              {(/^target(?:\s|#|$)/i.test(store.trim()) ||
+                                p.accountName === "Target Circle") && (
+                                <option value="TARGET_CIRCLE">
+                                  Target Circle
+                                </option>
+                              )}
+                              {(/^walmart(?:\s|#|$)/i.test(store.trim()) ||
+                                p.accountName === "Walmart Cash") && (
+                                <option value="WALMART_CASH">
+                                  Walmart Cash used
+                                </option>
+                              )}
+                              <option value="OTHER">Other tender</option>
+                              {((!/^cvs/i.test(store.trim()) &&
+                                !/^target(?:\s|#|$)/i.test(store.trim())) ||
+                                p.type === "WALGREENS_CASH") && (
+                                <option value="WALGREENS_CASH">
+                                  Walgreens Cash used
+                                </option>
+                              )}
+                            </select>
+                          </label>
+                          {p.type === "GIFT_CARD" && (
+                            <GiftCardSelect
+                              api={api}
+                              cards={workspace?.rewardInstruments}
+                              value={p.giftCardId ?? ""}
+                              label={`Gift card used ${i + 1}`}
+                              onChange={(giftCardId, card) =>
+                                setPayments((rows) =>
+                                  rows.map((row) =>
+                                    row.id === p.id
+                                      ? {
+                                          ...row,
+                                          giftCardId,
+                                          accountName:
+                                            card?.provider ===
+                                            "Target Gift Card"
+                                              ? "Target Gift Card"
+                                              : "Gift Cards",
+                                        }
+                                      : row,
+                                  ),
+                                )
+                              }
+                            />
+                          )}
+                          {p.type === "GIFT_CARD" && (
+                            <label>
+                              Gift card account {i + 1} (optional)
+                              <input
+                                placeholder="Target Gift Card"
+                                value={p.accountName ?? ""}
+                                onChange={(e) =>
+                                  change(
+                                    payments,
+                                    p.id,
+                                    "accountName",
+                                    e.target.value,
+                                    setPayments,
+                                  )
+                                }
+                              />
+                            </label>
+                          )}
+                          {p.type === "OTHER" &&
+                            p.accountName !== "Target Circle" &&
+                            p.accountName !== "Walmart Cash" && (
+                              <label>
+                                Other payment role
+                                <select
+                                  value={p.role || "UNRESOLVED"}
+                                  onChange={(e) =>
+                                    change(
+                                      payments,
+                                      p.id,
+                                      "role",
+                                      e.target.value,
+                                      setPayments,
+                                    )
+                                  }
+                                >
+                                  <option value="UNRESOLVED">
+                                    Unknown / needs review
+                                  </option>
+                                  <option value="FUNDING">
+                                    Funds the printed total
+                                  </option>
+                                  <option value="CHECKOUT_DEDUCTION">
+                                    Deducted before the printed total
+                                  </option>
+                                </select>
+                              </label>
+                            )}
+                          {amount(`Payment amount ${i + 1}`, p.amount, (v) =>
+                            change(payments, p.id, "amount", v, setPayments),
+                          )}
+                          <button
+                            className="text-button"
+                            type="button"
+                            onClick={() => {
+                              setPaymentEntryStatus("UNKNOWN");
+                              setPayments(
+                                payments.filter((row) => row.id !== p.id),
+                              );
+                            }}
+                          >
+                            Remove payment {i + 1}
+                          </button>
+                          <label className="field-full">
+                            Payment notes {i + 1} (optional)
+                            <input
+                              value={p.notes}
+                              onChange={(e) =>
+                                change(
+                                  payments,
+                                  p.id,
+                                  "notes",
+                                  e.target.value,
+                                  setPayments,
+                                )
+                              }
+                            />
+                          </label>
+                        </div>
+                      </details>
+                    ))}
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={() => {
+                      setPaymentEntryStatus("UNKNOWN");
+                      setPayments([
+                        ...payments,
+                        {
+                          id: crypto.randomUUID(),
+                          type: "CASH",
+                          amount: "",
+                          notes: "",
+                        },
+                      ]);
+                    }}
+                  >
+                    <Plus size={15} />
+                    Add payment
+                  </button>
+                  <label>
+                    Payment entry completeness
+                    <select
+                      aria-label="Payment entry completeness"
+                      value={paymentEntryStatus}
+                      onChange={(e) =>
+                        setPaymentEntryStatus(
+                          e.target.value as PaymentEntryStatus,
+                        )
+                      }
+                    >
+                      <option value="UNKNOWN">Not confirmed complete</option>
+                      <option value="PARTIAL">Partial — more payment information is missing</option>
+                      <option value="COMPLETE">Complete — all receipt payments are entered</option>
+                    </select>
+                  </label>
+                </details>
+              </>
+            )}
+            {isWalgreensStore(store) && (
+              <PrintedFooterFields
+                value={footer}
+                onChange={updatePrintedFooter}
+              />
+            )}
+            <details data-receipt-section="earnings" open>
+              <DisclosureSummary>
+                Rewards earned or expected
+                <InfoHelp>
+                  <p>
+                    25 received Fetch points are included automatically when
+                    saved. Printed Walgreens Cash Earned This Visit is also
+                    recorded automatically. Enter your own reward for either
+                    program to replace its automatic entry and status.
+                  </p>
+                  <p>
+                    For a P&amp;G rebate, choose P&amp;G Brand under Reward
+                    Program, enter the offer description and points, and add any
+                    optional product or promotion details.
+                  </p>
+                </InfoHelp>
+              </DisclosureSummary>
+              {isWalgreensStore(store) &&
+                rewards.some((r) => r.id === printedCashRewardId) && (
+                  <details className="receipt-input-row">
+                    <DisclosureSummary>
+                      Split out a booster or promotion
+                    </DisclosureSummary>
+                    <p>
+                      Keep the total earned above. Enter the part earned from a
+                      booster or promotion; the remaining earnings are
+                      calculated automatically.
+                    </p>
+                    <div className="receipt-fields-row">
+                      <label>
+                        Walgreens Cash breakdown description
+                        <input
+                          value={cashSplitName}
+                          onChange={(e) => setCashSplitName(e.target.value)}
+                          placeholder="Spend 35 Get 7 booster"
+                        />
+                      </label>
+                      <label>
+                        Walgreens Cash breakdown amount
+                        <input
+                          inputMode="decimal"
+                          value={cashSplitAmount}
+                          onChange={(e) => setCashSplitAmount(e.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={splitCashReward}
+                      >
+                        Split earnings
+                      </button>
+                    </div>
+                    {cashSplitError && <p role="alert">{cashSplitError}</p>}
+                  </details>
+                )}
+              {rewards.map((r, i) => (
+                <details
+                  open
+                  className="receipt-input-row receipt-reward"
+                  key={r.id}
+                >
+                  <DisclosureSummary>
+                    Reward {i + 1} · {r.provider || "Choose reward program"} ·{" "}
+                    {r.amount || "Amount not entered"}
+                  </DisclosureSummary>
+                  <RewardFields
+                    onMemberEstimate={() =>
+                      estimateReceiptMemberReward(
+                        api,
+                        store,
+                        body() as unknown as import("./rewardStatus").MemberEstimateInput,
+                      )
+                    }
+                    retailer={store}
+                    onFileBusy={setBusy}
+                    offers={offers}
+                    value={r}
+                    onChange={(next) => {
+                      const changed =
+                        r.id === printedCashRewardId &&
+                        next.kind !== "WALGREENS_CASH"
+                          ? {
+                              ...next,
+                              id: crypto.randomUUID(),
+                              generatedFromPrintedFooter: false,
+                            }
+                          : next;
+                      setRewards(
+                        rewards.map((old) => (old.id === r.id ? changed : old)),
+                      );
+                      if (
+                        r.kind === "WALGREENS_CASH" ||
+                        next.kind === "WALGREENS_CASH"
+                      )
+                        setFooter((current) => ({
+                          ...current,
+                          wcEarned: rewards
+                            .map((old) => (old.id === r.id ? changed : old))
+                            .some(
+                              (row) =>
+                                row.kind === "WALGREENS_CASH" &&
+                                row.status === "CREDITED",
+                            )
+                            ? (
+                                receivedCash(
+                                  rewards.map((old) =>
+                                    old.id === r.id ? changed : old,
+                                  ),
+                                ) / 100
+                              ).toFixed(2)
+                            : "",
+                        }));
+                    }}
+                    lines={lines.map((l) => ({ ...l, price: l.regular }))}
+                    index={i + 1}
+                  />
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={() => {
+                      setRewards(rewards.filter((row) => row.id !== r.id));
+                      if (r.kind === "WALGREENS_CASH")
+                        setFooter((current) => ({
+                          ...current,
+                          wcEarned: rewards.some(
+                            (row) =>
+                              row.id !== r.id &&
+                              row.kind === "WALGREENS_CASH" &&
+                              row.status === "CREDITED",
+                          )
+                            ? (
+                                receivedCash(
+                                  rewards.filter((row) => row.id !== r.id),
+                                ) / 100
+                              ).toFixed(2)
+                            : "",
+                        }));
+                    }}
+                  >
+                    Remove reward {i + 1}
+                  </button>
+                </details>
+              ))}
+              <button
+                className="secondary"
+                type="button"
+                onClick={() =>
+                  setRewards([
+                    ...rewards,
+                    /^cvs/i.test(store.trim())
+                      ? {
+                          ...newReward(),
+                          provider: "ECB",
+                          form: "STORE_REWARD",
+                          requirementType: "PURCHASE",
+                        }
+                      : newReward(),
+                  ])
+                }
+              >
+                <Plus size={15} />
+                Add rebate or reward
+              </button>
+            </details>
+            <details open>
+              <DisclosureSummary>
+                Original evidence (optional)
+              </DisclosureSummary>
+              <p className="muted">
+                Attach up to four JPEG, PNG, WebP or PDF files (5 MiB each, 10
+                MiB total). Use Import Receipt above to extract an editable
+                draft; attaching files here keeps evidence only.
+              </p>
+              <FileDropZone
+                label="Receipt evidence drop area"
+                multiple
+                disabled={!enabled || busy || !!pending}
+                onFiles={(selected) => void files(selected)}
+              >
+                <label>
+                  Receipt files
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/jpeg,image/png,image/webp,application/pdf"
+                    onChange={(e) => {
+                      void files(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </FileDropZone>
+              {evidence.map((file) => (
+                <div className="detail-row" key={file.evidenceId}>
+                  {file.name}
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() =>
+                      setEvidence(
+                        evidence.filter(
+                          (row) => row.evidenceId !== file.evidenceId,
+                        ),
+                      )
+                    }
+                  >
+                    Remove attachment
+                  </button>
+                </div>
+              ))}
+            </details>
+            <FormActions
+              topChildren={
+                <>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!enabled || busy || !!pending || !!draftPending}
+                    onClick={() => void deleteEntry()}
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy}
+                    onClick={close}
+                  >
+                    Cancel
+                  </button>
+                </>
+              }
+            >
+              <button
+                className="secondary"
+                type="button"
+                disabled={!enabled || busy || !!pending}
+                onClick={() => void saveDraft()}
+              >
+                {draftPending ? "Retry Save Draft" : "Save Draft"}
+              </button>
+              <button
+                className="primary"
+                type="submit"
+                disabled={busy || !!draftPending}
+              >
+                {busy ? "Calculating…" : "Review calculated totals"}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!enabled || busy || !!pending || !!draftPending}
+                onClick={() => void deleteEntry()}
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
+                onClick={close}
+              >
+                Cancel
+              </button>
+            </FormActions>
+          </fieldset>
+        </form>
+      )}
+    </Modal>
+  );
 }
 
-export interface ItemDiscountDraft { requiredQuantity?: string | null; id: string; label: string; amount: string; kind: string }
-export function ItemDiscountFields({ discount, name, productDescription='', autoFocus=false, onChange, onRemove }: { autoFocus?: boolean; productDescription?: string; discount: ItemDiscountDraft; name: string; onChange: (value: ItemDiscountDraft) => void; onRemove: () => void }) {
-  const active=!!discount.amount.trim()&&!/^(?:0+(?:[.]0*)?|[.]0+)$/.test(discount.amount.trim())
-  return <details open className="item-discount-fields"><summary>{name}</summary><div className="form-grid">
-    <label className="field-full">{name} description<AutoSizeTextArea aria-label={`${name} description`} autoFocus={autoFocus} required={active} value={discount.label} onBlur={() => { const word=productDescription.trim().split(/\s+/)[0]; const text=discount.label.trim(); onChange({...discount,label:titleWords(word && text && text.split(/\s+/)[0].toLowerCase()!==word.toLowerCase()?`${word} ${text}`:text)}) }} onChange={e => onChange({ ...discount, label: e.target.value })} /></label>
-    <label>{name} type<select value={discount.kind} onChange={e => onChange({ ...discount, kind: e.target.value, label: !discount.label.trim() || discount.label === productDiscountLabel(productDescription,discount.kind) ? productDiscountLabel(productDescription,e.target.value) : discount.label })}>{[['SALE_PROMOTION','Store promotion'],['MANUFACTURER','Manufacturer'],['STORE_COUPON','Store coupon'],...(discount.kind === 'STORE' ? [['STORE','Store discount']] : []),...(discount.kind === 'OTHER' ? [['OTHER','Other / unclassified']] : [])].map(([v,text]) => <option key={v} value={v}>{text}</option>)}</select></label>
-    <label>Discount quantity (optional)<input aria-label={`${name} required purchase quantity (optional)`} inputMode="numeric" pattern={active?'[1-9][0-9]*':undefined} placeholder="For example, 2 for buy 2" value={discount.requiredQuantity??''} onChange={e=>onChange({...discount,requiredQuantity:e.target.value})}/></label>
-    <label>Discount amount<input aria-label={`${name} amount`} inputMode="decimal" pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)" value={discount.amount} onChange={e => onChange({ ...discount, amount: e.target.value })} /></label>
-  </div><InfoHelp>Optional: leave the amount blank or 0 when unused. Otherwise enter the total deduction for the selected quantity, not the final price. Discount quantity means the number of qualifying products, not the number of coupons.</InfoHelp><button type="button" className="text-button" onClick={onRemove}>Remove {name.toLowerCase()}</button></details>
+export interface ItemDiscountDraft {
+  requiredQuantity?: string | null;
+  id: string;
+  label: string;
+  amount: string;
+  kind: string;
+}
+export function ItemDiscountFields({
+  discount,
+  name,
+  productDescription = "",
+  autoFocus = false,
+  onChange,
+  onRemove,
+}: {
+  autoFocus?: boolean;
+  productDescription?: string;
+  discount: ItemDiscountDraft;
+  name: string;
+  onChange: (value: ItemDiscountDraft) => void;
+  onRemove: () => void;
+}) {
+  const active =
+    !!discount.amount.trim() &&
+    !/^(?:0+(?:[.]0*)?|[.]0+)$/.test(discount.amount.trim());
+  return (
+    <details open className="item-discount-fields">
+      <DisclosureSummary>{name}</DisclosureSummary>
+      <div className="form-grid">
+        <label className="field-full">
+          {name} description
+          <AutoSizeTextArea
+            aria-label={`${name} description`}
+            autoFocus={autoFocus}
+            required={active}
+            value={discount.label}
+            onBlur={() => {
+              const word = productDescription.trim().split(/\s+/)[0];
+              const text = discount.label.trim();
+              onChange({
+                ...discount,
+                label: titleWords(
+                  word &&
+                    text &&
+                    text.split(/\s+/)[0].toLowerCase() !== word.toLowerCase()
+                    ? `${word} ${text}`
+                    : text,
+                ),
+              });
+            }}
+            onChange={(e) => onChange({ ...discount, label: e.target.value })}
+          />
+        </label>
+        <label>
+          {name} type
+          <select
+            required={active}
+            value={discount.kind === "UNKNOWN" ? "" : discount.kind}
+            onChange={(e) =>
+              onChange({
+                ...discount,
+                kind: e.target.value,
+                label:
+                  !discount.label.trim() ||
+                  discount.label ===
+                    productDiscountLabel(productDescription, discount.kind)
+                    ? productDiscountLabel(productDescription, e.target.value)
+                    : discount.label,
+              })
+            }
+          >
+            {discount.kind === "UNKNOWN" && (
+              <option value="" disabled>
+                Choose printed coupon type
+              </option>
+            )}
+            {[
+              ["SALE_PROMOTION", "Store promotion"],
+              ["MANUFACTURER", "Manufacturer"],
+              ["STORE_COUPON", "Store coupon"],
+              ...(discount.kind === "STORE"
+                ? [["STORE", "Store discount"]]
+                : []),
+              ...(discount.kind === "OTHER"
+                ? [["OTHER", "Other / unclassified"]]
+                : []),
+            ].map(([v, text]) => (
+              <option key={v} value={v}>
+                {text}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Discount quantity (optional)
+          <input
+            aria-label={`${name} required purchase quantity (optional)`}
+            inputMode="numeric"
+            pattern={active ? "[1-9][0-9]*" : undefined}
+            placeholder="For example, 2 for buy 2"
+            value={discount.requiredQuantity ?? ""}
+            onChange={(e) =>
+              onChange({ ...discount, requiredQuantity: e.target.value })
+            }
+          />
+        </label>
+        <label>
+          Discount amount
+          <input
+            aria-label={`${name} amount`}
+            inputMode="decimal"
+            pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)"
+            value={discount.amount}
+            onChange={(e) => onChange({ ...discount, amount: e.target.value })}
+          />
+        </label>
+      </div>
+      <InfoHelp>
+        Optional: leave the amount blank or 0 when unused. Otherwise enter the
+        total deduction for the selected quantity, not the final price. Discount
+        quantity means the number of qualifying products, not the number of
+        coupons.
+      </InfoHelp>
+      <button type="button" className="text-button" onClick={onRemove}>
+        Remove {name.toLowerCase()}
+      </button>
+    </details>
+  );
 }
 
-export function PrintedFooterFields({ value, onChange }: { value:FooterDraft;onChange:(value:FooterDraft)=>void }) {
- const field=(key:keyof typeof footerLabels)=><label key={key}>{footerLabels[key]}<input inputMode="decimal" pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)" value={value[key]} onChange={e=>onChange({...value,[key]:e.target.value})}/></label>
- return <details className="printed-footer" data-receipt-section="printed" open><summary>Printed Savings &amp; Walgreens Cash<InfoHelp>Leave absent information blank; enter 0 only when printed. Earned This Visit automatically records received Walgreens Cash when saved, unless you enter Walgreens Cash rewards separately below. Other printed savings and balances remain observations; they do not create payments or account openings.</InfoHelp></summary><div className="receipt-fields-row receipt-fields-three"><label>Is this information printed on the receipt?<select value={value.status} onChange={e=>onChange({...value,status:e.target.value})}><option value="UNKNOWN">Not sure</option><option value="PRINTED">Yes</option><option value="NOT_PRINTED">Not printed</option></select></label>{field('myWalgreensSavings')}{field('storeCouponSavings')}</div><div className="receipt-fields-row receipt-fields-three">{field('manufacturerCouponSavings')}{field('totalSavings')}{field('savingsValuePercent')}</div><h4>Walgreens Cash</h4><div className="receipt-fields-row receipt-cash-balances">{field('wcOpening')}{field('wcEarned')}{field('wcUsed')}{field('wcClosing')}{field('wcAvailable')}</div></details>
+export function PrintedFooterFields({
+  value,
+  onChange,
+}: {
+  value: FooterDraft;
+  onChange: (value: FooterDraft) => void;
+}) {
+  const field = (key: keyof typeof footerLabels) => (
+    <label key={key}>
+      {footerLabels[key]}
+      <input
+        inputMode="decimal"
+        pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)"
+        value={value[key]}
+        onChange={(e) => onChange({ ...value, [key]: e.target.value })}
+      />
+    </label>
+  );
+  return (
+    <details className="printed-footer" data-receipt-section="printed" open>
+      <DisclosureSummary>
+        Printed Savings &amp; Walgreens Cash
+        <InfoHelp>
+          Leave absent information blank; enter 0 only when printed. Earned This
+          Visit automatically records received Walgreens Cash when saved, unless
+          you enter Walgreens Cash rewards separately below. Other printed
+          savings and balances remain observations; they do not create payments
+          or account openings.
+        </InfoHelp>
+      </DisclosureSummary>
+      <div className="receipt-fields-row receipt-fields-three">
+        <label>
+          Is this information printed on the receipt?
+          <select
+            value={value.status}
+            onChange={(e) => onChange({ ...value, status: e.target.value })}
+          >
+            <option value="UNKNOWN">Not sure</option>
+            <option value="PRINTED">Yes</option>
+            <option value="NOT_PRINTED">Not printed</option>
+          </select>
+        </label>
+        {field("myWalgreensSavings")}
+        {field("storeCouponSavings")}
+      </div>
+      <div className="receipt-fields-row receipt-fields-three">
+        {field("manufacturerCouponSavings")}
+        {field("totalSavings")}
+        {field("savingsValuePercent")}
+      </div>
+      <h4>Walgreens Cash</h4>
+      <div className="receipt-fields-row receipt-cash-balances">
+        {field("wcOpening")}
+        {field("wcEarned")}
+        {field("wcUsed")}
+        {field("wcClosing")}
+        {field("wcAvailable")}
+      </div>
+    </details>
+  );
 }
 
-export function PrintedFooterView({ observations, collapsed=false }: { observations: Receipt['contents']['observations'];collapsed?:boolean }) {
-  const draft = footerDraft(observations)
-  return <details className="printed-footer" open={!collapsed}><summary>Printed Savings &amp; Walgreens Cash</summary><p>Printed information: {draft.status === 'PRINTED' ? 'Yes' : draft.status === 'NOT_PRINTED' ? 'Not printed' : 'Not sure'}</p><div className="key-values">{Object.entries(footerLabels).filter(([key])=>key!=='storeCouponSavings'&&(key!=='wcUsed'||(draft.wcUsed.trim()!==''&&Number(draft.wcUsed)!==0))).map(([key,text]) => <div key={key}><span>{text}</span><strong>{key === 'savingsValuePercent' ? draft[key] ? `${draft[key]}%` : 'Not recorded' : money(draft[key as keyof typeof footerLabels] || null)}</strong></div>)}</div><p className="muted">Printed observations are separate from calculated Total Saved and account balances.</p></details>
+export function PrintedFooterView({
+  observations,
+  collapsed = false,
+}: {
+  observations: Receipt["contents"]["observations"];
+  collapsed?: boolean;
+}) {
+  const draft = footerDraft(observations);
+  return (
+    <details className="printed-footer" open={!collapsed}>
+      <DisclosureSummary>
+        Printed Savings &amp; Walgreens Cash
+      </DisclosureSummary>
+      <p>
+        Printed information:{" "}
+        {draft.status === "PRINTED"
+          ? "Yes"
+          : draft.status === "NOT_PRINTED"
+            ? "Not printed"
+            : "Not sure"}
+      </p>
+      <div className="key-values">
+        {Object.entries(footerLabels)
+          .filter(
+            ([key]) =>
+              key !== "storeCouponSavings" &&
+              (key !== "wcUsed" ||
+                (draft.wcUsed.trim() !== "" && Number(draft.wcUsed) !== 0)),
+          )
+          .map(([key, text]) => (
+            <div key={key}>
+              <span>{text}</span>
+              <strong>
+                {key === "savingsValuePercent"
+                  ? draft[key]
+                    ? `${draft[key]}%`
+                    : "Not recorded"
+                  : money(draft[key as keyof typeof footerLabels] || null)}
+              </strong>
+            </div>
+          ))}
+      </div>
+      <p className="muted">
+        Printed observations are separate from calculated Total Saved and
+        account balances.
+      </p>
+    </details>
+  );
 }
 
 /** Receipt-wide ECB uses reuse named account deductions; never product coupons. */
-export function ECBUseFields({rows,onChange}:{rows:{id:string;amount:string;notes:string}[];onChange:(rows:{id:string;amount:string;notes:string}[])=>void}) {
- return <details open className="receipt-input-row"><summary>ExtraBucks (ECB) used · {rows.length} coupon{rows.length===1?'':'s'}</summary><p className="muted product-calculation-note">Enter each ECB separately. These apply to the whole receipt. Describe each coupon so you can identify it later; do not repeat it as a discount or payment.</p>{rows.map((r,i)=><section className="receipt-input-row" key={r.id}><div className="form-grid"><label>ECB used amount {i+1}<input required inputMode="decimal" pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)" value={r.amount} onChange={e=>onChange(rows.map(x=>x.id===r.id?{...x,amount:e.target.value}:x))}/></label><label>ECB used description {i+1}<input value={r.notes} onChange={e=>onChange(rows.map(x=>x.id===r.id?{...x,notes:e.target.value}:x))}/></label></div><button type="button" className="secondary" onClick={()=>onChange(rows.filter(x=>x.id!==r.id))}>Remove ECB use {i+1}</button></section>)}<button type="button" className="secondary" onClick={()=>onChange([...rows,{id:crypto.randomUUID(),amount:'',notes:''}])}>Add ECB used</button></details>
+export function ECBUseFields({
+  rows,
+  onChange,
+}: {
+  rows: { id: string; amount: string; notes: string }[];
+  onChange: (rows: { id: string; amount: string; notes: string }[]) => void;
+}) {
+  return (
+    <details open className="receipt-input-row">
+      <DisclosureSummary>
+        ExtraBucks (ECB) used · {rows.length} coupon
+        {rows.length === 1 ? "" : "s"}
+      </DisclosureSummary>
+      <p className="muted product-calculation-note">
+        Enter each ECB separately. These apply to the whole receipt. Describe
+        each coupon so you can identify it later; do not repeat it as a discount
+        or payment.
+      </p>
+      {rows.map((r, i) => (
+        <section className="receipt-input-row" key={r.id}>
+          <div className="form-grid">
+            <label>
+              ECB used amount {i + 1}
+              <input
+                required
+                inputMode="decimal"
+                pattern="([0-9]+([.][0-9]*)?|[.][0-9]+)"
+                value={r.amount}
+                onChange={(e) =>
+                  onChange(
+                    rows.map((x) =>
+                      x.id === r.id ? { ...x, amount: e.target.value } : x,
+                    ),
+                  )
+                }
+              />
+            </label>
+            <label>
+              ECB used description {i + 1}
+              <input
+                value={r.notes}
+                onChange={(e) =>
+                  onChange(
+                    rows.map((x) =>
+                      x.id === r.id ? { ...x, notes: e.target.value } : x,
+                    ),
+                  )
+                }
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => onChange(rows.filter((x) => x.id !== r.id))}
+          >
+            Remove ECB use {i + 1}
+          </button>
+        </section>
+      ))}
+      <button
+        type="button"
+        className="secondary"
+        onClick={() =>
+          onChange([
+            ...rows,
+            { id: crypto.randomUUID(), amount: "", notes: "" },
+          ])
+        }
+      >
+        Add ECB used
+      </button>
+    </details>
+  );
 }
 
-export function GiftCardSelect({api,cards,value,label,onChange}:{api:ApiClient;cards?:import('../../types/platform').RewardInstrument[];value:string;label:string;onChange:(id:string,card?:import('../../types/platform').RewardInstrument)=>void}) {
- const [loaded,setLoaded]=useState<import('../../types/platform').RewardInstrument[]>([]),[error,setError]=useState('')
- useEffect(()=>{if(cards)return;const controller=new AbortController();api.rewardInstruments(controller.signal).then(r=>setLoaded(r.instruments)).catch(e=>{if(!controller.signal.aborted)setError((e as Error).message)});return()=>controller.abort()},[api,cards])
- const rows=(cards??loaded).filter(r=>r.kind==='GIFT_CARD'&&r.status!=='ARCHIVED')
- return <><label>{label}<select value={value} onChange={e=>onChange(e.target.value,rows.find(r=>r.id===e.target.value))}><option value="">No saved card assigned</option>{value&&!rows.some(r=>r.id===value)&&<option value={value}>Assigned card</option>}{rows.map(r=><option key={r.id} value={r.id}>{instrumentLabel(r)} · {money(r.calculated)}</option>)}</select></label>{error&&<p role="alert">Could not load gift cards: {error}</p>}</>
+export function GiftCardSelect({
+  api,
+  cards,
+  value,
+  label,
+  onChange,
+}: {
+  api: ApiClient;
+  cards?: import("../../types/platform").RewardInstrument[];
+  value: string;
+  label: string;
+  onChange: (
+    id: string,
+    card?: import("../../types/platform").RewardInstrument,
+  ) => void;
+}) {
+  const [loaded, setLoaded] = useState<
+      import("../../types/platform").RewardInstrument[]
+    >([]),
+    [error, setError] = useState("");
+  useEffect(() => {
+    if (cards) return;
+    const controller = new AbortController();
+    api
+      .rewardInstruments(controller.signal)
+      .then((r) => setLoaded(r.instruments))
+      .catch((e) => {
+        if (!controller.signal.aborted) setError((e as Error).message);
+      });
+    return () => controller.abort();
+  }, [api, cards]);
+  const rows = (cards ?? loaded).filter(
+    (r) => r.kind === "GIFT_CARD" && r.status !== "ARCHIVED",
+  );
+  return (
+    <>
+      <label>
+        {label}
+        <select
+          value={value}
+          onChange={(e) =>
+            onChange(
+              e.target.value,
+              rows.find((r) => r.id === e.target.value),
+            )
+          }
+        >
+          <option value="">No saved card assigned</option>
+          {value && !rows.some((r) => r.id === value) && (
+            <option value={value}>Assigned card</option>
+          )}
+          {rows.map((r) => (
+            <option key={r.id} value={r.id}>
+              {instrumentLabel(r)} · {money(r.calculated)}
+            </option>
+          ))}
+        </select>
+      </label>
+      {error && <p role="alert">Could not load gift cards: {error}</p>}
+    </>
+  );
 }
 
-export function packageDetailsBody(value:import('../../types/platform').PackageDetails){return {...value,size:value.size||null,unit:value.unit||null,itemCount:value.itemCount?integer(value.itemCount):null,itemUnit:value.itemUnit||null,secondarySize:value.secondarySize||null,secondaryUnit:value.secondaryUnit||null}}
-export function PackageDetailsFields({index,value={},onChange}:{index:number;value?:import('../../types/platform').PackageDetails;onChange:(value:import('../../types/platform').PackageDetails)=>void}){
- const units=['fl oz','oz','ml','l','g','kg','loads','rolls','sheets','items','toothbrushes'];
- return <details className="package-details"><summary>Product Size / Package Details {index} (optional)</summary><div className="form-grid">{([['size','Package size'],['itemCount','Items inside each package'],['secondarySize','Secondary size']] as const).map(([key,text])=><label key={key}>{text}<input aria-label={`${text} ${index}`} inputMode="decimal" pattern={key==='itemCount'?'[1-9][0-9]*':'[0-9]+([.][0-9]+)?'} value={value[key]??''} onChange={e=>onChange({...value,[key]:e.target.value})}/></label>)}{([['unit','Package size unit'],['itemUnit','Item unit'],['secondaryUnit','Secondary unit']] as const).map(([key,text])=><label key={key}>{text}<select aria-label={`${text} ${index}`} value={value[key]??''} onChange={e=>onChange({...value,[key]:e.target.value})}><option value="">Not recorded</option>{units.map(unit=><option key={unit}>{unit}</option>)}</select></label>)}</div><InfoHelp>These are contents per purchased package, separate from receipt quantity. Example: 2 bottles, each 80 fl oz and 80 loads. Leave unknown sizes blank. Recording contents does not record usage or confirm remaining stock.</InfoHelp></details>
+export function packageDetailsBody(
+  value: import("../../types/platform").PackageDetails,
+) {
+  return {
+    ...value,
+    size: value.size || null,
+    unit: value.unit || null,
+    itemCount: value.itemCount ? integer(value.itemCount) : null,
+    itemUnit: value.itemUnit || null,
+    secondarySize: value.secondarySize || null,
+    secondaryUnit: value.secondaryUnit || null,
+  };
+}
+export function PackageDetailsFields({
+  index,
+  value = {},
+  onChange,
+}: {
+  index: number;
+  value?: import("../../types/platform").PackageDetails;
+  onChange: (value: import("../../types/platform").PackageDetails) => void;
+}) {
+  const units = [
+    "fl oz",
+    "oz",
+    "lb",
+    "ml",
+    "l",
+    "g",
+    "kg",
+    "loads",
+    "rolls",
+    "sheets",
+    "items",
+    "toothbrushes",
+  ];
+  return (
+    <details className="package-details">
+      <DisclosureSummary>
+        Product Size / Package Details {index} (optional)
+      </DisclosureSummary>
+      <div className="form-grid">
+        {(
+          [
+            ["size", "Package size"],
+            ["itemCount", "Items inside each package"],
+            ["secondarySize", "Secondary size"],
+          ] as const
+        ).map(([key, text]) => (
+          <label key={key}>
+            {text}
+            <input
+              aria-label={`${text} ${index}`}
+              inputMode="decimal"
+              pattern={
+                key === "itemCount" ? "[1-9][0-9]*" : "[0-9]+([.][0-9]+)?"
+              }
+              value={value[key] ?? ""}
+              onChange={(e) => onChange({ ...value, [key]: e.target.value })}
+            />
+          </label>
+        ))}
+        {(
+          [
+            ["unit", "Package size unit"],
+            ["itemUnit", "Item unit"],
+            ["secondaryUnit", "Secondary unit"],
+          ] as const
+        ).map(([key, text]) => (
+          <label key={key}>
+            {text}
+            <select
+              aria-label={`${text} ${index}`}
+              value={value[key] ?? ""}
+              onChange={(e) => onChange({ ...value, [key]: e.target.value })}
+            >
+              <option value="">Not recorded</option>
+              {units.map((unit) => (
+                <option key={unit}>{unit}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+      <InfoHelp>
+        These are contents per purchased package, separate from receipt
+        quantity. Example: 2 bottles, each 80 fl oz and 80 loads. Leave unknown
+        sizes blank. Package size details are optional and are never required to
+        save a receipt. Recording contents does not record usage or confirm
+        remaining stock.
+      </InfoHelp>
+    </details>
+  );
 }

@@ -63,11 +63,26 @@ class RewardInstrumentIntegrationTest {
         assertTrue(fixture.receipts.findById(second).isEmpty());assertNull(fixture.plans.findById(secondPlan).orElseThrow().purchasedReceiptId());
     }
 
+    @Test void backendRejectsWalgreensFundingAtCvsCheckoutAndReceipt()throws Exception{
+        var plan=new coupons.shopping.ShoppingPlan(UUID.randomUUID(),"CVS synthetic","CVS",java.time.LocalDate.of(2026,10,30),List.of(),1);fixture.plans.save(plan,"test");
+        var checkout=fixture.call("PUT","/shopping-plans/"+plan.planId()+"/checkout",Json.object(Map.of("walgreensCashUsed","1")),UUID.randomUUID().toString(),"0");assertEquals(400,checkout.statusCode(),checkout.body());
+        var fields=ReceiptInputTest.draft(UUID.randomUUID());fields.put("retailer","CVS");fields.put("payments",List.of(Map.of("paymentId",UUID.randomUUID(),"type","WALGREENS_CASH","amount","1")));assertEquals(400,fixture.call("POST","/receipts/preview",Json.object(fields),null,null).statusCode());
+    }
+    @Test void correctedReceiptCanIncreaseCardUseByOnlyTheAdditionalAvailableAmount()throws Exception{
+        var card=create("GIFT_CARD","Walmart","Correction card","USD","50");UUID receipt=UUID.randomUUID(),payment=UUID.randomUUID();var fields=ReceiptInputTest.draft(receipt);fields.put("retailer","Walmart");fields.put("purchaseDate","2026-10-30");fields.put("payments",List.of(Map.of("paymentId",payment,"type","GIFT_CARD","amount","40","giftCardId",card.get("id"))));var preview=fixture.call("POST","/receipts/preview",Json.object(fields),null,null);fields.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));fields.put("acknowledgeDifference",true);var created=fixture.call("POST","/receipts",Json.object(fields),UUID.randomUUID().toString(),null);assertEquals(201,created.statusCode(),created.body());assertCardBalance(card,"10");editCardPayment(receipt,1,payment,card.get("id"),"45");assertCardBalance(card,"5");
+    }
+    @Test void actualReceiptMayUseARecordedGiftCardAtAnyRetailerWithoutAcceptanceTerms()throws Exception{
+        var merchant=create("GIFT_CARD","Walmart","Merchant card","USD","25");
+        var fields=ReceiptInputTest.draft(UUID.randomUUID());fields.put("retailer","CVS");fields.put("purchaseDate","2026-10-30");UUID payment=UUID.randomUUID();
+        fields.put("payments",List.of(Map.of("paymentId",payment,"type","GIFT_CARD","amount","1","giftCardId",merchant.get("id"))));
+        var preview=fixture.call("POST","/receipts/preview",Json.object(fields),null,null);fields.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));fields.put("acknowledgeDifference",true);
+        var received=fixture.call("POST","/receipts",Json.object(fields),UUID.randomUUID().toString(),null);assertEquals(201,received.statusCode(),received.body());assertCardBalance(merchant,"24");
+    }
     @Test void receiptAssignmentsSynchronizeEditsReassignmentRemovalAndRetries()throws Exception {
         var first=create("GIFT_CARD","Walmart","First card","USD","50.00");
         var second=create("GIFT_CARD","Walmart","Second card","USD","25.00");
         UUID receipt=UUID.randomUUID(),payment=UUID.randomUUID();
-        var fields=ReceiptInputTest.draft(receipt);
+        var fields=ReceiptInputTest.draft(receipt);fields.put("retailer","Walmart");fields.put("purchaseDate","2026-10-30");
         fields.put("payments",List.of(Map.of("paymentId",payment,"type","GIFT_CARD","amount","8.75","giftCardId",first.get("id"))));
         var preview=fixture.call("POST","/receipts/preview",Json.object(fields),null,null);assertEquals(200,preview.statusCode(),preview.body());
         fields.put("reviewToken",Json.parseObject(preview.body()).get("reviewToken"));fields.put("acknowledgeDifference",true);

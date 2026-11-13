@@ -170,6 +170,8 @@ it('keeps the welcome screen original with one workspace button and its visible 
 it('keeps shopping controls labelled and opens the quick-deal form',async()=>{
  const {user}=await connect();await user.click(screen.getByRole('link',{name:'Shopping & Deals'}))
  expect(screen.getByRole('heading',{name:'Shopping & Deals'})).toBeVisible()
+ const navigation=screen.getByRole('navigation',{name:'Shopping and Deals sections'});for(const name of ['Weekly Ads','Deals','Find Best Deals','Spend Boosters','Shopping List','Active Plans','Completed Plans','Follow-Up'])expect(within(navigation).getByRole('link',{name})).toBeVisible()
+ expect(screen.queryByRole('heading',{name:'Shopping Week'})).not.toBeInTheDocument()
  expect(screen.getByLabelText('Shopping week').closest('label')).not.toHaveAttribute('data-placeholder-field')
  expect(screen.getByLabelText('Weekly store').closest('label')).not.toHaveAttribute('data-placeholder-field')
  await user.click(screen.getByRole('button',{name:'+ Quick deal'}))
@@ -180,4 +182,8 @@ it('keeps individual account and gift-card details off the dashboard',()=>{
  const data=workspace();data.rewardInstruments=[{id:'target-own',kind:'ACCOUNT_REWARD',provider:'Target',nickname:'My Target',lastFour:null,unit:'USD',revision:'1',opening:'12',openingDate:null,historyComplete:true,calculated:'12',reported:null,reportedDate:null,balanceDate:null,difference:null,comparisonStatus:'DATE_ALIGNMENT_UNRESOLVED',newEarnings:'0',events:[],history:[],issuedFrom:[]}];
  render(<WorkspacePages data={data} page="dashboard" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>);
  expect(screen.getByText('Total Available — All Accounts')).toBeInTheDocument();expect(screen.queryByText('Available — existing provider records')).not.toBeInTheDocument();expect(screen.queryByText('My Target')).not.toBeInTheDocument();expect(screen.queryByText('Individual Accounts And Gift Cards')).not.toBeInTheDocument();expect(screen.queryByText(/These views are not added together/)).not.toBeInTheDocument();
+})
+
+it('keeps plan search and more filters off the dashboard overview',()=>{
+ render(<WorkspacePages data={workspace()} page="dashboard" writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>);expect(screen.queryByLabelText('Search shopping plans')).not.toBeInTheDocument();expect(screen.queryByRole('button',{name:'More filters'})).not.toBeInTheDocument()
 })

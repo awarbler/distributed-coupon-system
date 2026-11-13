@@ -754,9 +754,9 @@ it('selects a clipped coupon once and sends its link with the receipt discount',
  const api=new ApiClient('test'),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result()),user=userEvent.setup(),id=crypto.randomUUID()
  render(<ReceiptCreate coupons={[{couponId:id,provider:'Test',description:'Two off',discountAmount:'2',requiredQuantity:'1',status:'CLIPPED',couponType:'MANUFACTURER',expirationDate:'2026-10-31',externalId:null,clippedOn:null,redeemedOn:null,redeemedTransactionId:null,revision:'1'}]} api={api} enabled onClose={vi.fn()} onReview={vi.fn()} onSaved={vi.fn()}/>)
  await minimum(user)
- await user.selectOptions(screen.getByLabelText('Use a clipped coupon for product 1'),id)
+ await user.click(screen.getAllByText(/^Find \/ Change Coupon/)[0]);await user.click(screen.getByLabelText('Search all my coupons'));await user.click(screen.getByRole('button',{name:'Confirm used'}))
  expect(screen.getByLabelText('Product 1 discount 1 amount')).toHaveValue('2')
- expect(screen.queryByRole('option',{name:/Test · Two off/})).not.toBeInTheDocument()
+ expect(screen.getByRole('button',{name:'Remove selection'})).toBeInTheDocument()
  await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
  expect(mutate.mock.calls[0][2]).toEqual(expect.objectContaining({clippedCouponIds:[id],discounts:[expect.objectContaining({applicationId:id,amount:'2',kind:'MANUFACTURER'})]}))
 })
@@ -835,7 +835,7 @@ it('provides an automatically attached blank coupon and excludes it from preview
  const saved=mutate.mock.calls.find(c=>c[0]==='/shopping-plans')![2] as {scenario:{coupons:unknown[];payments:unknown[]}}
  expect(saved.scenario.coupons).toEqual([]);expect(saved.scenario.payments).toEqual([])
  expect(screen.getByRole('button',{name:'Add another coupon for product 1'})).toBeVisible()
- expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+ expect(screen.queryByRole('checkbox',{name:'Search all my coupons'})).not.toBeInTheDocument()
 })
 it('autofills product coupon names, follows coupon type, and preserves manual descriptions',async()=>{
  const api=new ApiClient('test'),draft=planningFixture(),user=userEvent.setup()
@@ -958,7 +958,7 @@ it('shows only the retailer-appropriate reward-payment permission',async()=>{
 it('transfers Walmart Cash used as funding rather than cash paid',()=>{
  const draft=planningFixture();draft.plan.scenario!.payments=[{id:'walmart',type:'WALMART_CASH',amount:'3',notes:'Walmart balance'}]
  render(<ReceiptCreate planning={draft} api={new ApiClient('test')} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>)
- expect(screen.getByDisplayValue('Walmart balance')).toBeInTheDocument();expect(screen.getByLabelText('Other payment role')).toHaveValue('FUNDING')
+ expect(screen.getByDisplayValue('Walmart balance')).toBeInTheDocument();expect(screen.getByLabelText('Payment type 1')).toHaveValue('WALMART_CASH');expect(screen.queryByLabelText('Other payment role')).not.toBeInTheDocument()
 })
 
 it('normalizes a no-coupon Walmart deal with optional rebate thresholds and unused rows',()=>{
@@ -1127,7 +1127,7 @@ it('imports into editable fields without saving a receipt and lets the owner cla
 it('copies a completed shopping plan into a new editable scenario without editing the source',async()=>{
  const draft=planningFixture(),data=workspace(),api=new ApiClient('test'),user=userEvent.setup();draft.plan.purchasedReceiptId='saved-receipt';const row=planningRow();row.plan=draft.plan;row.scenarioEstimate=draft.estimate;data.plans=[row];const mutate=vi.spyOn(api,'mutate').mockImplementation(async(path)=>path.endsWith('/preview')?draft.estimate:{...draft.plan,planId:'new-plan',purchasedReceiptId:null,revision:'1'})
  render(<WorkspacePages page="shopping" data={data} api={api} writable onPage={vi.fn()} onReceipt={vi.fn()} onEdit={vi.fn()} onAddReceipt={vi.fn()} onCheckout={vi.fn()}/>)
- expect(screen.getByText('Completed Shopping Plans')).toBeInTheDocument();expect(screen.getByText('Purchased')).toBeInTheDocument()
+ expect(screen.getAllByText('Completed Plans')).toHaveLength(2);expect(screen.getByText('Purchased')).toBeInTheDocument()
  await user.click(screen.getByRole('button',{name:'Copy Plan'}));expect(screen.getByLabelText('Plan name')).toHaveValue('Walgreens deal Copy')
  await screen.findByRole('heading',{name:'Planning breakdown'});await user.click(screen.getByRole('button',{name:'Save scenario'}))
  expect(mutate).toHaveBeenCalledWith('/shopping-plans','POST',expect.objectContaining({name:'Walgreens deal Copy'}),expect.any(String),undefined)
@@ -1296,9 +1296,31 @@ it('records a Target gift card as payment funding rather than a received reward'
  expect(mutate.mock.calls.find(c=>c[0]==='/receipts/preview')?.[2]).toMatchObject({payments:[{type:'GIFT_CARD',accountName:'Target Gift Card',amount:'2'}],earnings:[]})
 })
 
+it('records Walmart Cash as named receipt funding',async()=>{
+ const {user,mutate}=setup();await minimum(user)
+ await user.clear(screen.getByLabelText('Store'));await user.type(screen.getByLabelText('Store'),'Walmart')
+ await user.click(screen.getByRole('button',{name:'Add payment'}))
+ expect(within(screen.getByLabelText('Payment type 1')).getByRole('option',{name:'Walmart Cash used'})).toBeVisible()
+ await user.selectOptions(screen.getByLabelText('Payment type 1'),'WALMART_CASH')
+ await user.type(screen.getByLabelText('Payment amount 1'),'1.73')
+ expect(screen.queryByLabelText('Other payment role')).not.toBeInTheDocument()
+ await user.selectOptions(screen.getByLabelText('Payment entry completeness'),'COMPLETE')
+ await user.click(screen.getByRole('button',{name:'Review calculated totals'}))
+ expect(mutate.mock.calls.find(c=>c[0]==='/receipts/preview')?.[2]).toMatchObject({paymentEntryStatus:'COMPLETE',payments:[{type:'OTHER',accountName:'Walmart Cash',role:'FUNDING',amount:'1.73'}]})
+})
+
 it('hides zero RR usage and shows zero cash/card for a fully gift-card-funded purchase',()=>{
  const totals:Totals={...result().totals,rrUsed:'0.00',paymentReview:{printedTotal:'8.10',calculatedPurchaseTotal:'8.11',purchaseDifference:'-0.01',knownFundingSubtotal:'8.10',recordedCashCardPaid:'0',giftCardFunding:'8.10',otherFunding:'0',difference:null,status:'INCOMPLETE',printedTotalBasis:'BEFORE_PAYMENT_FUNDING',paymentEntryStatus:'UNKNOWN',unresolvedPaymentIds:[],reason:'Review difference',acknowledgementRequired:true}}
  render(<ReceiptFinancialReview totals={totals}/>);expect(screen.queryByText('Register Rewards used')).not.toBeInTheDocument();expect(screen.getByText('Actual cash/card paid').parentElement).toHaveTextContent('$0.00');expect(screen.getByText('Printed purchase total').parentElement).toHaveTextContent('$8.10')
+})
+
+it('shows Walmart Cash separately from gift cards in receipt review',()=>{
+ const totals:Totals={...result().totals,walmartCashUsed:'9.00',giftCardPayments:{'Gift Cards':'23.71'},paymentReview:{printedTotal:'32.71',calculatedPurchaseTotal:'32.71',purchaseDifference:'0',knownFundingSubtotal:'32.71',recordedCashCardPaid:'0',giftCardFunding:'23.71',otherFunding:'9.00',difference:'0',status:'BALANCED',printedTotalBasis:'BEFORE_PAYMENT_FUNDING',paymentEntryStatus:'COMPLETE',unresolvedPaymentIds:[],reason:'Balanced',acknowledgementRequired:false}}
+ render(<ReceiptFinancialReview totals={totals}/>)
+ expect(screen.getByText('Walmart Cash used').parentElement).toHaveTextContent('$9.00')
+ expect(screen.getByText('Gift Cards').parentElement).toHaveTextContent('$23.71')
+ expect(screen.getByText('Actual cash/card paid').parentElement).toHaveTextContent('$0.00')
+ expect(screen.getByText(/Reconciliation: balanced/i)).toBeVisible()
 })
 
 it('records Target Circle spending with its account and funding role',async()=>{
@@ -1342,9 +1364,17 @@ it('keeps channel and total basis together and expands/collapses individual or a
  const {user}=setup();await user.type(screen.getByLabelText('Product description 1'),'Dove');await user.click(screen.getByRole('button',{name:'Add product'}));await user.type(screen.getByLabelText('Product description 2'),'Soap')
  expect(screen.getByLabelText('Order type').closest('.receipt-details-grid')).toContainElement(screen.getByLabelText('Printed total represents'))
  const first=screen.getByLabelText('Product description 1').closest('details')!,second=screen.getByLabelText('Product description 2').closest('details')!
+ for(const details of [document.querySelector('.receipt-products')!,first,second])expect(details.querySelectorAll(':scope > summary .disclosure-arrow')).toHaveLength(1)
+ for(const summary of document.querySelectorAll('summary.disclosure-summary'))expect(summary.querySelectorAll(':scope > .disclosure-arrow')).toHaveLength(1)
+ expect(document.querySelector('.receipt-disclosure-arrow')).not.toBeInTheDocument()
  await user.click(screen.getByRole('button',{name:'Collapse all products'}));expect(first).not.toHaveAttribute('open');expect(second).not.toHaveAttribute('open')
  await user.click(first.querySelector('summary')!);expect(first).toHaveAttribute('open');expect(second).not.toHaveAttribute('open')
  await user.click(screen.getByRole('button',{name:'Expand all products'}));expect(first).toHaveAttribute('open');expect(second).toHaveAttribute('open')
+})
+it('records weighed food with weight, unit price, rounded line total, and one purchased line',async()=>{
+ const {user,mutate}=setup();await user.type(screen.getByLabelText('Store'),'Grocery store');await user.type(screen.getByLabelText('Purchase date'),'2026-11-10');await user.type(screen.getByLabelText('Product description 1'),'Sweet potato');await user.type(screen.getByLabelText('SKU / UPC 1 (optional)'),'000000004074')
+ await user.selectOptions(screen.getByLabelText('Sold by 1'),'WEIGHT');await user.type(screen.getByLabelText('Weight 1'),'1.97');await user.clear(screen.getByLabelText('Price per lb 1'));await user.type(screen.getByLabelText('Price per lb 1'),'.88');expect(screen.queryByLabelText('Quantity 1')).not.toBeInTheDocument();expect(screen.getByText('$1.73')).toBeVisible()
+ await user.type(screen.getByLabelText('Sales tax'),'0');await user.type(screen.getByLabelText('Reported total due at register'),'1.73');await user.click(screen.getByRole('button',{name:'Review calculated totals'}));const body=mutate.mock.calls.find(c=>c[0]==='/receipts/preview')![2] as {items:{quantity:number;unitPrice:string;regularUnitPrice:string;packageDetails:{size:string;unit:string}}[]};expect(body.items[0]).toMatchObject({quantity:1,unitPrice:'1.73',regularUnitPrice:'1.73',packageDetails:{size:'1.97',unit:'lb'}})
 })
 it('opens product-total information beside the total and Escape closes only that popup',async()=>{
  const {user}=setup();await user.click(screen.getByRole('button',{name:'About product totals'}))
@@ -1486,3 +1516,31 @@ it('records purchased packages, net contents and loads as separate optional fact
 it('requires an explicit corrected RR source and retains the original match identity',async()=>{
  const api=new ApiClient('test'),user=userEvent.setup(),saved=vi.fn(),open=vi.fn();vi.spyOn(window,'confirm').mockReturnValue(true);vi.spyOn(api,'rrMatches').mockResolvedValue([{eventId:'used',amount:'5',description:'Printed reward used',matched:true,currentSourceId:'original',options:[],correctionOptions:[{sourceId:'replacement',receiptEarning:true,amount:'5',promotion:'Known replacement reward',sourceReceiptId:'source-receipt',sourceReceiptNumber:'ORIGINAL-123',earnedDate:'2026-11-01',expires:'2026-11-14'}]}]);const mutate=vi.spyOn(api,'mutate').mockResolvedValue({});render(<ReceiptRRMatch receipt={{transactionId:'spent',revision:'3'} as Receipt} api={api} enabled onSaved={saved} onSourceReceipt={open}/>);await user.click(await screen.findByRole('button',{name:'Correct Match'}));await user.selectOptions(screen.getByLabelText('Unused Register Reward'),'replacement');await user.click(screen.getByRole('button',{name:'View original receipt ORIGINAL-123'}));expect(open).toHaveBeenCalledWith('source-receipt');expect(mutate).not.toHaveBeenCalled();await user.type(screen.getByLabelText('Correction reason'),'Checked original reward');await user.click(screen.getByRole('button',{name:'Confirm Corrected Match'}));expect(mutate).toHaveBeenCalledWith('/receipts/spent/rr-matches','POST',expect.objectContaining({usageEventId:'used',sourceId:'replacement',expectedSourceId:'original',reason:'Checked original reward'}),expect.any(String),'3');expect(saved).toHaveBeenCalledOnce();
 });
+
+it('does not offer imported rebates, BOGO or Walgreens Cash offers as receipt discounts',async()=>{const user=userEvent.setup();
+ const api=new ApiClient('owner');const base={provider:'Walgreens',description:'Immediate coupon',discountAmount:'2',requiredQuantity:'1',couponType:'MANUFACTURER',status:'CLIPPED',externalId:null,expirationDate:'2099-12-31',clippedOn:'2026-11-08',redeemedOn:null,redeemedTransactionId:null,revision:'1'};
+ const coupons=['DOLLARS','REBATE','REWARD','BOGO','UNKNOWN'].map(discount=>({...base,couponId:discount,description:discount+' offer',terms:{source:'DIGITAL_MANUFACTURER',discount}}));
+ render(<ReceiptCreate api={api} enabled coupons={coupons} onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>);
+ await user.click(screen.getAllByText(/^Find \/ Change Coupon/)[0]);await user.click(screen.getByLabelText('Search all my coupons'));
+ const rows=screen.getAllByRole('article');expect(within(rows.find(r=>within(r).queryByText('DOLLARS offer'))!).getByRole('button',{name:'Confirm used'})).toBeEnabled();
+ for(const type of ['REBATE','REWARD','BOGO','UNKNOWN'])expect(within(rows.find(r=>within(r).queryByText(type+' offer'))!).getByRole('button',{name:'Confirm used'})).toBeDisabled();
+})
+
+it('confirms an Available planned coupon only on receipt selection and preserves its actual printed discount once',async()=>{
+ const draft=planningFixture(),id=crypto.randomUUID();draft.plan.scenario!.coupons[0].savedCouponId=id;
+ const coupon={couponId:id,provider:'Walgreens',description:'Neutrogena $4 off 2',discountAmount:'4',requiredQuantity:'2',couponType:'MANUFACTURER',status:'AVAILABLE',externalId:null,expirationDate:'2099-11-30',clippedOn:null,redeemedOn:null,redeemedTransactionId:null,revision:'1',terms:{source:'DIGITAL_MANUFACTURER',discount:'DOLLARS',storeRestriction:'Walgreens',productOrBrand:'Neutrogena'}};
+ const api=new ApiClient('test'),user=userEvent.setup(),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result());render(<ReceiptCreate planning={draft} coupons={[coupon]} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>);
+ const amount=screen.getByLabelText('Product 1 discount 2 amount');await user.clear(amount);await user.type(amount,'2.50');
+ await user.click(screen.getAllByText(/^Find \/ Change Coupon/)[0]);await user.click(screen.getByRole('button',{name:'Confirm used'}));expect(screen.getByLabelText('Product 1 discount 2 amount')).toHaveValue('2.50');expect(screen.queryByLabelText('Product 1 discount 3 amount')).not.toBeInTheDocument();await user.click(screen.getByRole('button',{name:'Review calculated totals'}));
+ const body=mutate.mock.calls.find(c=>c[0]==='/receipts/preview')![2] as {clippedCouponIds:string[];discounts:{applicationId:string;amount:string}[]};expect(body.clippedCouponIds).toEqual([id]);expect(body.discounts.filter(d=>d.applicationId===id)).toEqual([expect.objectContaining({amount:'2.50'})]);expect(mutate.mock.calls.some(c=>c[0].endsWith('/state')||c[0].endsWith('/redeem'))).toBe(false);expect(coupon.status).toBe('AVAILABLE');
+})
+
+it('uses the shared coupon picker to link an existing receipt discount during editing without duplicating its amount',async()=>{
+ const r=receipt(),id=crypto.randomUUID();r.editDiscounts!.push({applicationId:'printed-coupon',printedLabel:'Soap actual coupon',appliedAmount:'1.25',kind:'MANUFACTURER',lineItemIds:['original-line'],wholeReceipt:false,qualifyingQuantities:{'original-line':'1'}});
+ const coupon={couponId:id,provider:'Walgreens',description:'Soap coupon $2',discountAmount:'2',requiredQuantity:'1',couponType:'MANUFACTURER',status:'AVAILABLE',externalId:null,expirationDate:'2099-11-30',clippedOn:null,redeemedOn:null,redeemedTransactionId:null,revision:'1',terms:{source:'DIGITAL_MANUFACTURER',discount:'DOLLARS',storeRestriction:'Walgreens',productOrBrand:'Soap'}};const api=new ApiClient('test'),user=userEvent.setup(),mutate=vi.spyOn(api,'mutate').mockResolvedValue({reviewToken:'checked',totals:receiptRow('test').totals});render(<ReceiptEdit receipt={r} couponCatalog={[coupon]} api={api} enabled onSaved={vi.fn()} onCancel={vi.fn()}/>);
+ await user.click(screen.getAllByText(/^Find \/ Change Coupon/)[0]);await user.selectOptions(screen.getByLabelText('Link existing discount'),'printed-coupon');await user.click(screen.getByRole('button',{name:'Confirm used'}));await user.type(screen.getByLabelText('Reason for correction'),'Confirmed printed coupon used');await user.click(screen.getByRole('button',{name:'Top: Review updated totals'}));const body=mutate.mock.calls.find(c=>c[0].endsWith('/edit-preview'))![2] as {discounts:{applicationId:string;appliedAmount:string}[]};expect(body.discounts.filter(d=>d.applicationId===id)).toEqual([expect.objectContaining({appliedAmount:'1.25'})]);expect(body.discounts).toHaveLength(2);expect(mutate.mock.calls.some(c=>c[0].endsWith('/state')||c[0].endsWith('/redeem'))).toBe(false);
+})
+
+it('keeps estimated coupons with an unrecorded issuer separate from actual receipt confirmation',async()=>{
+ const draft=planningFixture(),id=crypto.randomUUID();draft.plan.scenario!.coupons[0]={...draft.plan.scenario!.coupons[0],savedCouponId:id,kind:'UNKNOWN',pendingVerification:true};const coupon={couponId:id,provider:'Walgreens',description:'Neutrogena $4 off 2',discountAmount:'4',requiredQuantity:'2',couponType:'OTHER',status:'AVAILABLE',externalId:null,expirationDate:'2099-11-30',clippedOn:null,redeemedOn:null,redeemedTransactionId:null,revision:'1',terms:{source:'DIGITAL_OTHER',discount:'DOLLARS',storeRestriction:'Walgreens',productOrBrand:'Neutrogena'}};const api=new ApiClient('test'),user=userEvent.setup(),mutate=vi.spyOn(api,'mutate').mockResolvedValue(result());render(<ReceiptCreate planning={draft} coupons={[coupon]} api={api} enabled onClose={vi.fn()} onSaved={vi.fn()} onReview={vi.fn()}/>);expect(screen.getByLabelText('Product 1 discount 2 amount')).toHaveValue('4');const picker=screen.getByLabelText('Coupons for Neutrogena');await user.click(within(picker).getByText(/^Find \/ Change Coupon/));await user.selectOptions(within(picker).getByLabelText('Printed coupon type'),'MANUFACTURER');await user.click(within(picker).getByRole('button',{name:'Confirm used'}));await user.click(screen.getByRole('button',{name:'Review calculated totals'}));const body=mutate.mock.calls.find(c=>c[0]==='/receipts/preview')![2] as {clippedCouponIds:string[];discounts:{applicationId:string;kind:string;amount:string}[]};expect(body.clippedCouponIds).toEqual([id]);expect(body.discounts.filter(d=>d.applicationId===id)).toEqual([expect.objectContaining({kind:'MANUFACTURER',amount:'4'})]);expect(coupon.status).toBe('AVAILABLE');
+})

@@ -2,9 +2,11 @@ package coupons.api;
 
 import coupons.promotions.ClippedCoupon;
 import coupons.promotions.Coupon;
+import coupons.promotions.DealTerms;
 import coupons.promotions.CouponStatus;
 import coupons.receipts.CouponTransaction;
 import coupons.promotions.CouponType;
+import coupons.promotions.CouponTerms;
 import coupons.receipts.PurchaseItem;
 import coupons.promotions.RebateStatus;
 import coupons.receipts.ReceiptObservations;
@@ -44,6 +46,63 @@ class CouponApiServiceTest {
         b.header("Content-Type","application/json");
         b.method(method,body==null?HttpRequest.BodyPublishers.noBody():HttpRequest.BodyPublishers.ofString(body));
         return client.send(b.build(),HttpResponse.BodyHandlers.ofString());
+    }
+    @Test void weeklyPurchaseAppearsInScenarioWithoutInventingPricesAndEditsPersist()throws Exception {
+        UUID planId=UUID.randomUUID(),originalId=UUID.randomUUID(),purchaseId=UUID.randomUUID(),dealId=UUID.randomUUID(),sourceId=UUID.randomUUID();
+        var zero=BigDecimal.ZERO;var original=new ShoppingPlan.Line(originalId,"Test Product",null,BigDecimal.ONE,null,1,0);
+        var scenario=new ShoppingPlan.Scenario(List.of(original),List.of(),List.of(),zero,zero,zero,zero,null,"CASH","");
+        plans.save(new ShoppingPlan(planId,"Testin Add Weekly Deal","Walgreens",LocalDate.of(2026,11,9),List.of(),1,scenario),"test");
+        var purchase=new coupons.shopping.PlannedPurchase(purchaseId,planId,"CoverGirl Cosmetics",null,1,null,dealId,List.of(),1,null,null,null);
+        var product=new LinkedHashMap<String,Object>();product.put("id",sourceId);product.put("name","CoverGirl Cosmetics");product.put("quantity",1);product.put("regular",null);product.put("sale",null);product.put("sku",null);
+        var ad=new coupons.promotions.DealTerms.WeeklyAdvertisement(Json.encode(Map.of("items",List.of(product),"coupons",List.of(),"promotions",List.of())),Map.of("originalText","CoverGirl Cosmetics"),List.of());
+        var terms=new coupons.promotions.DealTerms(DealTerms.Type.ADVERTISEMENT,"CoverGirl",null,null,1,null,0,null,false,null,List.of(),null,null,null,false,false,ad);
+        var deal=new coupons.promotions.AdvertisedDeal(dealId,"CoverGirl","CoverGirl Cosmetics","Walgreens",LocalDate.of(2026,11,8),LocalDate.of(2026,11,14),List.of(UUID.randomUUID()),1,terms);
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->switch(method.getName()){
+            case "workspace"->{var current=plans.findById(planId).orElseThrow();yield Map.of("plans",List.of(Map.of("plan",current,"items",List.of(purchase),"scenarioEstimate",current.scenario().estimate("Walgreens"),"estimateComplete",true)),"deals",List.of(deal));}
+            case "planPurchases"->List.of(purchase);
+            case "deal"->deal;
+            case "receiptDrafts","deletedWeeklyDealIds"->List.of();
+            default->throw new AssertionError(method.getName());
+        });
+        server.stop(0);server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var workspace=Json.parseObject(call("GET","/workspace","owner",null,null,null).body());var row=ReceiptInput.rows(workspace,"plans",10).getFirst();
+        assertNull(row.get("scenarioEstimate"));assertEquals(false,row.get("estimateComplete"));assertEquals(1,plans.writes);
+        var stale=call("PUT","/shopping-plans/"+planId,"owner",Json.encode(Map.of("name","Stale editor","scenario",ShoppingPlanViews.input(ShoppingPlanViews.object(scenario)))),"stale-weekly-view","1");assertEquals(409,stale.statusCode());assertEquals(1,plans.writes);
+        var viewed=Json.parseObject(call("GET","/shopping-plans/"+planId,"owner",null,null,null).body());var edited=Json.parseObject(Json.encode(viewed.get("scenario")));
+        var lines=ReceiptInput.rows(edited,"items",10);assertEquals(2,lines.size());assertEquals("Test Product",lines.getFirst().get("name"));var added=lines.get(1);assertEquals("CoverGirl Cosmetics",added.get("name"));assertNull(added.get("regular"));assertNull(added.get("sale"));
+        added.put("name","CoverGirl corrected");added.put("regular","7.00");added.put("quantity",new BigDecimal("2"));added.put("memberRewardRate",BigDecimal.ZERO);
+        var saved=call("PUT","/shopping-plans/"+planId,"owner",Json.encode(Map.of("name","Testin Add Weekly Deal","scenario",ShoppingPlanViews.input(edited))),"save-weekly-edit","1");assertEquals(200,saved.statusCode(),saved.body());
+        assertEquals(List.of(purchaseId),plans.findById(planId).orElseThrow().plannedPurchaseIds());
+        var refreshed=Json.parseObject(call("GET","/workspace","owner",null,null,null).body());var result=ReceiptInput.rows(refreshed,"plans",10).getFirst();var estimate=Json.parseObject(Json.encode(result.get("scenarioEstimate")));
+        assertEquals(0,new BigDecimal("15").compareTo((BigDecimal)estimate.get("saleTotal")));var displayed=ReceiptInput.rows(result,"items",10);assertEquals(2,displayed.size());assertEquals("CoverGirl corrected",displayed.get(1).get("productName"));
+        var reopened=Json.parseObject(call("GET","/shopping-plans/"+planId,"owner",null,null,null).body());assertEquals(2,ReceiptInput.rows(Json.parseObject(Json.encode(reopened.get("scenario"))),"items",10).size());
+        // Explicit removal stays removed on later reads; the original purchase record is retained.
+        edited.put("items",List.of(lines.getFirst()));var removed=call("PUT","/shopping-plans/"+planId,"owner",Json.encode(Map.of("name","Testin Add Weekly Deal","scenario",ShoppingPlanViews.input(edited))),"remove-weekly-edit","2");assertEquals(200,removed.statusCode(),removed.body());
+        var finalView=Json.parseObject(call("GET","/shopping-plans/"+planId,"owner",null,null,null).body());assertEquals(1,ReceiptInput.rows(Json.parseObject(Json.encode(finalView.get("scenario"))),"items",10).size());assertNull(purchase.regularUnitPrice());
+    }
+    @Test void weeklyAdvertisementPreviewIsReadOnlyAndSelectedDealsShareOneOriginal()throws Exception {
+        server.stop(0);var writes=new ArrayList<Object[]>();
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{if(method.getName().equals("saveDeal")){writes.add(args);return null;}throw new AssertionError(method.getName());});
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        byte[] original;
+        try(var pdf=new org.apache.pdfbox.pdmodel.PDDocument();var out=new java.io.ByteArrayOutputStream()){
+            var page=new org.apache.pdfbox.pdmodel.PDPage();pdf.addPage(page);
+            try(var stream=new org.apache.pdfbox.pdmodel.PDPageContentStream(pdf,page)){
+                stream.beginText();stream.setFont(new org.apache.pdfbox.pdmodel.font.PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),12);stream.newLineAtOffset(40,700);stream.showText("Tide $5.00");stream.endText();
+            }pdf.save(out);original=out.toByteArray();
+        }
+        var request=HttpRequest.newBuilder(URI.create(base+"/deals/advertisement-preview?name=weekly.pdf&retailer=Walgreens&validFrom=2026-11-08&validThrough=2026-11-14")).header("Authorization","Bearer owner").header("Content-Type","application/pdf").POST(HttpRequest.BodyPublishers.ofByteArray(original)).build();
+        var response=client.send(request,HttpResponse.BodyHandlers.ofString());assertEquals(200,response.statusCode(),response.body());assertTrue(writes.isEmpty());
+        var preview=Json.parseObject(response.body());String token=preview.get("sourcePreviewToken").toString();
+        var rows=ReceiptInput.rows(preview,"offers",100);assertEquals(1,rows.size());var offer=rows.getFirst();
+        var pricing=new LinkedHashMap<String,Object>();pricing.put("type","ADVERTISEMENT");pricing.put("productDescription",offer.get("title"));pricing.put("minimumQuantity",1);pricing.put("advertisement",Map.of("draftJson",Json.encode(offer.get("draft")),"fields",offer.get("fields"),"warnings",offer.get("warnings")));
+        var body=new LinkedHashMap<String,Object>();for(String field:List.of("dealId","title","interpretedTerms","retailer","validFrom","validThrough"))body.put(field,offer.get(field));body.put("pricing",pricing);body.put("sourcePreviewToken",token);
+        String first=Json.encode(body);var saved=call("POST","/deals","owner",first,"weekly-first",null);assertEquals(201,saved.statusCode(),saved.body());
+        assertEquals(1,writes.size());assertArrayEquals(original,((coupons.promotions.SourceArtifact)writes.getFirst()[2]).getContent());
+        assertEquals(201,call("POST","/deals","owner",first,"weekly-first",null).statusCode());assertEquals(1,writes.size());
+        body.put("dealId",UUID.randomUUID());body.put("title","Another selected offer");assertEquals(201,call("POST","/deals","owner",Json.encode(body),"weekly-second",null).statusCode());assertEquals(2,writes.size());assertNull(writes.get(1)[2]);
+        assertEquals(((coupons.promotions.AdvertisedDeal)writes.getFirst()[0]).sourceArtifactIds(),((coupons.promotions.AdvertisedDeal)writes.get(1)[0]).sourceArtifactIds());
+        assertThrows(IllegalArgumentException.class,()->WeeklyAdvertisementImport.source(token,"another-owner"));
     }
     @Test void giftCardPayoutRequiresItsRecordedFaceValueRatherThanInferringItFromPoints()throws Exception{
         server.stop(0);var saved=new ArrayList<Object>();PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{if(method.getName().equals("savePayout")){saved.add(args[0]);return null;}throw new AssertionError(method.getName());});server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
@@ -163,12 +222,62 @@ class CouponApiServiceTest {
 
 
 
+    @Test void rewardModeAutomaticallyComparesVerifiedSpendBoostersWithoutRecordingUses()throws Exception {
+        server.stop(0);UUID boosterId=UUID.randomUUID();var rules=Map.of("kind","SPEND_BOOSTER","verified","true","scope","RECEIPT","wcAllowed","NO","rrAllowed","NO","usageLimit","ONCE","spendBasis","BEFORE_COUPONS","giftCardRule","PROHIBITED");
+        var booster=Map.of("id",boosterId,"name","Verified booster","planningRules",rules,"start","2026-11-08","end","2026-11-14","status","AVAILABLE","giftCardValue","5","threshold","4");
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{if(method.getName().equals("workspace"))return Map.of("promotions",List.of(booster),"plans",List.of());throw new AssertionError("Planning must not mutate: "+method.getName());});
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var scenario=Map.of("items",List.of(Map.of("id",UUID.randomUUID(),"name","Product","sale","4","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+        var input=Map.of("candidates",List.of(Map.of("id","wg","name","Walgreens offer","store","Walgreens","scenario",scenario)),"rewards",List.of(),"walgreensCash","0","budget","20","mode","MAX_REWARDS","retailer","Walgreens","day","2026-11-09");
+        var response=call("POST","/shopping-plans/weekly-preview","owner",Json.encode(input),null,null);assertEquals(200,response.statusCode(),response.body());var result=Json.parseObject(response.body());assertTrue(((BigDecimal)result.get("earnings")).compareTo(new BigDecimal("5"))>=0);assertTrue(response.body().contains(boosterId.toString()));assertEquals(0,new BigDecimal("4").compareTo((BigDecimal)result.get("cash")));
+    }
+    @Test void rewardModeEnforcesRetailerAndAcceptsBlankPreference()throws Exception {
+        var scenario=Map.of("items",List.of(Map.of("id",UUID.randomUUID(),"name","Product","sale","4","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+        var input=new LinkedHashMap<String,Object>();input.put("candidates",List.of(Map.of("id","wg","name","Walgreens offer","store","Walgreens","scenario",scenario),Map.of("id","cvs","name","CVS offer","store","CVS","scenario",scenario)));input.put("rewards",List.of());input.put("walgreensCash","0");input.put("budget","20");input.put("mode","MAX_REWARDS");input.put("day","2026-11-09");
+        assertEquals(400,call("POST","/shopping-plans/weekly-preview","owner",Json.encode(input),null,null).statusCode());
+        input.put("retailer","Walgreens");var response=call("POST","/shopping-plans/weekly-preview","owner",Json.encode(input),null,null);assertEquals(200,response.statusCode(),response.body());var steps=ReceiptInput.rows(Json.parseObject(response.body()),"steps",10);assertFalse(steps.isEmpty());assertTrue(steps.stream().allMatch(step->step.get("store").equals("Walgreens")));
+        input.put("mode","");response=call("POST","/shopping-plans/weekly-preview","owner",Json.encode(input),null,null);assertEquals(200,response.statusCode(),response.body());assertEquals(6,ReceiptInput.rows(Json.parseObject(response.body()),"alternatives",10).size());
+    }
+    @Test void weeklyDealCorrectionPreservesSourceAndReloadsThroughWorkspace()throws Exception {
+        server.stop(0);String source="Buy 2 get ∞ 2 FREE 12-Pack Pepsi Products with myWalgreens Shop now";
+        var offer=ReceiptInput.rows(WeeklyAdvertisementImport.interpret(List.of(new WeeklyAdvertisementImport.Page(1,source)),Map.of("retailer","Walgreens"),"Availables.pdf"),"offers",10).getFirst();
+        var pricing=new LinkedHashMap<String,Object>();pricing.put("type","ADVERTISEMENT");pricing.put("productDescription",offer.get("title"));pricing.put("minimumQuantity",1);pricing.put("advertisement",Map.of("draftJson",Json.encode(offer.get("draft")),"fields",offer.get("fields"),"warnings",List.of()));
+        var body=new LinkedHashMap<String,Object>();for(String key:List.of("dealId","title","interpretedTerms","retailer","validFrom","validThrough"))body.put(key,offer.get(key));body.put("pricing",pricing);
+        var initial=DealInput.read(Json.parseObject(Json.encode(body))).deal();var stored=new java.util.concurrent.atomic.AtomicReference<>(initial);
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->switch(method.getName()){
+            case "deal"->stored.get();case "updateDeal"->{stored.set((coupons.promotions.AdvertisedDeal)args[0]);yield stored.get();}
+            case "workspace"->Map.of("deals",List.of(stored.get()),"plans",List.of());case "receiptDrafts","deletedWeeklyDealIds"->List.of();default->throw new AssertionError(method.getName());
+        });
+        server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        body.put("title","Pepsi Products — 12-pack");body.put("interpretedTerms","Attempt to overwrite source");
+        var saved=call("PUT","/deals/"+initial.dealId(),"owner",Json.encode(body),"correct-incomplete","1");assertEquals(200,saved.statusCode(),saved.body());assertEquals(source,stored.get().interpretedTerms());assertEquals(initial.sourceArtifactIds(),stored.get().sourceArtifactIds());
+        var draft=Json.parseObject(stored.get().pricing().advertisement().draftJson());var item=ReceiptInput.rows(draft,"items",10).getFirst();item.put("regular","8.99");item.put("name","Pepsi Products — 12-pack");pricing.put("advertisement",Map.of("draftJson",Json.encode(draft),"fields",offer.get("fields"),"warnings",List.of()));body.put("validFrom","2026-11-08");body.put("validThrough","2026-11-14");
+        saved=call("PUT","/deals/"+initial.dealId(),"owner",Json.encode(body),"correct-price","2");assertEquals(200,saved.statusCode(),saved.body());
+        var loaded=call("GET","/workspace?day=2026-11-09","owner",null,null,null);assertEquals(200,loaded.statusCode(),loaded.body());assertTrue(loaded.body().contains("8.99"));assertEquals(source,stored.get().pricing().advertisement().fields().get("originalText"));
+        var scenario=new LinkedHashMap<>(draft);scenario.put("tax","0");scenario.put("walgreensCashUsed","0");scenario.put("registerRewardsUsed","0");scenario.put("giftCardUsed","0");scenario.put("paymentMethod","CASH");
+        var request=Map.of("candidates",List.of(Map.of("id",initial.dealId(),"name",stored.get().title(),"store","Walgreens","scenario",scenario)),"rewards",List.of(),"walgreensCash","0","budget","20","mode","MAX_REWARDS","retailer","Walgreens","day","2026-11-09");
+        var planned=call("POST","/shopping-plans/weekly-preview","owner",Json.encode(request),null,null);assertEquals(200,planned.statusCode(),planned.body());assertEquals(1,ReceiptInput.rows(Json.parseObject(planned.body()),"steps",10).size());assertEquals(0,new BigDecimal("17.98").compareTo((BigDecimal)Json.parseObject(planned.body()).get("cash")));
+    }
     @Test void weeklyPreviewPreservesRequiredQuantityAndReturnsBudgetShortfall()throws Exception {
         var candidate=WeeklyDealPlannerTest.deal("required","10","1");var line=candidate.scenario().items().getFirst();
         var clientScenario=Map.of("items",List.of(Map.of("id",line.id(),"name",line.name(),"sale","10","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
         var body=Json.object(Map.of("candidates",List.of(Map.of("id",candidate.id(),"name",candidate.name(),"store",candidate.store(),"scenario",clientScenario)),"rewards",List.of(),"walgreensCash","0","budget","5","mode","LOWEST_OOP","day","2026-11-06","requiredItems",List.of(Map.of("candidateId",candidate.id(),"lineId",line.id(),"quantity",2)),"includeOptional",false));
         var response=call("POST","/shopping-plans/weekly-preview","owner",body,null,null);assertEquals(200,response.statusCode(),response.body());
         var result=Json.parseObject(response.body());assertEquals(true,result.get("requirementsMet"));assertEquals(false,result.get("affordable"));assertEquals(0,new BigDecimal("15").compareTo((BigDecimal)result.get("additionalCashNeeded")));
+    }
+    @Test void weeklyPreviewSkipsInvalidOptionalCandidateWithoutRejectingValidRequiredItem()throws Exception {
+        var requiredDeal=WeeklyDealPlannerTest.deal("Walgreens Trash Bag","4","1");var line=requiredDeal.scenario().items().getFirst();
+        var validScenario=Map.of("items",List.of(Map.of("id",line.id(),"name","Walgreens Trash Bag","sale","4","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+        var valid=new LinkedHashMap<String,Object>();valid.put("id",requiredDeal.id());valid.put("name","Walgreens Trash Bag");valid.put("store","Walgreens");valid.put("scenario",validScenario);
+        var invalidOptional=new LinkedHashMap<String,Object>();invalidOptional.put("id","advertisement:incomplete-walmart");invalidOptional.put("name","Incomplete Walmart advertisement");invalidOptional.put("store","Walmart");invalidOptional.put("scenario",null);
+        var input=new LinkedHashMap<String,Object>();input.put("candidates",List.of(valid,invalidOptional));input.put("rewards",List.of());input.put("walgreensCash","0");input.put("walmartCash","0");input.put("budget","1000");input.put("mode","EXPIRING_FIRST");input.put("day","2026-11-12");input.put("requiredItems",List.of(Map.of("candidateId",requiredDeal.id(),"lineId",line.id(),"quantity",3,"name","Walgreens Trash Bag")));input.put("includeOptional",true);input.put("allowRewardsFromEarlierTransactions",true);input.put("useGiftCards",false);input.put("giftCardFirst",false);input.put("boosterId",null);
+        var response=call("POST","/shopping-plans/weekly-preview","owner",Json.object(input),null,null);assertEquals(200,response.statusCode(),response.body());
+        var result=Json.parseObject(response.body());assertEquals(true,result.get("requirementsMet"));assertEquals(1,((List<?>)result.get("steps")).size());assertEquals(0,new BigDecimal("12").compareTo((BigDecimal)result.get("cash")));var required=(List<?>)result.get("requiredItems");assertEquals(3,((BigDecimal)((Map<?,?>)required.getFirst()).get("quantity")).intValueExact());
+    }
+    @Test void weeklyPreviewNamesMissingPriceForRequiredProductInsteadOfGenericScenarioError()throws Exception {
+        UUID line=UUID.randomUUID();var scenario=Map.of("items",List.of(Map.of("id",line,"name","Walgreens Trash Bag","regular","","sale","","quantity",1)),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
+        var input=Map.of("candidates",List.of(Map.of("id","trash","name","Trash bags","store","Walgreens","scenario",scenario)),"rewards",List.of(),"walgreensCash","0","budget","1000","mode","EXPIRING_FIRST","day","2026-11-12","requiredItems",List.of(Map.of("candidateId","trash","lineId",line,"quantity",3,"name","Walgreens Trash Bag")),"includeOptional",true);
+        var response=call("POST","/shopping-plans/weekly-preview","owner",Json.object(input),null,null);assertEquals(200,response.statusCode(),response.body());assertTrue(response.body().contains("purchase price is missing for Walgreens Trash Bag"),response.body());assertFalse(response.body().contains("Complete the planning scenario"),response.body());
     }
     @Test void correctsOriginalRrMetadataWithoutDuplicatingOrChangingEarnedAmount()throws Exception {
         UUID receipt=UUID.randomUUID(),earningId=UUID.randomUUID();
@@ -195,6 +304,24 @@ class CouponApiServiceTest {
         var deletion=call("PUT","/receipts/"+receipt+"/earnings/"+earningId+"/delete","owner","{}","delete-reward","2");assertEquals(200,deletion.statusCode(),deletion.body());var removed=receipts.findById(receipt).orElseThrow().transaction().getObservations().earnings().getFirst();assertEquals(RebateStatus.REJECTED,removed.status());assertEquals(new BigDecimal("50"),removed.confirmed().amount());assertEquals(3,receipts.history().findByReceiptId(receipt).size());
     }
 
+    @Test void automaticCouponEligibilityRequiresVerifiedStatusSkuQuantityStoreDatesAndRestrictions() {
+        var id=UUID.randomUUID();var line=UUID.randomUUID();var day=LocalDate.of(2026,11,9);
+        for(String restriction:List.of("NONE","exclusions","channelRestriction","usageRestriction","qualificationStatus")) {
+            var details=restriction.equals("NONE")?Map.<String,String>of():Map.of(restriction,restriction.equals("qualificationStatus")?"NEEDS_REVIEW":"Recorded restriction");
+            var terms=new CouponTerms(id,CouponTerms.Source.DIGITAL_MANUFACTURER,CouponTerms.Discount.DOLLARS,"Walgreens","Walgreens",null,"Gillette or Venus",List.of("123"),null,null,null,1,null,null,null,null,null,null,details);
+            var coupon=new Coupon("Gillette or Venus",new BigDecimal("4"),2,CouponType.MANUFACTURER,LocalDate.of(2026,11,30),terms);var clipped=new ClippedCoupon(id,"Walgreens",null,coupon,CouponStatus.CLIPPED,LocalDate.of(2026,11,1),1);var available=new ClippedCoupon(id,"Walgreens",null,coupon,CouponStatus.AVAILABLE,null,1);
+            var scenario=new ShoppingPlan.Scenario(List.of(new ShoppingPlan.Line(line,"Venus","123",new BigDecimal("12"),null,2)),List.of(),List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");
+            assertEquals(restriction.equals("NONE")?1:0,ShoppingOfferMatch.match(scenario,"Walgreens",day,List.of(clipped)).size());assertTrue(ShoppingOfferMatch.match(scenario,"Walgreens",day,List.of(available)).isEmpty());assertTrue(ShoppingOfferMatch.match(scenario,"CVS",day,List.of(clipped)).isEmpty());assertTrue(ShoppingOfferMatch.match(scenario,"Walgreens",LocalDate.of(2026,12,1),List.of(clipped)).isEmpty());
+            var quantity=new ShoppingPlan.Scenario(List.of(new ShoppingPlan.Line(line,"Venus","123",new BigDecimal("12"),null,1)),List.of(),List.of(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,"CASH","");assertTrue(ShoppingOfferMatch.match(quantity,"Walgreens",day,List.of(clipped)).isEmpty());
+        }
+    }
+    @Test void availableCouponSelectionCountsAsPlannedDiscountWithoutChangingLibraryStatus() throws Exception {
+        var line=UUID.randomUUID();var coupon=couponEntry(UUID.randomUUID());coupon.put("status","AVAILABLE");coupon.put("clippedOn",null);var available=CouponInput.read(coupon).getFirst();coupons.data.put(available.couponId(),available);
+        var selected=Map.of("id",UUID.randomUUID(),"description","Venus planned offer","amount","4","requiredQuantity",1,"lineIds",List.of(line),"savedCouponId",available.couponId(),"kind","MANUFACTURER","pendingVerification",true);
+        var scenario=Map.of("items",List.of(Map.of("id",line,"name","Venus","regular","12","quantity",1)),"coupons",List.of(selected),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");var planId=UUID.randomUUID();
+        var response=call("POST","/shopping-plans","owner",Json.object(Map.of("planId",planId,"name","Venus idea","retailer","Walgreens","scenario",scenario)),"plan-available-coupon",null);assertEquals(201,response.statusCode(),response.body());var saved=plans.findById(planId).orElseThrow();assertTrue(saved.scenario().coupons().getFirst().pendingVerification());assertEquals(available.couponId(),saved.scenario().coupons().getFirst().savedCouponId());assertEquals(new BigDecimal("8"),saved.scenario().estimate("Walgreens").get("calculatedOop"));assertEquals(CouponStatus.AVAILABLE,coupons.data.get(available.couponId()).status());assertEquals(0,coupons.redemptions);
+        assertEquals(200,call("GET","/shopping-plans/"+planId,"reader",null,null,null).statusCode());
+    }
     @Test void scenarioPreviewAndPlanSaveAreSeparateFromReceiptsAndBalances()throws Exception{
         var line=Map.of("id",UUID.randomUUID().toString(),"name","Scott","regular","5.00","quantity",2);
         var scenario=Map.of("items",List.of(line),"coupons",List.of(),"promotions",List.of(),"tax","0","walgreensCashUsed","0","registerRewardsUsed","0","giftCardUsed","0","paymentMethod","CASH");
@@ -476,7 +603,7 @@ class CouponApiServiceTest {
             var added=change.apply("/accounts/member-rewards",Json.object(Map.of("eventId",bonus.toString(),"provider","P&G Brand","date","2026-10-26","points","75","time","08:17","description","Survey bonus")));assertEquals(201,added.statusCode(),added.body());assertEquals(0,new BigDecimal("0.5").compareTo(platform.memberAmount(bonus)));assertEquals(java.time.LocalTime.of(8,17),new PostgresProviderAccountRepository(connections).findAdjustment(bonus).orElseThrow().time());assertEquals(java.time.LocalTime.of(8,17),platform.memberReward(bonus).get("time"));
             var edited=change.apply("/accounts/member-rewards/"+bonus,Json.object(Map.of("correctionId",UUID.randomUUID().toString(),"amount","1","expectedAmount","0.5","points","150","expectedPoints","75")));assertEquals(200,edited.statusCode(),edited.body());assertEquals(0,BigDecimal.ONE.compareTo(platform.memberAmount(bonus)));
             var deletion=java.net.http.HttpRequest.newBuilder(java.net.URI.create(root+"/accounts/member-rewards/"+bonus)).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key",UUID.randomUUID().toString()).method("DELETE",java.net.http.HttpRequest.BodyPublishers.ofString(Json.object(Map.of("expectedAmount","1","expectedPoints","150","correctionId",UUID.randomUUID().toString())))).build();var deleted=http.send(deletion,java.net.http.HttpResponse.BodyHandlers.ofString());assertEquals(200,deleted.statusCode(),deleted.body());assertEquals(0,platform.memberAmount(bonus).signum());assertEquals(0,((BigDecimal)platform.memberReward(bonus).get("points")).signum());
-            var payout=UUID.randomUUID();var payoutAdded=change.apply("/accounts/payouts",Json.object(Map.of("payoutId",payout.toString(),"provider","P&G Brand","date","2026-10-26","points","75","destination","GIFT_CARD","brand","Target","status","REQUESTED")));assertEquals(201,payoutAdded.statusCode(),payoutAdded.body());
+            var payout=UUID.randomUUID();var payoutAdded=change.apply("/accounts/payouts",Json.object(Map.of("payoutId",payout.toString(),"provider","P&G Brand","date","2026-10-26","points","75","destination","GIFT_CARD","brand","Target","amount","0.5","status","REQUESTED")));assertEquals(201,payoutAdded.statusCode(),payoutAdded.body());
             var payoutRecord=new PostgresProviderAccountRepository(connections).findRedemption(payout).orElseThrow();assertEquals(0,new BigDecimal("0.5").compareTo(payoutRecord.sourceUsdValue()));assertEquals(new BigDecimal("75"),payoutRecord.originalUnitsUsed());assertEquals(ProviderRedemption.Status.REQUESTED,payoutRecord.status());
             var completedRequest=java.net.http.HttpRequest.newBuilder(java.net.URI.create(root+"/accounts/payouts/"+payout)).header("Authorization","Bearer owner").header("Content-Type","application/json").header("Idempotency-Key","payout-complete").header("If-Match-Revision","1").PUT(java.net.http.HttpRequest.BodyPublishers.ofString("{\"status\":\"RECEIVED\",\"date\":\"2026-10-26\"}")).build();var completedResponse=http.send(completedRequest,java.net.http.HttpResponse.BodyHandlers.ofString());assertEquals(200,completedResponse.statusCode(),completedResponse.body());assertEquals(completedResponse.body(),http.send(completedRequest,java.net.http.HttpResponse.BodyHandlers.ofString()).body());assertEquals(ProviderRedemption.Status.RECEIVED,new PostgresProviderAccountRepository(connections).findRedemption(payout).orElseThrow().status());
             var invalidCard=change.apply("/accounts/payouts",Json.object(Map.of("payoutId",UUID.randomUUID().toString(),"provider","Ibotta","amount","5","destination","CREDIT_CARD","number","123456789")));assertEquals(400,invalidCard.statusCode());
@@ -592,6 +719,244 @@ class CouponApiServiceTest {
         assertEquals(409,call("POST",path,"owner",body,"new-key","2").statusCode());
         assertEquals(404,call("POST",path,"owner",Json.object(Map.of("transactionId",UUID.randomUUID(),"redeemedOn","2026-10-04")),"missing","2").statusCode());
     }
+    private Map<String,Object> couponEntry(UUID id) {
+        var f=new LinkedHashMap<String,Object>();
+        f.put("couponId",id.toString());f.put("provider","Walgreens");f.put("description","CREST $2 off 1");f.put("amount","2");
+        f.put("requiredQuantity",BigDecimal.ONE);f.put("couponType","MANUFACTURER");f.put("source","DIGITAL_MANUFACTURER");f.put("discount","DOLLARS");
+        f.put("copies",BigDecimal.ONE);f.put("usageLimit",BigDecimal.ONE);f.put("status","CLIPPED");f.put("clippedOn","2026-11-08");
+        f.put("expirationDate","2026-11-30");f.put("storeRestriction","Walgreens");f.put("originalOfferText","Verified original offer wording");return f;
+    }
+    @Test void additionalPhysicalCopyKeepsOfferTermsButNoRedemptionOrAssignmentHistory() {
+        var fields=couponEntry(UUID.randomUUID());fields.put("source","PAPER_MANUFACTURER");var original=CouponInput.read(fields).getFirst();
+        var receiptId=UUID.randomUUID();var used=new ClippedCoupon(original.couponId(),original.provider(),original.externalId(),original.coupon(),CouponStatus.APPLIED,original.clippedOn(),original.clippedOn(),receiptId,2);
+        var added=CouponInput.addCopy(used,UUID.randomUUID(),LocalDate.of(2026,11,9));assertNotEquals(used.couponId(),added.couponId());assertEquals(used.coupon().getTerms().offerId(),added.coupon().getTerms().offerId());assertEquals(used.coupon(),added.coupon());assertEquals(CouponStatus.CLIPPED,added.status());assertNull(added.redeemedOn());assertNull(added.redeemedTransactionId());assertEquals(1,added.revision());assertEquals(receiptId,used.redeemedTransactionId());
+        assertThrows(IllegalArgumentException.class,()->CouponInput.addCopy(used,used.couponId(),LocalDate.of(2026,11,9)));
+        var digital=CouponInput.read(couponEntry(UUID.randomUUID())).getFirst();assertThrows(IllegalArgumentException.class,()->CouponInput.addCopy(digital,UUID.randomUUID(),LocalDate.of(2026,11,9)));
+    }
+    @Test void addPaperCopyIsAuthenticatedRevisionCheckedIdempotentAndPreservesSource() throws Exception {
+        var fields=couponEntry(UUID.randomUUID());fields.put("source","PAPER_MANUFACTURER");var source=CouponInput.read(fields).getFirst();coupons.data.put(source.couponId(),source);
+        var saves=new java.util.concurrent.atomic.AtomicInteger();
+        PlatformRepository substitute=(PlatformRepository)java.lang.reflect.Proxy.newProxyInstance(PlatformRepository.class.getClassLoader(),new Class<?>[]{PlatformRepository.class},(proxy,method,args)->{
+            if(method.getName().equals("saveCoupons")){@SuppressWarnings("unchecked")var copies=(List<ClippedCoupon>)args[0];saves.incrementAndGet();copies.forEach(c->coupons.save(c,"test"));return null;}throw new AssertionError(method.getName());
+        });
+        server.stop(0);server=new CouponApiService(receipts,plans,coupons,"reader","owner",null,substitute).start(0);base="http://127.0.0.1:"+server.getAddress().getPort();
+        var plan=new ShoppingPlan(UUID.randomUUID(),"Existing plan","Walgreens",LocalDate.of(2026,11,9),List.of(UUID.randomUUID()),1);plans.data.put(plan.planId(),plan);
+        UUID copyId=UUID.randomUUID();String path="/clipped-coupons/"+source.couponId()+"/copies",body=Json.object(Map.of("couponId",copyId,"clippedOn","2026-11-09"));
+        assertEquals(403,call("POST",path,"reader",body,"copy-reader","1").statusCode());assertEquals(409,call("POST",path,"owner",body,"copy-stale","2").statusCode());assertEquals(0,saves.get());
+        var response=call("POST",path,"owner",body,"copy-created","1");assertEquals(201,response.statusCode(),response.body());assertEquals(response.body(),call("POST",path,"owner",body,"copy-created","1").body());assertEquals(1,saves.get());assertEquals(2,coupons.data.size());assertEquals(source,coupons.data.get(source.couponId()));assertEquals(plan,plans.data.get(plan.planId()));assertEquals(0,plans.writes);
+        var copy=coupons.data.get(copyId);assertNotNull(copy);assertEquals(source.coupon().getTerms().offerId(),copy.coupon().getTerms().offerId());assertNull(copy.redeemedTransactionId());
+        var redeemed=call("POST","/clipped-coupons/"+copyId+"/redeem","owner",Json.object(Map.of("transactionId",receipt(),"redeemedOn","2026-11-09")),"use-added-copy","1");assertEquals(200,redeemed.statusCode(),redeemed.body());assertEquals(CouponStatus.CLIPPED,coupons.data.get(source.couponId()).status());assertEquals(CouponStatus.APPLIED,coupons.data.get(copyId).status());
+        var digital=CouponInput.read(couponEntry(UUID.randomUUID())).getFirst();coupons.data.put(digital.couponId(),digital);assertEquals(400,call("POST","/clipped-coupons/"+digital.couponId()+"/copies","owner",Json.object(Map.of("couponId",UUID.randomUUID(),"clippedOn","2026-11-09")),"copy-digital","1").statusCode());assertEquals(1,saves.get());
+    }
+    @Test void couponEditingPreservesIdentityAndOfferGroupAndOriginalEvidence() {
+        var f=couponEntry(UUID.randomUUID());f.put("copies",new BigDecimal("2"));f.put("source","PAPER_MANUFACTURER");
+        var copies=CouponInput.read(f);var old=copies.get(1);var edit=new LinkedHashMap<>(f);edit.put("couponId",old.couponId().toString());edit.put("copies",BigDecimal.ONE);edit.put("description","Corrected description");
+        var changed=CouponInput.edit(old,edit);
+        assertEquals(old.couponId(),changed.couponId());assertEquals(old.coupon().getTerms().offerId(),changed.coupon().getTerms().offerId());assertEquals(2,changed.revision());assertEquals("Verified original offer wording",changed.coupon().getTerms().originalOfferText());
+        edit.put("couponId",UUID.randomUUID().toString());assertThrows(IllegalArgumentException.class,()->CouponInput.edit(old,edit));
+    }
+    @Test void redeemedCouponCannotBeEditedOrRemovedOrReimported() throws Exception {
+        var f=couponEntry(UUID.randomUUID());var old=CouponInput.read(f).get(0);var used=new ClippedCoupon(old.couponId(),old.provider(),old.externalId(),old.coupon(),CouponStatus.APPLIED,old.clippedOn(),old.clippedOn(),UUID.randomUUID(),2);coupons.data.put(used.couponId(),used);
+        assertThrows(IllegalArgumentException.class,()->CouponInput.edit(used,f));
+        assertEquals(400,call("PUT","/clipped-coupons/"+used.couponId(),"owner",Json.object(f),"edit-used","2").statusCode());
+        assertEquals(400,call("POST","/clipped-coupons/"+used.couponId()+"/state","owner",Json.object(Map.of("status","NO_LONGER_AVAILABLE")),"remove-used","2").statusCode());
+        assertEquals(used,coupons.data.get(used.couponId()));
+    }
+    @Test void removeFromClippedKeepsUnknownAvailabilityAndNeverRedeems() throws Exception {
+        var old=CouponInput.read(couponEntry(UUID.randomUUID())).get(0);coupons.data.put(old.couponId(),old);
+        String path="/clipped-coupons/"+old.couponId()+"/state",body=Json.object(Map.of("status","NO_LONGER_AVAILABLE"));
+        var response=call("POST",path,"owner",body,"remove-coupon","1");assertEquals(200,response.statusCode(),response.body());
+        var changed=coupons.data.get(old.couponId());assertEquals(CouponStatus.NO_LONGER_AVAILABLE,changed.status());assertNull(changed.redeemedOn());assertNull(changed.redeemedTransactionId());assertEquals(0,coupons.redemptions);
+        assertEquals(response.body(),call("POST",path,"owner",body,"remove-coupon","1").body());
+        var clipped=call("POST",path,"owner",Json.object(Map.of("status","CLIPPED","clippedOn","2026-11-09")),"reclip","2");assertEquals(200,clipped.statusCode(),clipped.body());assertEquals(CouponStatus.CLIPPED,coupons.data.get(old.couponId()).status());
+    }
+    @Test void manualEditIsAuthenticatedRevisionCheckedAndReplayable() throws Exception {
+        var f=couponEntry(UUID.randomUUID());var old=CouponInput.read(f).get(0);coupons.data.put(old.couponId(),old);f.put("description","CREST corrected");String path="/clipped-coupons/"+old.couponId(),body=Json.object(f);
+        assertEquals(403,call("PUT",path,"reader",body,"reader-edit","1").statusCode());
+        var response=call("PUT",path,"owner",body,"edit-coupon","1");assertEquals(200,response.statusCode(),response.body());assertEquals(response.body(),call("PUT",path,"owner",body,"edit-coupon","1").body());assertEquals(2,coupons.data.get(old.couponId()).revision());
+    }
+    @Test void pdfParserPreservesUnrecognizedEntriesAndDoesNotInventMissingTerms() {
+        var parsed=WalgreensCouponImport.parse("ROC $8 off 3\nManufacturer coupon\nExpires: 11/30/2026\nOffer ID: abc123\n\nUnrecognized complicated offer with no quantity", "sunday.pdf",LocalDate.of(2026,11,8));
+        @SuppressWarnings("unchecked") var entries=(List<Map<String,Object>>)parsed.get("entries");
+        assertTrue(entries.size()>=2);var supported=entries.get(0);assertEquals("8",supported.get("amount"));assertEquals(3,supported.get("requiredQuantity"));assertEquals(LocalDate.of(2026,11,30),supported.get("expirationDate"));
+        var unknown=entries.get(entries.size()-1);assertNull(unknown.get("amount"));assertNull(unknown.get("requiredQuantity"));assertNull(unknown.get("expirationDate"));assertEquals("OTHER",unknown.get("couponType"));assertTrue(unknown.get("originalOfferText").toString().contains("Unrecognized"));assertEquals("CLIPPED",unknown.get("status"));
+    }
+    @Test void invalidPdfExpirationIsKeptUnknownRatherThanAdjusted() {
+        var result=WalgreensCouponImport.parse("CREST $2 off 1\nExpires: 11/31/2026", "weekly.pdf",LocalDate.of(2026,11,8));
+        @SuppressWarnings("unchecked") var entries=(List<Map<String,Object>>)result.get("entries");
+        assertNull(entries.get(0).get("expirationDate"));assertTrue(entries.get(0).get("originalOfferText").toString().contains("11/31/2026"));
+    }
+    @Test void pdfParserKeepsDistinctOfferIdsAndOriginalTerms() {
+        var result=WalgreensCouponImport.parse("Offer ID: a\nCREST $2 off 1\nManufacturer coupon\n\nOffer ID: b\nCREST $2 off 1\nStore coupon", "sunday.pdf",LocalDate.of(2026,11,8));
+        @SuppressWarnings("unchecked") var entries=(List<Map<String,Object>>)result.get("entries");
+        assertEquals(2,entries.size());assertEquals("a",entries.get(0).get("externalId"));assertEquals("b",entries.get(1).get("externalId"));assertNotEquals(entries.get(0).get("couponId"),entries.get(1).get("couponId"));assertEquals("STORE",entries.get(1).get("couponType"));
+    }
+    private byte[] walgreensPdf(boolean printable,String control,String retailer) throws Exception {
+        try(var doc=new org.apache.pdfbox.pdmodel.PDDocument()) {
+            var page=new org.apache.pdfbox.pdmodel.PDPage();doc.addPage(page);
+            try(var content=new org.apache.pdfbox.pdmodel.PDPageContentStream(doc,page)) {
+                content.setFont(new org.apache.pdfbox.pdmodel.font.PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),12);
+                java.util.List<String[]> text=printable?List.of(new String[]{"40","750",retailer},new String[]{"40","725","1 clipped coupons"},new String[]{"40","700","These digital coupons are automatically applied"},new String[]{"123","520","$2 off 1"},new String[]{"236","520","CREST"},new String[]{"236","502","ONE Crest toothpaste"},new String[]{"438","520","Expires"},new String[]{"438","502","11/30/26"},new String[]{"438","484","Manufacturer's Coupon"}):List.of(new String[]{"30","750",retailer},new String[]{"30","725","Print List"},new String[]{"83","520","Expires 11/30/26"},new String[]{"83","502","$2 off 1"},new String[]{"83","484","CREST"},new String[]{"83","466","Remove odors with Crest toothpaste"},new String[]{"83","448","View details"},new String[]{"83","430",control==null?"":control});
+                for(var line:text){content.beginText();content.newLineAtOffset(Float.parseFloat(line[0]),Float.parseFloat(line[1]));content.showText(line[2]);content.endText();}
+            }
+            var out=new java.io.ByteArrayOutputStream();doc.save(out);return out.toByteArray();
+        }
+    }
+    @Test @SuppressWarnings("unchecked") void websiteStatusComesFromExplicitControlsAndNotTheFilenameOrSelectedFormat() throws Exception {
+        for(String control:List.of("Clip","Remove","NO_CONTROL")) {
+            var result=WalgreensCouponImport.preview(walgreensPdf(false,control.equals("NO_CONTROL")?null:control,"Walgreens"),"available.pdf",LocalDate.of(2026,11,8));var row=((List<Map<String,Object>>)result.get("entries")).getFirst();
+            assertEquals(control.equals("Clip")?"AVAILABLE":control.equals("Remove")?"CLIPPED":null,row.get("status"));
+            if(!control.equals("Remove"))assertNull(row.get("clippedOn"));
+            if(control.equals("NO_CONTROL"))assertEquals("UNVERIFIED",((Map<?,?>)row.get("offerDetails")).get("statusEvidence"));
+        }
+        var print=WalgreensCouponImport.preview(walgreensPdf(true,null,"Walgreens"),"available.pdf",LocalDate.of(2026,11,8));assertEquals("PRINTABLE",print.get("layout"));assertEquals("CLIPPED",((List<Map<String,Object>>)print.get("entries")).getFirst().get("status"));
+    }
+    @Test void unsupportedRetailerDocumentsAndMismatchedFormatsAreRejectedWithoutSaving() throws Exception {
+        for(String retailer:List.of("CVS","Target","Costco","Paper coupons"))assertThrows(IllegalArgumentException.class,()->WalgreensCouponImport.preview(walgreensPdf(false,"Clip",retailer),"Walgreens.pdf",LocalDate.of(2026,11,8)));
+        var web=walgreensPdf(false,"Clip","Walgreens");assertThrows(IllegalArgumentException.class,()->WalgreensCouponImport.preview(web,"offers.pdf",LocalDate.of(2026,11,8),"PRINTABLE",image->{throw new AssertionError("Text PDF must not invoke OCR");}));
+        var response=call("POST","/clipped-coupons/walgreens/preview","owner",Json.object(Map.of("source","cvs.pdf","contentBase64",Base64.getEncoder().encodeToString(walgreensPdf(false,"Clip","CVS")),"documentFormat","AUTO")),"unsupported-pdf",null);assertEquals(400,response.statusCode());assertTrue(coupons.data.isEmpty());
+    }
+    @Test void availableImportsRepeatWithoutDuplicatesAndClippingNeedsPositiveObservation() throws Exception {
+        UUID id=UUID.randomUUID();var fields=couponEntry(id);fields.put("status","AVAILABLE");fields.put("clippedOn",null);fields.put("offerDetails",Map.of("importKey","verified-web-offer","statusEvidence","WEBSITE_CLIP_CONTROL"));fields.put("importedOn","2026-11-08");
+        String body=Json.object(Map.of("entries",List.of(fields)));
+        for(String view:List.of("All Coupons","Available","Clipped")){var response=call("POST","/clipped-coupons/walgreens/import","owner",body,"same-pdf-from-"+view,null);assertEquals(200,response.statusCode(),response.body());assertEquals(1,coupons.data.size());assertEquals(CouponStatus.AVAILABLE,coupons.data.get(id).status());assertNull(coupons.data.get(id).clippedOn());}
+        var clipped=new LinkedHashMap<>(fields);clipped.put("status","CLIPPED");clipped.put("clippedOn","2026-11-08");clipped.put("offerDetails",Map.of("importKey","verified-web-offer","statusEvidence","WEBSITE_REMOVE_CONTROL"));var response=call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(clipped))),"verified-clipped-observation",null);assertEquals(200,response.statusCode(),response.body());assertEquals(CouponStatus.CLIPPED,coupons.data.get(id).status());assertEquals(1,coupons.data.size());
+        var availableAgain=call("POST","/clipped-coupons/walgreens/import","owner",body,"available-list-does-not-unclip",null);assertEquals(200,availableAgain.statusCode(),availableAgain.body());assertEquals(CouponStatus.CLIPPED,coupons.data.get(id).status());assertEquals(0,coupons.redemptions);
+    }
+    @Test @SuppressWarnings("unchecked") void websiteValidityRangesAndPageBoundariesKeepOfferFieldsSeparate() {
+        var pages=new ArrayList<WalgreensCouponImport.PageText>();
+        for(int page=1;page<=2;page++) {
+            var glyphs=new ArrayList<WalgreensCouponImport.Glyph>();
+            String[] text={page==1?"Valid 11/8/2026 - 11/21/2026":"Valid 11/8 - 11/21","$2 off 1",page==1?"Purex":"Colgate","Qualifying products...","View Details","Clip"};
+            for(int i=0;i<text.length;i++)glyphs.add(new WalgreensCouponImport.Glyph(30,100+i*20,120,8,false,text[i]));
+            pages.add(new WalgreensCouponImport.PageText(page,glyphs,"Walgreens Available",false));
+        }
+        var result=WalgreensCouponImport.structured(pages,"synthetic-ranges.pdf",LocalDate.of(2026,11,8),"WEB_CARDS",null);var rows=(List<Map<String,Object>>)result.get("entries");assertEquals(2,rows.size());
+        assertEquals(LocalDate.of(2026,11,8),rows.getFirst().get("startsOn"));assertEquals(LocalDate.of(2026,11,21),rows.getFirst().get("expirationDate"));assertEquals(LocalDate.of(2026,11,21),rows.getLast().get("expirationDate"));assertEquals(0L,result.get("needsReview"));assertTrue(rows.getFirst().get("description").toString().startsWith("Purex"));assertTrue(rows.getLast().get("description").toString().startsWith("Colgate"));
+        assertEquals("1",((Map<String,String>)rows.getFirst().get("offerDetails")).get("sourcePage"));assertEquals("2",((Map<String,String>)rows.getLast().get("offerDetails")).get("sourcePage"));
+    }
+    @Test void legacySourceKeyRetainsIdentityAndSummaryReportsVerifiedUpdates() throws Exception {
+        UUID oldId=UUID.randomUUID();var old=couponEntry(oldId);old.put("status","AVAILABLE");old.put("clippedOn",null);old.put("offerDetails",Map.of("importKey","old-control-dependent-key"));
+        assertEquals(200,call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(old))),"legacy-key-first",null).statusCode());
+        var incoming=new LinkedHashMap<>(old);incoming.put("couponId",UUID.randomUUID().toString());incoming.put("offerDetails",Map.of("importKey","canonical-control-independent-key","previousImportKey","old-control-dependent-key"));
+        var same=call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(incoming),"summary",true)),"legacy-key-again",null);assertEquals(200,same.statusCode(),same.body());assertEquals(1,coupons.data.size());assertTrue(coupons.data.containsKey(oldId));assertEquals(new BigDecimal("1"),((Map<?,?>)Json.parseObject(same.body()).get("summary")).get("alreadySaved"));
+        old.put("expectedRevision",coupons.data.get(oldId).revision());old.put("description","Verified corrected offer");var update=call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(old),"summary",true)),"verified-update-summary",null);assertEquals(200,update.statusCode(),update.body());assertEquals(new BigDecimal("1"),((Map<?,?>)Json.parseObject(update.body()).get("summary")).get("updated"));assertEquals(1,coupons.data.size());
+    }
+    @Test @SuppressWarnings("unchecked") void availableWebsiteWithoutPrintListSavesCatalogTermsAndIgnoresClippedStatistics() throws Exception {
+        byte[] bytes;
+        try(var doc=new org.apache.pdfbox.pdmodel.PDDocument()) {
+            var page=new org.apache.pdfbox.pdmodel.PDPage();doc.addPage(page);
+            try(var c=new org.apache.pdfbox.pdmodel.PDPageContentStream(doc,page)) {
+                c.setFont(new org.apache.pdfbox.pdmodel.font.PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),8);
+                String[][] lines={{"30","750","Walgreens Available 197 clipped 3 more coupons"},{"30","520","Expires 11/14/26"},{"30","502","$1.50 off 3"},{"30","484","Angel Soft"},{"30","466","Selected varieties..."},{"30","448","View Details"},{"30","430","Clip Shop"},{"195","520","Expires 11/14/2026"},{"195","502","$1 off 1"},{"195","484","Kotex"},{"195","448","View Details"},{"195","430","Clip"},{"360","520","Expires 11/21/26"},{"360","502","$3 off 2"},{"360","484","Loreal"},{"360","448","View Details"},{"360","430","Clip"}};
+                for(var l:lines){c.beginText();c.newLineAtOffset(Float.parseFloat(l[0]),Float.parseFloat(l[1]));c.showText(l[2]);c.endText();}
+            }
+            var out=new java.io.ByteArrayOutputStream();doc.save(out);bytes=out.toByteArray();
+        }
+        var result=WalgreensCouponImport.preview(bytes,"synthetic-available.pdf",LocalDate.of(2026,11,8),"AVAILABLE",image->{throw new AssertionError("Selectable text must not use OCR");});
+        var rows=(List<Map<String,Object>>)result.get("entries");assertEquals(3,rows.size());assertNull(result.get("declaredCount"));assertEquals("AVAILABLE",result.get("documentKind"));assertEquals(0L,result.get("needsReview"));
+        assertEquals(List.of("1.50","1","3"),rows.stream().map(r->r.get("amount")).toList());assertEquals(List.of(3,1,2),rows.stream().map(r->r.get("requiredQuantity")).toList());
+        assertTrue(rows.stream().allMatch(r->r.get("status").equals("AVAILABLE")&&r.get("clippedOn")==null));
+        for(var r:rows){var d=(Map<String,String>)r.get("offerDetails");assertEquals("NEEDS_REVIEW",d.get("qualificationStatus"));assertEquals("OTHER",r.get("couponType"));assertFalse(r.get("description").toString().contains("Clip"));}
+        String body=Json.object(Map.of("entries",rows,"summary",true));
+        var first=call("POST","/clipped-coupons/walgreens/import","owner",body,"available-auto-first",null);assertEquals(200,first.statusCode(),first.body());assertEquals(new BigDecimal("3"),((Map<?,?>)Json.parseObject(first.body()).get("summary")).get("imported"));
+        var again=call("POST","/clipped-coupons/walgreens/import","owner",body,"available-auto-again",null);assertEquals(200,again.statusCode(),again.body());assertEquals(new BigDecimal("3"),((Map<?,?>)Json.parseObject(again.body()).get("summary")).get("alreadySaved"));assertEquals(3,coupons.data.size());
+    }
+    @Test void textPdfImportUsesPdfboxAndRejectsImageOnlyPdfWithoutOcr() throws Exception {
+        byte[] readable,empty;
+        try(var document=new org.apache.pdfbox.pdmodel.PDDocument()) {
+            var page=new org.apache.pdfbox.pdmodel.PDPage();document.addPage(page);
+            var bytes=new java.io.ByteArrayOutputStream();document.save(bytes);empty=bytes.toByteArray();
+            try(var stream=new org.apache.pdfbox.pdmodel.PDPageContentStream(document,page)) {
+                stream.beginText();stream.setFont(new org.apache.pdfbox.pdmodel.font.PDType1Font(org.apache.pdfbox.pdmodel.font.Standard14Fonts.FontName.HELVETICA),12);stream.newLineAtOffset(40,700);stream.showText("CREST $2 off 1");stream.endText();
+            }
+            bytes.reset();document.save(bytes);readable=bytes.toByteArray();
+        }
+        readable=walgreensPdf(true,null,"Walgreens");
+        assertThrows(IllegalArgumentException.class,()->WalgreensCouponImport.preview(empty,"scan.pdf",LocalDate.now(),image->{throw new java.io.IOException("Local OCR unavailable");}));
+        assertFalse(((List<?>)WalgreensCouponImport.preview(readable,"text.pdf",LocalDate.now()).get("entries")).isEmpty());
+        var response=call("POST","/clipped-coupons/walgreens/preview","owner",Json.object(Map.of("source","text.pdf","contentBase64",Base64.getEncoder().encodeToString(readable))),"preview-pdf",null);assertEquals(200,response.statusCode(),response.body());assertEquals(0,coupons.data.size());assertEquals(0,coupons.redemptions);
+    }
+    @Test void reviewedImportIsReplayableAndNeverChangesAbsentCouponState() throws Exception {
+        var absent=CouponInput.read(couponEntry(UUID.randomUUID())).get(0);coupons.data.put(absent.couponId(),absent);
+        var f=couponEntry(UUID.randomUUID());f.put("externalId","verified-offer");f.put("expectedRevision",BigDecimal.ZERO);f.put("importedOn","2026-11-08");f.put("importSource","weekly.pdf");
+        String body=Json.object(Map.of("entries",List.of(f)));var response=call("POST","/clipped-coupons/walgreens/import","owner",body,"weekly-import",null);assertEquals(200,response.statusCode(),response.body());assertEquals(response.body(),call("POST","/clipped-coupons/walgreens/import","owner",body,"weekly-import",null).body());assertEquals(2,coupons.data.size());assertEquals(absent,coupons.data.get(absent.couponId()));assertEquals(0,coupons.redemptions);
+    }
+    @SuppressWarnings("unchecked") private Map<String,Object> realCouponFixture(String kind) throws Exception {
+        String file="/coupons/walgreens-"+kind+"-redacted.json.gz";String text;
+        try(var resource=getClass().getResourceAsStream(file)){assertNotNull(resource);try(var in=new java.util.zip.GZIPInputStream(resource)){text=new String(in.readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);}}
+        assertFalse(text.contains("Member ID"));assertFalse(text.contains("Slaughter"));assertFalse(text.contains("Hi, Anita"));
+        var f=Json.parseObject(text);var pages=new ArrayList<WalgreensCouponImport.PageText>();
+        for(var p:ReceiptInput.rows(f,"pages",60)) {
+            var glyphs=new ArrayList<WalgreensCouponImport.Glyph>();for(var g:ReceiptInput.rows(p,"glyphs",20000))glyphs.add(new WalgreensCouponImport.Glyph(((BigDecimal)g.get("x")).floatValue(),((BigDecimal)g.get("y")).floatValue(),((BigDecimal)g.get("width")).floatValue(),((BigDecimal)g.get("height")).floatValue(),(Boolean)g.get("bold"),(String)g.get("text")));
+            pages.add(new WalgreensCouponImport.PageText((int)Json.number(p.get("page")),glyphs,"",false));
+        }
+        return WalgreensCouponImport.structured(pages,"real-"+kind+".pdf",LocalDate.of(2026,11,8),String.valueOf(f.get("layout")),kind.equals("available")?null:197);
+    }
+    @Test void newAvailableExpirationDoesNotOverwriteClippedOfferAndRepeatsDoNotDuplicate() throws Exception {
+        var first=couponEntry(UUID.randomUUID());first.put("description","Colgate $1 off 1");first.put("expirationDate","2026-11-14");first.put("offerDetails",Map.of("importKey","colgate-1114"));
+        assertEquals(200,call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(first))),"old-colgate",null).statusCode());
+        var newer=new LinkedHashMap<>(first);newer.put("couponId",UUID.randomUUID().toString());newer.put("expirationDate","2026-11-21");newer.put("status","AVAILABLE");newer.put("clippedOn",null);newer.put("offerDetails",Map.of("importKey","colgate-1121"));
+        for(String key:List.of("new-colgate","new-colgate-repeat")){var response=call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(newer))),key,null);assertEquals(200,response.statusCode(),response.body());}
+        assertEquals(2,coupons.data.size());assertEquals(1,coupons.data.values().stream().filter(c->c.status()==CouponStatus.CLIPPED&&c.coupon().getExpirationDate().equals(LocalDate.of(2026,11,14))).count());assertEquals(1,coupons.data.values().stream().filter(c->c.status()==CouponStatus.AVAILABLE&&c.coupon().getExpirationDate().equals(LocalDate.of(2026,11,21))).count());
+    }
+    @Test @SuppressWarnings("unchecked") void currentYearResolutionUpdatesPriorYearlessIdentityAndKeepsNextYearsOfferSeparate() throws Exception {
+        var rows=(List<Map<String,Object>>)realCouponFixture("available").get("entries");var observed=rows.stream().filter(r->"CURRENT_IMPORT_YEAR".equals(((Map<?,?>)r.get("offerDetails")).get("dateYearBasis"))).findFirst().orElseThrow();
+        var incoming=Json.parseObject(Json.object(observed));var metadata=(Map<String,Object>)incoming.get("offerDetails");var oldId=UUID.randomUUID();var old=new LinkedHashMap<>(incoming);old.put("couponId",oldId.toString());old.put("expirationDate",null);old.put("startsOn",null);old.put("description","My verified correction");old.put("offerDetails",Map.of("importKey",metadata.get("previousImportKey"),"datePrecision","MONTH_DAY_RANGE"));
+        assertEquals(200,call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(old))),"yearless-original",null).statusCode());
+        var response=call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(incoming),"summary",true)),"resolve-current-year",null);assertEquals(200,response.statusCode(),response.body());assertEquals(1,coupons.data.size());assertEquals(observed.get("expirationDate"),coupons.data.get(oldId).coupon().getExpirationDate());assertEquals("My verified correction",coupons.data.get(oldId).coupon().getCouponDescription());
+        var next=new LinkedHashMap<>(incoming);next.put("couponId",UUID.randomUUID().toString());next.put("expirationDate",observed.get("expirationDate").toString().replace("2026","2027"));next.put("startsOn",observed.get("startsOn").toString().replace("2026","2027"));next.put("importedOn","2027-11-08");var nextMetadata=new LinkedHashMap<>(metadata);nextMetadata.put("importKey","new-year-2027-key");next.put("offerDetails",nextMetadata);
+        response=call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(next))),"next-year-new-offer",null);assertEquals(200,response.statusCode(),response.body());assertEquals(2,coupons.data.size());
+    }
+    @Test @SuppressWarnings("unchecked") void actualAvailableElevenPageFixtureImportsAll141OffersWith37RecordedYearlessRanges() throws Exception {
+        var result=realCouponFixture("available");var rows=(List<Map<String,Object>>)result.get("entries");assertEquals(141,rows.size());assertEquals(141,rows.stream().map(r->r.get("couponId")).distinct().count());assertEquals("AVAILABLE",result.get("documentKind"));assertNull(result.get("declaredCount"));assertEquals(0L,result.get("needsReview"));assertEquals(0L,result.get("missingExpiration"));assertEquals(Map.of("DOLLARS",141L),result.get("offerTypes"));
+        String[][] examples={{"Angel Soft","1.50","3","2026-11-14"},{"Kotex","1","1","2026-11-21"},{"Windex","0.50","1","2026-11-21"},{"Colgate","1","1","2026-11-21"},{"Purex","2","1","2026-11-14"},{"L'ORÉAL PARIS","3","2","2026-11-21"}};
+        for(var e:examples){var r=rows.stream().filter(x->x.get("description").toString().startsWith(e[0])&&"1".equals(((Map<?,?>)x.get("offerDetails")).get("sourcePage"))).findFirst().orElseThrow();assertEquals(e[1],r.get("amount"));assertEquals(Integer.parseInt(e[2]),r.get("requiredQuantity"));assertEquals(LocalDate.parse(e[3]),r.get("expirationDate"));}
+        assertTrue(rows.stream().allMatch(r->r.get("status").equals("AVAILABLE")&&r.get("clippedOn")==null));assertEquals(37,rows.stream().filter(r->"CURRENT_IMPORT_YEAR".equals(((Map<?,?>)r.get("offerDetails")).get("dateYearBasis"))).count());
+        var recticare=rows.stream().filter(r->r.get("description").toString().startsWith("RectiCare")).findFirst().orElseThrow();assertEquals(LocalDate.of(2026,10,24),recticare.get("startsOn"));assertEquals(LocalDate.of(2026,11,28),recticare.get("expirationDate"));
+        var valid=rows.stream().filter(r->"PARSED".equals(((Map<?,?>)r.get("offerDetails")).get("reviewStatus"))).toList();assertEquals(141,valid.size());String body=Json.object(Map.of("entries",valid,"summary",true));
+        var first=call("POST","/clipped-coupons/walgreens/import","owner",body,"actual-available-first",null);assertEquals(200,first.statusCode(),first.body());var summary=(Map<?,?>)Json.parseObject(first.body()).get("summary");assertEquals(new BigDecimal("141"),summary.get("imported"));assertEquals(BigDecimal.ZERO,summary.get("updated"));assertEquals(BigDecimal.ZERO,summary.get("failed"));
+        var again=call("POST","/clipped-coupons/walgreens/import","owner",body,"actual-available-again",null);assertEquals(200,again.statusCode(),again.body());assertEquals(new BigDecimal("141"),((Map<?,?>)Json.parseObject(again.body()).get("summary")).get("alreadySaved"));assertEquals(141,coupons.data.size());assertEquals(0,coupons.redemptions);
+    }
+    @Test @SuppressWarnings("unchecked") void actualPrintableFixtureHasAll197OffersAndPreservesStructuredMechanisms() throws Exception {
+        var result=realCouponFixture("printable");var rows=(List<Map<String,Object>>)result.get("entries");assertEquals(197,rows.size());assertEquals(197,rows.stream().map(r->r.get("couponId")).distinct().count());
+        assertEquals(Map.of("DOLLARS",181L,"REBATE",9L,"BOGO",2L,"REWARD",5L),result.get("offerTypes"));assertEquals(0L,result.get("missingExpiration"));assertEquals(2L,result.get("missingQuantity"));
+        assertTrue(rows.stream().allMatch(r->r.get("externalId")==null&&((List<?>)r.get("qualifyingSkus")).isEmpty()));
+        assertTrue(rows.stream().allMatch(r->!((Map<String,String>)r.get("offerDetails")).get("category").isBlank()));
+        var roc=rows.getFirst();assertEquals("RoC® Skincare — $8 off 2",roc.get("description"));assertEquals("8",roc.get("amount"));assertEquals(2,roc.get("requiredQuantity"));
+        var qtip=rows.stream().filter(r->r.get("description").toString().startsWith("Q-Tips")).findFirst().orElseThrow();assertEquals("STORE",qtip.get("couponType"));assertEquals("MONTHLY_SAVINGS_BOOK",((Map<String,String>)qtip.get("offerDetails")).get("issuerType"));
+        for(var r:rows) {
+            var d=(Map<String,String>)r.get("offerDetails");
+            if(r.get("discount").equals("REBATE")){assertNull(r.get("amount"));assertNotNull(d.get("rebateAmount"));}
+            if(r.get("discount").equals("BOGO")){assertNull(r.get("amount"));assertEquals("7.00",d.get("maximumSavings"));assertEquals("1",d.get("freeQuantity"));}
+            if("15".equals(d.get("rewardAmount"))){assertNull(r.get("amount"));assertEquals("45",r.get("minimumPurchase"));assertEquals("ONLINE_ONLY",d.get("channelRestriction"));}
+        }
+        var again=(List<Map<String,Object>>)realCouponFixture("printable").get("entries");assertEquals(rows.stream().map(r->r.get("couponId")).toList(),again.stream().map(r->r.get("couponId")).toList());
+    }
+    @Test @SuppressWarnings("unchecked") void actualWebsiteFixtureHas197CardsAndNeverInventsMissingDatesOrClassifications() throws Exception {
+        var result=realCouponFixture("cards");var rows=(List<Map<String,Object>>)result.get("entries");assertEquals(197,rows.size());assertEquals(197,rows.stream().map(r->r.get("couponId")).distinct().count());assertTrue(rows.stream().allMatch(r->r.get("couponType").equals("OTHER")));assertEquals(0L,result.get("missingExpiration"));
+        assertEquals(Map.of("DOLLARS",181L,"REBATE",9L,"BOGO",2L,"REWARD",5L),result.get("offerTypes"));
+        assertTrue(rows.stream().filter(r->((Map<?,?>)r.get("offerDetails")).containsKey("validityText")).allMatch(r->r.get("expirationDate")!=null));
+        assertEquals(7L,result.get("needsReview"));
+        assertTrue(rows.stream().allMatch(r->"NEEDS_REVIEW".equals(((Map<?,?>)r.get("offerDetails")).get("qualificationStatus"))));
+    }
+    @Test @SuppressWarnings("unchecked") void importingActualPrintableTwiceAddsNoCouponsAndProtectsManualCorrectionsAndRedemption() throws Exception {
+        var entries=(List<Map<String,Object>>)realCouponFixture("printable").get("entries");String body=Json.object(Map.of("entries",entries));
+        var response=call("POST","/clipped-coupons/walgreens/import","owner",body,"actual-import-1",null);assertEquals(200,response.statusCode(),response.body());assertEquals(197,coupons.data.size());
+        var old=coupons.data.values().iterator().next();var fields=new LinkedHashMap<>(entries.stream().filter(r->r.get("couponId").equals(old.couponId())).findFirst().orElseThrow());fields.put("description","Manual correction preserved");var normalizedFields=Json.parseObject(Json.object(fields));var corrected=CouponInput.edit(old,normalizedFields);coupons.data.put(corrected.couponId(),corrected);
+        var other=coupons.data.values().stream().filter(c->!c.couponId().equals(corrected.couponId())).findFirst().orElseThrow();var used=new ClippedCoupon(other.couponId(),other.provider(),other.externalId(),other.coupon(),CouponStatus.APPLIED,other.clippedOn(),other.clippedOn(),UUID.randomUUID(),2);coupons.data.put(used.couponId(),used);
+        var again=call("POST","/clipped-coupons/walgreens/import","owner",body,"actual-import-2",null);assertEquals(200,again.statusCode(),again.body());assertEquals(197,coupons.data.size());assertEquals(corrected,coupons.data.get(corrected.couponId()));assertEquals(used,coupons.data.get(used.couponId()));assertEquals(0,coupons.redemptions);
+    }
+    @Test @SuppressWarnings("unchecked") void nextSundayRefreshUpdatesOnlyImportProvenanceAndLeavesMissingOffersUntouched() throws Exception {
+        var entries=(List<Map<String,Object>>)realCouponFixture("printable").get("entries");var first=entries.getFirst();var absent=entries.get(1);var initial=Json.object(Map.of("entries",List.of(first,absent)));assertEquals(200,call("POST","/clipped-coupons/walgreens/import","owner",initial,"sunday-initial",null).statusCode());
+        var id=(UUID)first.get("couponId");var old=coupons.data.get(id);var fields=Json.parseObject(Json.object(first));fields.put("description","Verified correction");var corrected=CouponInput.edit(old,fields);coupons.data.put(id,corrected);var missing=coupons.data.get(absent.get("couponId"));
+        var next=new LinkedHashMap<>(first);next.put("importedOn","2026-11-15");next.put("importSource","next-sunday.pdf");var response=call("POST","/clipped-coupons/walgreens/import","owner",Json.object(Map.of("entries",List.of(next))),"sunday-next",null);assertEquals(200,response.statusCode(),response.body());
+        var refreshed=coupons.data.get(id);assertEquals(id,refreshed.couponId());assertEquals("Verified correction",refreshed.coupon().getCouponDescription());assertEquals(LocalDate.of(2026,11,15),refreshed.coupon().getTerms().importedOn());assertEquals("2026-11-15",refreshed.coupon().getTerms().offerDetails().get("lastSeenInImport"));assertEquals(CouponStatus.CLIPPED,refreshed.status());assertEquals(missing,coupons.data.get(absent.get("couponId")));assertEquals(0,coupons.redemptions);
+    }
+    @Test void scannedPdfUsesExistingLocalOcrOnlyWhenTextIsUnreadable() throws Exception {
+        byte[] bytes;try(var doc=new org.apache.pdfbox.pdmodel.PDDocument()){doc.addPage(new org.apache.pdfbox.pdmodel.PDPage());var out=new java.io.ByteArrayOutputStream();doc.save(out);bytes=out.toByteArray();}
+        var calls=new java.util.concurrent.atomic.AtomicInteger();var result=WalgreensCouponImport.preview(bytes,"scan.pdf",LocalDate.of(2026,11,8),image->{calls.incrementAndGet();return "Walgreens\n1 clipped coupons\nThese digital coupons are automatically applied\nCREST $2 off 1\nManufacturer coupon\nExpires: 11/30/2026";});assertEquals(1,calls.get());assertEquals(1L,result.get("ocrPages"));assertEquals(1L,result.get("needsReview"));
+    }
     @Test void malformedOversizedUnknownAndMissingKeyRequestsDoNotWrite() throws Exception {
         for(String body:List.of("{", "{\"name\":\"a\",\"name\":\"b\"}", "{\"name\":\"a\",}", "{} trailing"))
             assertEquals(400,call("POST","/shopping-plans","owner",body,UUID.randomUUID().toString(),null).statusCode());
@@ -616,7 +981,8 @@ class CouponApiServiceTest {
         public void save(ClippedCoupon c,String actor){data.put(c.couponId(),c);}
         public Optional<ClippedCoupon> findById(UUID id){return Optional.ofNullable(data.get(id));}
         public List<ClippedCoupon> findByProvider(String p){return data.values().stream().filter(c->c.provider().equals(p)).toList();}
-        public ClippedCoupon update(ClippedCoupon c,long expected,String actor,String reason){throw new UnsupportedOperationException();}
+        public synchronized ClippedCoupon update(ClippedCoupon c,long expected,String actor,String reason){if(data.get(c.couponId()).revision()!=expected)throw new ConcurrentModificationException();data.put(c.couponId(),c);return c;}
+        public synchronized void importReviewed(List<ClippedCoupon> changes,Map<UUID,Long> expected,String actor){for(var c:changes){long stored=data.containsKey(c.couponId())?data.get(c.couponId()).revision():0;if(expected.get(c.couponId())!=stored)throw new ConcurrentModificationException();}changes.forEach(c->data.put(c.couponId(),c));}
         public synchronized ClippedCoupon redeem(UUID id,UUID receipt,LocalDate date,long expected,String actor){var old=data.get(id);if(old.revision()!=expected)throw new ConcurrentModificationException();if(old.status()==CouponStatus.APPLIED)throw new IllegalStateException();var next=new ClippedCoupon(id,old.provider(),old.externalId(),old.coupon(),CouponStatus.APPLIED,old.clippedOn(),date,receipt,expected+1);data.put(id,next);redemptions++;return next;}
     }
 

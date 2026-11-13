@@ -1,5 +1,7 @@
 package coupons.shopping;
 
+import coupons.promotions.CouponType;
+
 import coupons.promotions.AdvertisedDeal;
 import coupons.promotions.ClippedCoupon;
 import coupons.promotions.Coupon;
@@ -81,6 +83,10 @@ public record ShoppingEstimate(BigDecimal regularTotal, BigDecimal saleTotal, Bi
         for (var entry : deals.entrySet()) {
             var d = entry.getValue();
             var terms = d.pricing();
+            if(terms!=null&&terms.type()==DealTerms.Type.ADVERTISEMENT){
+                issues.add("Use Add from Weekly Deals to carry all price and reward terms into a scenario: "+d.title());
+                continue;
+            }
             if (terms == null) {
                 continue;
             }
@@ -255,6 +261,10 @@ public record ShoppingEstimate(BigDecimal regularTotal, BigDecimal saleTotal, Bi
                         continue;
                     }
                     var terms = coupon.coupon().getTerms();
+                    if(terms!=null&&terms.qualificationsNeedReview()){issues.add("Coupon qualifying terms need review: "+coupon.coupon().getCouponDescription());reviewRequired=true;continue;}
+                    if(terms!=null&&(!terms.checkoutDiscount()||coupon.coupon().getCouponType()==CouponType.OTHER)) {
+                        issues.add("Offer requires separate promotion/rebate review, not a checkout deduction: "+coupon.coupon().getCouponDescription());continue;
+                    }
                     if (terms != null && (!within(date, terms.startsOn(), coupon.coupon().getExpirationDate()) || terms.storeRestriction() != null && (retailer == null || !terms.storeRestriction().equalsIgnoreCase(retailer)))) {
                         issues.add("Coupon date/store restriction not met: " + coupon.coupon().getCouponDescription());
                         continue;

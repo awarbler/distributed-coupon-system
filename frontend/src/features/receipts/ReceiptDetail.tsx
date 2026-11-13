@@ -1,6 +1,7 @@
+import { CouponPicker, type CouponSelection } from '../shopping/CouponPicker'
 import { StoreInput, formatReceiptNumber } from '../../components/StoreInput'
 import { ReceiptLineSelector } from './ReceiptLineSelector'
-import { InfoHelp } from '../../components/ui'
+import { DisclosureSummary, InfoHelp } from '../../components/ui'
 import { FormActions } from '../../components/ui'
 import { PackageDetailsFields, packageDetailsBody, GiftCardSelect, ECBUseFields, ReceiptDiscountSale, ReceiptProductTotals } from './ReceiptCreate'
 import { RewardConnection } from '../rewards/RewardsAccounts'
@@ -16,7 +17,7 @@ import { ReceiptRewardForm } from './ReceiptRewardForm'
 import { EarningStatusForm, RewardCreditSourceForm } from './EarningStatusForm'
 import type { History, Receipt, Totals, RewardOffer, RRMatchUse } from '../../types/platform'
 
-export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, offers=[],focusRewardId,focusField,backLabel }: {focusField?:string;focusRewardId?:string;backLabel?:string; offers?:RewardOffer[]; id: string; api: ApiClient; onClose: () => void; writable?: boolean; onChanged?: () => void }) {
+export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, offers=[],focusRewardId,focusField,backLabel,couponCatalog }: {couponCatalog?:import('../../types/platform').Coupon[];focusField?:string;focusRewardId?:string;backLabel?:string; offers?:RewardOffer[]; id: string; api: ApiClient; onClose: () => void; writable?: boolean; onChanged?: () => void }) {
   const [data, setData] = useState<{ receipt: Receipt; history: History[]; totals: Totals } | null>(null)
   const [addingReward,setAddingReward]=useState(false)
   const [receiptAction, setReceiptAction] = useState<'edit' | 'status' | null>(null)
@@ -59,7 +60,7 @@ export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, o
         {r.status === 'ACTIVE' && <button className="secondary" disabled={!writable || !!receiptAction} onClick={() => setReceiptAction('edit')}>Edit receipt</button>}
         <button className="secondary" disabled={!writable || !!receiptAction} onClick={() => setReceiptAction('status')}>{r.status === 'DELETED' ? 'Restore receipt' : 'Delete receipt'}</button>
       </FormActions>
-      {receiptAction === 'edit' && <ReceiptEdit receipt={r} api={api} enabled={writable} onSaved={updated} onCancel={() => setReceiptAction(null)} />}
+      {receiptAction === 'edit' && <ReceiptEdit couponCatalog={couponCatalog} receipt={r} api={api} enabled={writable} onSaved={updated} onCancel={() => setReceiptAction(null)} />}
       {receiptAction === 'status' && <ReceiptStatusAction receipt={r} api={api} enabled={writable} onSaved={updated} onCancel={() => setReceiptAction(null)} />}
 
       <div className="tabs" aria-label="Receipt sections">{['Items', 'Discounts', 'Payments', 'Rewards', 'Totals', 'Evidence', 'History'].map(t => <button key={t} className={t === tab ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>)}</div>
@@ -71,7 +72,7 @@ export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, o
         {e.expirationDate && <p className="muted">Expires {date(e.expirationDate)}</p>}
         {e.details?.payoutDestination && <small>Destination: {label(e.details.payoutDestination)} (context only)</small>}
         {e.details?.submissionReference && <small>Reference: {e.details.submissionReference}</small>}
-        {data.totals.qualification?.filter(q=>q.earningId===e.earningId).map(q=><details key={q.earningId}><summary>Optional qualification details</summary><small>Qualification: {q.review.status} · {q.review.qualifyingQuantity} units · {money(q.review.qualifyingSpend)} · {q.review.reason}</small></details>)}
+        {data.totals.qualification?.filter(q=>q.earningId===e.earningId).map(q=><details key={q.earningId}><DisclosureSummary>Optional qualification details</DisclosureSummary><small>Qualification: {q.review.status} · {q.review.qualifyingQuantity} units · {money(q.review.qualifyingSpend)} · {q.review.reason}</small></details>)}
         {!e.confirmed && e.expected && <small>Expected: {e.expected.amount} {e.expected.kind === 'POINTS' ? 'points' : e.expected.currency}</small>}
         {e.recordedLifecycle && <small className="wrap">{e.recordedLifecycle}</small>}</div><div className="receipt-reward-value"><strong>{e.confirmed ? e.confirmed.kind==='POINTS' ? `${e.confirmed.amount} points` : e.confirmed.currency==='USD' ? money(e.confirmed.amount) : `${e.confirmed.amount} ${e.confirmed.currency}` : 'Not confirmed'}</strong>
         {data.totals.benefitObservations?.filter(b => b.earningId === e.earningId && b.valuation).map(b => <small key={b.earningId}>Dollar value: {money(b.valuation?.amount)}</small>)}
@@ -100,9 +101,11 @@ export function ReceiptDetail({ id, api, onClose, writable = false, onChanged, o
 }
 
 
-type Props = { receipt: Receipt; api: ApiClient; enabled: boolean; onSaved: () => void; onCancel: () => void }
+type Props = { couponCatalog?:import('../../types/platform').Coupon[]; receipt: Receipt; api: ApiClient; enabled: boolean; onSaved: () => void; onCancel: () => void }
 const nullable = (value: string) => value.trim() || null
-export function ReceiptEdit({ receipt, api, enabled, onSaved, onCancel }: Props) {
+export function ReceiptEdit({ receipt, api, enabled, onSaved, onCancel, couponCatalog }: Props) {
+  const [loadedCoupons,setLoadedCoupons]=useState<import('../../types/platform').Coupon[]>([])
+  useEffect(()=>{if(couponCatalog)return;const controller=new AbortController();void api.workspace(controller.signal).then(w=>setLoadedCoupons(w.coupons)).catch(()=>{});return()=>controller.abort()},[api,couponCatalog])
   const m = receipt.metadata, contents = receipt.contents
   const pricingReady = receipt.editDiscounts !== undefined
   const [receiptKind,setReceiptKind]=useState(m?.receiptKind??'PURCHASE')
@@ -148,6 +151,18 @@ export function ReceiptEdit({ receipt, api, enabled, onSaved, onCancel }: Props)
   function field(name: string, value: string, change: (value: string) => void, required = false, type = 'text', full = false) {
     return <label className={full ? 'field-full' : undefined}>{name}{full ? <AutoSizeTextArea autoFocus={focusName===name} aria-label={name} value={value} required={required} onChange={e => change(e.target.value)} /> : <input autoFocus={focusName===name} aria-label={name} value={value} type={type} required={required} onChange={e => change(e.target.value)} />}</label>
   }
+  function confirmUsed({coupon:c,kind,lineIds,replacementId}:CouponSelection) {
+    if(discounts.some(d=>d.applicationId===c.couponId))return
+    const candidates=discounts.filter(d=>d.kind!=='SALE_PROMOTION'&&d.printedLabel===c.description&&d.appliedAmount===c.discountAmount)
+    if(!replacementId&&candidates.length>1){setError('Choose which existing printed discount to link.');return}
+    const old=replacementId==='NEW'?undefined:replacementId?discounts.find(d=>d.applicationId===replacementId):candidates[0]
+    const linked=old?{...old,applicationId:c.couponId}:{applicationId:c.couponId,printedLabel:c.description,appliedAmount:c.terms?.discount==='PERCENT'?'':c.discountAmount||'',kind,lineItemIds:lineIds,wholeReceipt:false,shared:lineIds.length!==1,qualifyingQuantities:Object.fromEntries(lineIds.map(id=>[id,items.find(i=>i.lineItemId===id)?.quantity||'1'])),requiredQuantity:c.requiredQuantity||null}
+    setDiscounts([...discounts.filter(d=>d!==old),linked]);setComplete('UNKNOWN')
+  }
+  function couponPicker(item?:typeof items[number]) {
+    const relevant=discounts.filter(d=>!item||d.wholeReceipt||d.lineItemIds.includes(item.lineItemId))
+    return <CouponPicker api={api} mode="RECEIPT" coupons={couponCatalog||loadedCoupons} store={retailer} day={day} products={(item?[item]:items).map(i=>({id:i.lineItemId,name:i.productName,sku:i.productCode,quantity:i.quantity}))} selectedIds={relevant.map(d=>d.applicationId).filter(id=>(couponCatalog||loadedCoupons).some(c=>c.couponId===id))} onSelect={confirmUsed} onRemove={id=>setDiscounts(discounts.map(d=>d.applicationId===id?{...d,applicationId:crypto.randomUUID()}:d))} discountOptions={relevant.filter(d=>d.kind!=='SALE_PROMOTION'&&!(couponCatalog||loadedCoupons).some(c=>c.couponId===d.applicationId)).map(d=>({id:d.applicationId,label:d.printedLabel,amount:d.appliedAmount}))}/>
+  }
   async function preview() {
     setBusy(true); setError('')
     try {
@@ -190,18 +205,19 @@ export function ReceiptEdit({ receipt, api, enabled, onSaved, onCancel }: Props)
 
       </div><InfoHelp>Enter regular unit prices and record myWalgreens savings as a store promotion below. Existing recorded prices and attached discounts are preserved until explicitly corrected.</InfoHelp>
       <PackageDetailsFields index={i+1} value={item.packageDetails} onChange={value=>setItems(rows=>rows.map(row=>row.lineItemId===item.lineItemId?{...row,packageDetails:value}:row))}/>
+      {couponPicker(item)}
       {discounts.filter(d => d.lineItemIds.length === 1 && d.lineItemIds[0] === item.lineItemId && !d.wholeReceipt && !d.shared).map((d, n) => <ItemDiscountFields key={d.applicationId} name={`Product ${i + 1} discount ${n + 1}`} autoFocus={focusDiscount===d.applicationId} productDescription={item.productName} discount={{ id: d.applicationId, label: d.printedLabel, amount: d.appliedAmount, kind: d.kind, requiredQuantity:d.requiredQuantity }} onChange={value => setDiscounts(discounts.map(row => row.applicationId === d.applicationId ? { ...row, printedLabel: value.label, appliedAmount: value.amount, kind: value.kind, requiredQuantity:value.requiredQuantity } : row))} onRemove={() => setDiscounts(discounts.filter(row => row.applicationId !== d.applicationId))} />)}
       {discounts.filter(d=>!d.wholeReceipt && d.lineItemIds.length===1 && d.lineItemIds[0]===item.lineItemId).map(d=><button key={d.applicationId} type="button" className="text-button" onClick={()=>moveToRR('COUPON_APPLIED',d.applicationId,d.appliedAmount,d.printedLabel)}>Move {d.printedLabel||'product discount'} to RR used</button>)}
       <ReceiptProductTotals api={api} line={{id:item.lineItemId,description:item.productName,sku:item.productCode,regular:item.regularUnitPrice,sale:item.enteredSalePrice.trim()||(!pricingReady||receipt.preservePriceLineIds?.includes(item.lineItemId)?item.saleUnitPrice:undefined),quantity:item.quantity}} discounts={discounts.filter(d=>!d.wholeReceipt&&d.lineItemIds.length===1&&d.lineItemIds[0]===item.lineItemId).map(d=>({id:d.applicationId,label:d.printedLabel,amount:d.appliedAmount,kind:d.kind,requiredQuantity:d.requiredQuantity,quantities:{[item.lineItemId]:item.quantity}}))}/>
       <button type="button" className="secondary" onClick={() => setDiscounts([...discounts, { applicationId: focusedDiscountId(), printedLabel: productDiscountLabel(item.productName, 'SALE_PROMOTION'), appliedAmount: '', kind: 'SALE_PROMOTION', lineItemIds: [item.lineItemId], wholeReceipt: false, shared: false, qualifyingQuantities: {} }])}>Add discount to product {i + 1}</button><button type="button" className="text-button" onClick={() => setItems(items.filter((_, j) => i !== j))}>Remove product {i + 1}</button></div>)}
       <button type="button" className="secondary" onClick={() => {setFocusName(`Product ${items.length+1}`);setItems([...items, { lineItemId: crypto.randomUUID(), packageDetails:undefined, productName: '', productCode: '', regularUnitPrice: '', saleUnitPrice: '', enteredSalePrice:'', quantity: '1' }]);}}>Add product</button>
-      <h4>Shared or receipt-wide discounts</h4><div className="information-box" role="note">Applies to the selected products, or all products when Whole Receipt is selected. Recalculate after changing prices, quantities or selection. Do not also enter the same sale on a product.</div>{discounts.filter(d => d.wholeReceipt || d.lineItemIds.length !== 1 || d.shared).map((discount, i) => <div className="receipt-input-row" key={discount.applicationId}><ReceiptLineSelector name={`Discount products ${i+1}`} lines={items.map(l=>({id:l.lineItemId,description:l.productName,sku:l.productCode,quantity:l.quantity,price:l.enteredSalePrice.trim()||l.regularUnitPrice||l.saleUnitPrice}))} value={discount.wholeReceipt?{}:Object.fromEntries(discount.lineItemIds.map(id=>[id,String((discount.qualifyingQuantities as Record<string,string|number>)[id]||items.find(l=>l.lineItemId===id)?.quantity||'1')]))} onChange={quantities=>setDiscounts(current=>current.map(d=>d.applicationId===discount.applicationId?{...d,shared:true,wholeReceipt:!Object.keys(quantities).length,lineItemIds:Object.keys(quantities),qualifyingQuantities:quantities}:d))}/><div className="form-grid">
+      <h4>Shared or receipt-wide discounts</h4>{couponPicker()}<div className="information-box" role="note">Applies to the selected products, or all products when Whole Receipt is selected. Recalculate after changing prices, quantities or selection. Do not also enter the same sale on a product.</div>{discounts.filter(d => d.wholeReceipt || d.lineItemIds.length !== 1 || d.shared).map((discount, i) => <div className="receipt-input-row" key={discount.applicationId}><ReceiptLineSelector name={`Discount products ${i+1}`} lines={items.map(l=>({id:l.lineItemId,description:l.productName,sku:l.productCode,quantity:l.quantity,price:l.enteredSalePrice.trim()||l.regularUnitPrice||l.saleUnitPrice}))} value={discount.wholeReceipt?{}:Object.fromEntries(discount.lineItemIds.map(id=>[id,String((discount.qualifyingQuantities as Record<string,string|number>)[id]||items.find(l=>l.lineItemId===id)?.quantity||'1')]))} onChange={quantities=>setDiscounts(current=>current.map(d=>d.applicationId===discount.applicationId?{...d,shared:true,wholeReceipt:!Object.keys(quantities).length,lineItemIds:Object.keys(quantities),qualifyingQuantities:quantities}:d))}/><div className="form-grid">
         {field(`Discount label ${i + 1}`, discount.printedLabel, value => setDiscounts(discounts.map(r => r.applicationId === discount.applicationId ? { ...r, printedLabel: value } : r)), !!discount.appliedAmount.trim())}
         <ReceiptDiscountSale api={api} items={items.filter(l=>discount.wholeReceipt||discount.lineItemIds.includes(l.lineItemId)).map(l=>({id:l.lineItemId,name:l.productName,sku:l.productCode,regular:'',sale:l.enteredSalePrice.trim()||l.regularUnitPrice||l.saleUnitPrice,quantity:(discount.qualifyingQuantities as Record<string,string>)[l.lineItemId]||l.quantity}))} onCalculated={(amount,name)=>setDiscounts(current=>current.map(d=>d.applicationId===discount.applicationId?{...d,appliedAmount:amount,kind:'SALE_PROMOTION',printedLabel:d.printedLabel||name}:d))}/>
         {field(`Discount amount ${i + 1}`, discount.appliedAmount, value => setDiscounts(discounts.map(r => r.applicationId === discount.applicationId ? { ...r, appliedAmount: value } : r)), !!discount.printedLabel.trim())}
       </div><button type="button" className="text-button" onClick={() => setDiscounts(discounts.filter(row => row.applicationId !== discount.applicationId))}>Delete</button><button type="button" className="text-button" onClick={()=>moveToRR('COUPON_APPLIED',discount.applicationId,discount.appliedAmount,discount.printedLabel)}>Move discount {i + 1} to RR used</button></div>)}
       <button type="button" className="secondary" onClick={() => {setFocusName(`Discount label ${discounts.filter(d=>d.wholeReceipt || d.lineItemIds.length!==1).length+1}`);setDiscounts([...discounts, { applicationId: focusedDiscountId(), printedLabel: '', appliedAmount: '', kind: 'OTHER', lineItemIds: [], wholeReceipt: true, shared: true, qualifyingQuantities: {} }]);}}>Add receipt-wide discount</button>
-      {isWalgreensStore(retailer)&&<details open><summary>Register Rewards used · {rrUses.length} coupon{rrUses.length===1?'':'s'} — Show / Hide</summary><p className="muted">RR used is a checkout deduction, separate from cash/card and manufacturer coupons. Enter each coupon once. Save the receipt, then use the Rewards tab to select and match an available unused RR.</p>
+      {isWalgreensStore(retailer)&&<details open><DisclosureSummary>Register Rewards used · {rrUses.length} coupon{rrUses.length===1?'':'s'} — Show / Hide</DisclosureSummary><p className="muted">RR used is a checkout deduction, separate from cash/card and manufacturer coupons. Enter each coupon once. Save the receipt, then use the Rewards tab to select and match an available unused RR.</p>
       <label>When moving a discount/payment to RR used<select value={rrTarget} onChange={e=>setRRTarget(e.target.value)}><option value="new">Create a separate RR use</option>{rrUses.map((r,i)=><option key={r.eventId} value={r.eventId}>Already included in RR use {i+1}: {r.amount} — {r.recordedDescription}</option>)}</select></label><p className="muted">Choose an existing use only if the discount/payment is a duplicate record of that same coupon. Amounts must match; review the resulting totals.</p>
       {rrUses.map((r,i)=><div className="receipt-input-row" key={r.eventId}><div className="form-grid">{field(`RR used amount ${i+1}`,r.amount,value=>setRRUses(rrUses.map(row=>row.eventId===r.eventId?{...row,amount:value}:row)),true)}{field(`RR used description ${i+1}`,r.recordedDescription,value=>setRRUses(rrUses.map(row=>row.eventId===r.eventId?{...row,recordedDescription:value}:row)),true)}</div><button type="button" className="text-button" onClick={()=>{setRRUses(rrUses.filter(row=>row.eventId!==r.eventId));if(rrTarget===r.eventId)setRRTarget('new')}}>Remove RR use {i+1}</button></div>)}
       <button type="button" className="secondary" onClick={()=>setRRUses([...rrUses,{eventId:crypto.randomUUID(),amount:'',recordedDescription:'Register Rewards used',notes:''}])}>Add RR used</button></details>}

@@ -135,6 +135,18 @@ final class ShoppingNoteInput {
         normalizedText=pattern("(?im)(\\$"+AMOUNT+")\\s*\\n\\s*(RR|register rewards?|in[ -]?store rewards?)\\b").matcher(normalizedText).replaceAll("$1 $3");
         normalizedText=pattern("(?im)(\\bRR|register rewards?)\\s*\\n\\s*(WYB\\s*[1-9][0-9]*)\\b").matcher(normalizedText).replaceAll("$1 $2");
         normalizedText=pattern("(?im)(\\$"+AMOUNT+"\\s+off)\\s*\\n\\s*([1-9][0-9]*)\\s*$").matcher(normalizedText).replaceAll("$1 $3");
+        // Plain-language deal summaries often separate the recognizable product,
+        // package, regular price, bundle price and completed unit price by line.
+        // Rejoin that one offer before the ordinary conservative line parser runs.
+        var plainOffer=pattern("(?ms)^([^\\n$]+)\\n([0-9]+\\s*(?:count|ct|oz|fl oz|lb|rolls?|loads?))\\nregular\\s+price\\s*:\\s*\\$"+AMOUNT+"\\nadvertised\\s+pricing\\s*:\\s*([1-9][0-9]*)\\s*/\\s*\\$"+AMOUNT+"\\s+or\\s+1\\s*/\\s*\\$"+AMOUNT+"\\noffer\\s+completed\\s*:\\s*\\$"+AMOUNT+"\\s+each\\n(\\$?"+AMOUNT+"\\s+off\\s+[1-9][0-9]*[^\\n]*)\\n(\\$?"+AMOUNT+"\\s+off\\s+[1-9][0-9]*[^\\n]*)\\s*$").matcher(normalizedText);
+        boolean plainLanguageOffer=plainOffer.matches();
+        if(plainLanguageOffer){
+            String name=plainOffer.group(1).trim()+" · "+plainOffer.group(2).trim();int count=Integer.parseInt(plainOffer.group(4));
+            BigDecimal bundle=new BigDecimal(plainOffer.group(5)),unit=new BigDecimal(plainOffer.group(7));
+            normalizedText=name+" regular price $"+plainOffer.group(3)+"\nBuy "+count+" : "+count+" x "+unit.toPlainString()+" = "+bundle.toPlainString()+"\n"+plainOffer.group(8)+"\n"+plainOffer.group(10);
+            unresolved.add("Advertised pricing also lists 1 for $"+plainOffer.group(6)+". The completed buy-"+count+" unit price was selected; preserve and verify the alternate price.");
+            unresolved.add("The recorded coupons require more products than the buy-"+count+" example. Coupon quantity and stacking eligibility must be confirmed; the arithmetic scenario is preserved.");
+        }
         // Poster summaries put a combined price below a quantity, followed by a DQ deduction.
         // Keep this separate from ordinary "2 products $5 each" notes.
         var posterTotal=pattern("(?m)^([1-9][0-9]*)\\s+([\\p{L}‘’“”'\\\"][^\\n$]*)\\n\\s*\\$"+AMOUNT+"\\s*\\n(?=\\s*[-−–—]\\s*\\$?"+AMOUNT+"\\s*DQ\\b)").matcher(normalizedText);
@@ -155,6 +167,7 @@ final class ShoppingNoteInput {
         for(String line:normalizedText.split("\\R")) {
             if(line.isEmpty())continue;
             var purpose=purpose(line);boolean productLine=purpose==LinePurpose.PRODUCT;
+            if(pattern("^(?:regular|sale)\\s*(?:price)?\\s*:?\\s*\\$").matcher(line).find()){unresolved.add("Price labels do not identify a product: "+line+". Enter the product name and attach these prices in the editor.");continue;}
             if(purpose==LinePurpose.CHANNEL) {
                 purchaseChannel=line.toLowerCase(Locale.ROOT).startsWith("online")?"ONLINE":"IN_STORE";continue;
             }
@@ -447,7 +460,7 @@ final class ShoppingNoteInput {
             }
             var coupon=COUPON.matcher(line);
             if(current!=null&&coupon.matches()) {
-                coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,new BigDecimal(coupon.group(1)),Integer.parseInt(coupon.group(2)),List.of(current),null));continue;
+                coupons.add(new ShoppingPlan.ScenarioCoupon(UUID.randomUUID(),line,new BigDecimal(coupon.group(1)),Integer.parseInt(coupon.group(2)),List.of(current),null,"MANUFACTURER",false,plainLanguageOffer));continue;
             }
             if(line.matches("(?i)^(?:get|earn|receive)\\s*:?$")){rewardHeading=true;continue;}
             Matcher reward=REWARD.matcher(line),isolated=REWARD_VALUE.matcher(line);
@@ -491,7 +504,7 @@ final class ShoppingNoteInput {
         }
         if(pendingBuyReward!=null)unresolved.add(pendingBuyReward);
         if(items.size()>100||coupons.size()>100||promotions.size()>100)throw new IllegalArgumentException("Import at most 100 items, coupons and rewards per plan.");
-        if(purchaseChannel!=null)source=source==null?new ShoppingPlan.PlanningSource(text,null,null,List.of(),purchaseChannel):new ShoppingPlan.PlanningSource(source.text(),source.mediaType(),source.contentBase64(),source.earlier(),purchaseChannel);
+        if(purchaseChannel!=null)source=source==null?new ShoppingPlan.PlanningSource(text,null,null,List.of(),purchaseChannel):new ShoppingPlan.PlanningSource(source.text(),source.mediaType(),source.contentBase64(),source.earlier(),purchaseChannel,source.advertisedDealIds());
         var result=new LinkedHashMap<String,Object>();result.put("advertisedBundle",advertisedBundle);result.put("walgreensCashUsed",walgreensCashUsed);result.put("payments",payments);result.put("items",items);result.put("coupons",coupons);result.put("promotions",promotions);result.put("unresolved",unresolved);result.put("source",source);
         var store=pattern("(?m)^\\s*(?:in[- ]store\\s+deal\\s+at\\s+)(Walgreens|CVS|Walmart|Target)\\b|^\\s*(Walgreens|CVS|Walmart|Target)\\s+(?:weekly\\s+deals|deals)\\b").matcher(normalizedText);
         result.put("purchaseChannel",purchaseChannel);

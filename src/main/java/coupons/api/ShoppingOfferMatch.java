@@ -2,6 +2,7 @@ package coupons.api;
 
 import coupons.promotions.ClippedCoupon;
 import coupons.promotions.CouponStatus;
+import coupons.promotions.CouponType;
 import coupons.promotions.CouponTerms;
 import coupons.shopping.ShoppingPlan;
 
@@ -19,9 +20,10 @@ final class ShoppingOfferMatch {
         @SuppressWarnings("unchecked") var lines=(List<Map<String,Object>>)totals.get("items");
         for(var clipped:coupons) {
             var c=clipped.coupon();var terms=c.getTerms();
-            if(clipped.clippedOn()!=null&&day.isBefore(clipped.clippedOn())||clipped.status()!=CouponStatus.CLIPPED||terms==null||terms.discount()!=CouponTerms.Discount.DOLLARS||terms.qualifyingSkus().isEmpty()
+            if(clipped.clippedOn()!=null&&day.isBefore(clipped.clippedOn())||clipped.status()!=CouponStatus.CLIPPED||c.getCouponType()==CouponType.OTHER||terms==null||terms.discount()!=CouponTerms.Discount.DOLLARS||terms.qualificationsNeedReview()||terms.qualifyingSkus().isEmpty()
                 ||c.getExpirationDate()==null||day.isAfter(c.getExpirationDate())||terms.startsOn()!=null&&day.isBefore(terms.startsOn())
                 ||present(terms.accountRestriction())||present(terms.conditions())||present(terms.sizeOrVariety())
+                ||present(terms.offerDetails().get("exclusions"))||present(terms.offerDetails().get("channelRestriction"))||present(terms.offerDetails().get("usageRestriction"))
                 ||present(terms.storeRestriction())&&(store==null||!terms.storeRestriction().trim().equalsIgnoreCase(store.trim())))continue;
             var eligible=scenario.items().stream().filter(l->l.sku()!=null&&terms.qualifyingSkus().contains(l.sku())).toList();
             long quantity=eligible.stream().mapToLong(ShoppingPlan.Line::quantity).sum();

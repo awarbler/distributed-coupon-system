@@ -1,7 +1,7 @@
 import { createPortal } from 'react-dom'
 import { useEffect, useRef, useLayoutEffect, useState, useId, Children, isValidElement, cloneElement } from 'react'
-import type { ReactNode, TextareaHTMLAttributes } from 'react'
-import { ArrowRight, CircleAlert, Inbox, X } from 'lucide-react'
+import type { ComponentPropsWithoutRef, ReactNode, TextareaHTMLAttributes } from 'react'
+import { ArrowRight, ChevronDown, ChevronUp, ChevronRight, CircleAlert, Inbox, X } from 'lucide-react'
 
 export function InfoHelp({children}:{children:ReactNode}) {
  return <SectionHelp title="More information" label="More information">{children}</SectionHelp>
@@ -117,6 +117,24 @@ export function AutoSizeTextArea(props: TextareaHTMLAttributes<HTMLTextAreaEleme
 }
 
 
+export function DisclosureArrow({expanded,className=''}:{expanded?:boolean;className?:string}) {
+ return <ChevronRight className={`disclosure-arrow ${className}`} width={16} height={16} size={16} aria-hidden="true" focusable="false" style={expanded===undefined?undefined:{transform:expanded?'rotate(90deg)':'rotate(0deg)'}}/>
+}
+export function DisclosureSummary({children,className='',...props}:ComponentPropsWithoutRef<'summary'>) {
+ const title=Children.toArray(children).filter(child=>{
+  if(!isValidElement<{className?:string}>(child))return true
+  if(child.type===ChevronDown||child.type===ChevronUp||child.type===ChevronRight)return false
+  return !child.props.className?.toLowerCase().includes('arrow')
+ })
+ return <summary {...props} className={`disclosure-summary ${className}`}><DisclosureArrow/><div className="disclosure-title">{title}</div></summary>
+}
 export function Disclosure({title,children,className='',open=true}:{title:ReactNode;children:ReactNode;className?:string;open?:boolean}) {
- return <details open={open} className={`section-disclosure ${className}`}><summary><span className="disclosure-arrow" aria-hidden="true"/><div className="disclosure-title">{title}</div></summary><div className="disclosure-body">{children}</div></details>
+ return <details open={open} className={`section-disclosure ${className}`}><DisclosureSummary>{title}</DisclosureSummary><div className="disclosure-body">{children}</div></details>
+}
+
+/** Search stays visible; each caller owns its page-specific filter state. */
+export function SearchFilterPanel({search,children,active=false,onClear,className='',title,help}:{search:ReactNode;children:ReactNode;active?:boolean;onClear?:()=>void;className?:string;title?:ReactNode;help?:ReactNode}) {
+ const accountActivity=className.split(' ').includes('account-filter-panel')
+ const accountHelp=<><p>This narrows the activity list by transaction date, promotion details, receipt number, or activity type—not coupon expiration dates.</p><p>Filters narrow the list, not the balances.</p></>
+ return <Panel className={`search-filter-panel ${className}`} title={title??(accountActivity?'Dates & Reward Search':undefined)} help={help??(accountActivity?accountHelp:undefined)}><div className="search-filter-search">{search}</div><Disclosure className="more-filters" title="More Filters" open={false}>{children}</Disclosure>{active&&onClear&&<button type="button" className="secondary clear-filters" onClick={onClear}>Clear Filters</button>}</Panel>
 }

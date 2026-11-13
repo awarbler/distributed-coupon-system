@@ -54,7 +54,7 @@ public class Coupon implements java.io.Serializable {
             );
         }
 
-        if (discountAmount == null && (terms==null || terms.discount()!=CouponTerms.Discount.FREE_ITEM)) { // Reject a missing discount amount.
+        if (discountAmount == null && (terms==null || terms.discount()!=CouponTerms.Discount.FREE_ITEM && terms.checkoutDiscount())) { // Reject a missing discount amount.
             throw new IllegalArgumentException( // Report invalid coupon data to the caller.
                     "Coupon discount cannot be null." // Explain the violated rule.
             );
@@ -65,7 +65,7 @@ public class Coupon implements java.io.Serializable {
             );
         }
 
-        if (requiredQuantity < 1) { // Require at least one qualifying product.
+        if (requiredQuantity < 0 || requiredQuantity==0 && (terms==null || terms.checkoutDiscount())) { // Require at least one qualifying product.
             throw new IllegalArgumentException( // Reject an impossible coupon quantity.
                     "Required quantity must be at least 1." // Explain the violated rule.
             );

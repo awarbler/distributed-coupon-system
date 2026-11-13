@@ -200,7 +200,7 @@ it('provides ECB date help and searches earned activity separately from spending
  vi.spyOn(api,'workspaceAt').mockResolvedValue(data);vi.spyOn(api,'account').mockResolvedValue(report)
  render(<RewardsAccounts data={data} api={api} writable onReceipt={vi.fn()}/>);await user.click(await screen.findByRole('button',{name:'ECB'}));await screen.findByText('ECB toothpaste reward')
  await user.click(screen.getByRole('button',{name:'About Dates & Reward Search'}));expect(screen.getByRole('tooltip',{name:'Dates & Reward Search'})).toHaveTextContent('not coupon expiration dates');await user.keyboard('{Escape}')
- await user.selectOptions(screen.getByLabelText('Activity Type'),'EARNED');expect(screen.getByText('ECB toothpaste reward')).toBeVisible();expect(screen.queryByText('Paid purchase')).not.toBeInTheDocument();expect(screen.queryByText('Expired ECB')).not.toBeInTheDocument()
+ await user.click(screen.getByText('More Filters',{selector:'summary *'}));await user.selectOptions(screen.getByLabelText('Activity Type'),'EARNED');expect(screen.getByText('ECB toothpaste reward')).toBeVisible();expect(screen.queryByText('Paid purchase')).not.toBeInTheDocument();expect(screen.queryByText('Expired ECB')).not.toBeInTheDocument()
  await user.type(screen.getByLabelText('Search Rewards'),'toothpaste');expect(screen.getByText('ECB toothpaste reward')).toBeVisible()
 })
 it('records lost points and a saved dollar valuation separately using a stable retry',async()=>{
@@ -269,7 +269,7 @@ it('organizes RR inventory into aligned rows and keeps secondary workflows colla
  const activity=screen.getByRole('heading',{name:'Account Activity'}).closest('section')!;const columnCount=within(activity).getAllByRole('columnheader').length;for(const row of within(activity).getAllByRole('row').slice(1))expect(within(row).getAllByRole('cell')).toHaveLength(columnCount)
  const unavailable=screen.getByText('Expired, lost & unavailable rewards').closest('details')!;expect(unavailable).not.toHaveAttribute('open');expect(screen.getByText('Rewards without receipts').closest('details')).not.toHaveAttribute('open')
  await user.click(screen.getByRole('link',{name:'Expired Rewards'}));expect(unavailable).toHaveAttribute('open');expect(screen.getByRole('button',{name:'Mark reward unavailable'})).toBeVisible()
- const from=screen.getByLabelText('From',{exact:true});await user.clear(from);expect(screen.getByLabelText('From',{exact:true})).toBeVisible();await user.type(screen.getByLabelText('From',{exact:true}),report.from);expect(screen.getByLabelText('From',{exact:true})).toHaveValue(report.from)
+ await user.click(screen.getByText('More Filters',{selector:'summary *'}));const from=screen.getByLabelText('From',{exact:true});await user.clear(from);expect(screen.getByLabelText('From',{exact:true})).toBeVisible();await user.type(screen.getByLabelText('From',{exact:true}),report.from);expect(screen.getByLabelText('From',{exact:true})).toHaveValue(report.from)
 })
 
 it('uses the shared beginning/accrual/spending/ending account report for Gift Cards',async()=>{

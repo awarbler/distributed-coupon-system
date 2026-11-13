@@ -88,6 +88,27 @@ class PersistentBalancesTest {
         assertEquals(4,b.openingHistory().size());
         assertEquals(new BigDecimal("61.45"),b.openingDifference(day.plusDays(1),"WC",records(repo)));
     }
+    @Test void walmartCashReceiptFundingIsAppliedOnceAcrossSaveReviewAndIdempotentRetry() {
+        var repo = new InMemoryTransactionRepository();
+        var balances = new ProviderBalanceSummary(repo);
+        balances.recordOpening(day, "Walmart Cash", new BigDecimal("20.00"), true);
+        var receiptId = UUID.randomUUID();
+        var paymentId = UUID.randomUUID();
+        var tx = new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO, new BigDecimal("9.00")));
+        tx.addPurchaseItem(new coupons.receipts.PurchaseItem("Walmart purchase", null, new BigDecimal("9.00"), new BigDecimal("9.00"), 1));
+        tx.addPayment(new Payment(paymentId, PaymentType.OTHER, new BigDecimal("9.00"), null, "Walmart Cash"));
+        var observations = tx.getObservations();
+        tx.setObservations(new ReceiptObservations(day, null, observations.earnings(), observations.unidentifiedRR(), observations.walgreensCash(), observations.savings(), observations.discountKinds(), observations.receiptSavingValuePercent(), observations.promotionLinks(),
+                new coupons.receipts.ReceiptWorksheetData(Map.of(), Map.of(paymentId, new coupons.receipts.ReceiptWorksheetData.Use(List.of(), null, false)), null), observations.footerStatus()));
+        var write = request();
+        var metadata = new ReceiptMeta("Walmart", "receipt", null, null, ReceiptMeta.PurchaseChannel.IN_STORE, ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING, ReceiptMeta.PaymentEntryStatus.COMPLETE);
+        var first = repo.save(receiptId, tx, metadata, List.of(), write, new ReceiptCreateCtx("AJ"));
+        assertEquals(first, repo.save(receiptId, tx, metadata, List.of(), write, new ReceiptCreateCtx("AJ")));
+        var records = records(repo);
+        assertEquals(new BigDecimal("11.00"), balances.balance(day, "Walmart Cash", records).endUsd());
+        assertEquals(new BigDecimal("11.00"), balances.balance(day, "Walmart Cash", records).endUsd());
+        assertEquals(1, balances.movements(records).stream().filter(m -> "Walmart Cash".equals(m.provider()) && m.usd().signum() < 0).count());
+    }
     @Test void adjustmentsPersistAndFailedOpeningWriteDoesNotPublish(@TempDir Path dir) throws Exception {
         var file = dir.resolve("receipts.bin");
         try(var repo=InMemoryTransactionRepository.openLocal(file)) {

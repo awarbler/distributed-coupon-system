@@ -24,9 +24,24 @@ public record DealTerms(
         String loyaltyRequirement,
         String exclusions,
         boolean cheapestItemsDiscounted,
-        boolean strictSkuMatching
+        boolean strictSkuMatching,
+        WeeklyAdvertisement advertisement
 ) implements Serializable {
 
+    /** One source offer, containing all of its price, coupon and reward terms. */
+    public record WeeklyAdvertisement(String draftJson, java.util.Map<String,String> fields,
+            List<String> warnings) implements Serializable {
+        public WeeklyAdvertisement {
+            if (draftJson == null || draftJson.length() > 150000) throw new IllegalArgumentException("Invalid weekly deal draft.");
+            fields = java.util.Map.copyOf(fields);
+            warnings = List.copyOf(warnings);
+        }
+    }
+    public DealTerms(Type type,String product,BigDecimal regular,BigDecimal promotional,int quantity,
+            BigDecimal spend,int free,BigDecimal reward,boolean repeat,Integer limit,List<String> skus,
+            String qualifications,String loyalty,String exclusions,boolean cheapest,boolean strict) {
+        this(type,product,regular,promotional,quantity,spend,free,reward,repeat,limit,skus,qualifications,loyalty,exclusions,cheapest,strict,null);
+    }
     /**
      * Backward-compatible 15-argument constructor.
      * Existing calls default to non-strict UPC matching.
@@ -108,6 +123,7 @@ public record DealTerms(
     }
 
     public enum Type {
+        ADVERTISEMENT,
         SALE,
         MULTIBUY,
         BUY_GET,
@@ -134,6 +150,8 @@ public record DealTerms(
                         "Offer amounts cannot be negative.");
             }
         }
+
+        if ((type == Type.ADVERTISEMENT) != (advertisement != null)) throw new IllegalArgumentException("Weekly advertisements require their combined offer draft.");
 
         qualifyingSkus = qualifyingSkus == null
                 ? List.of()

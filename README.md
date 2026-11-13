@@ -16,11 +16,12 @@ planned area of the project.
 ## Capabilities
 
 - Create, review, edit, delete, and restore receipts with revision history.
-- Track product prices, sale promotions, manufacturer coupons, and store coupons.
+- Track ordinary package quantities and weighed foods, including weight, weight unit, price per weight unit, sale promotions, manufacturer coupons, and store coupons.
 - Record and match Register Rewards, and track CVS ExtraBucks earned and used.
 - Track expected and received rebates, points, and account balances.
 - Review receipt totals and detailed reports by day, date range, and month.
 - Plan shopping trips and manage clipped coupons and advertised promotions.
+- Import weekly advertisements, review selected offers, and add source-linked deals to a trip using existing calculations.
 
 ## Technology
 

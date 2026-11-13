@@ -395,6 +395,37 @@ class TransactionCalculatorTest {
         assertEquals(TransactionCalculator.ReconciliationStatus.BALANCED, result.status());
         assertEquals(0, result.knownFundingSubtotal().compareTo(new BigDecimal("5")));
     }
+    @Test void giftCardsAndWalmartCashReconcileOnlyWhenPaymentEntryIsConfirmedComplete() {
+        var tx = new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO, new BigDecimal("32.71")));
+        tx.addPurchaseItem(new PurchaseItem("Walmart purchase", null, new BigDecimal("32.71"), new BigDecimal("32.71"), 1));
+        tx.addPayment(new Payment(UUID.randomUUID(), PaymentType.GIFT_CARD, new BigDecimal("19.94"), null, "Gift Cards"));
+        tx.addPayment(new Payment(UUID.randomUUID(), PaymentType.GIFT_CARD, new BigDecimal("3.77"), null, "Gift Cards"));
+        var walmartCash = new Payment(UUID.randomUUID(), PaymentType.OTHER, new BigDecimal("9.00"), null, "Walmart Cash");
+        tx.addPayment(walmartCash);
+        var observations = tx.getObservations();
+        tx.setObservations(new ReceiptObservations(observations.purchaseDate(), observations.printedTime(), observations.earnings(), observations.unidentifiedRR(),
+                observations.walgreensCash(), observations.savings(), observations.discountKinds(), observations.receiptSavingValuePercent(), observations.promotionLinks(),
+                new ReceiptWorksheetData(Map.of(), Map.of(walmartCash.getPaymentId(), new ReceiptWorksheetData.Use(List.of(), null, false)), null), observations.footerStatus()));
+
+        var complete = calculator.reconcilePayments(tx, paymentMetadata(
+                ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING, ReceiptMeta.PaymentEntryStatus.COMPLETE));
+        assertEquals(TransactionCalculator.ReconciliationStatus.BALANCED, complete.status());
+        assertEquals(0, complete.knownFundingSubtotal().compareTo(new BigDecimal("32.71")));
+        assertEquals(0, complete.giftCardFunding().compareTo(new BigDecimal("23.71")));
+        assertEquals(0, complete.otherFunding().compareTo(new BigDecimal("9.00")));
+        assertEquals(0, complete.recordedCashCardPaid().signum());
+        assertEquals(0, complete.difference().signum());
+
+        var incomplete = calculator.reconcilePayments(tx, paymentMetadata(
+                ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING, ReceiptMeta.PaymentEntryStatus.UNKNOWN));
+        assertEquals(TransactionCalculator.ReconciliationStatus.INCOMPLETE, incomplete.status());
+        assertNull(incomplete.recordedCashCardPaid());
+        assertNull(incomplete.difference());
+
+        var view = ReceiptViews.totals(new ReceiptRecord(UUID.randomUUID(), ReceiptStatus.ACTIVE, 1, tx,
+                paymentMetadata(ReceiptMeta.PrintedTotalBasis.BEFORE_PAYMENT_FUNDING, ReceiptMeta.PaymentEntryStatus.COMPLETE), List.of()));
+        assertEquals(0, ((BigDecimal)view.get("walmartCashUsed")).compareTo(new BigDecimal("9.00")));
+    }
     @Test void explicitOtherDeductionIsNotFundingAndUnrecordedZeroIsNotInvented() {
         var tx = new CouponTransaction(new ReceiptTotals(BigDecimal.ZERO, BigDecimal.ZERO));
         var other = new Payment(PaymentType.OTHER, new BigDecimal("2")); tx.addPayment(other);

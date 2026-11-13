@@ -96,6 +96,16 @@ class ReceiptInputTest {
         assertEquals(2,payments.size());assertEquals("ECB",payments.getFirst().getAccountName());assertEquals("Beauty ECB",payments.getFirst().getNotes());assertEquals("Weekly ECB",payments.getLast().getNotes());
     }
 
+    @Test void walmartCashParsesAsNamedFundingWithoutBecomingGiftCardOrEarning() {
+        var fields=draft(UUID.randomUUID());fields.put("retailer","Walmart");
+        var paymentId=UUID.randomUUID();
+        fields.put("payments",List.of(Map.of("paymentId",paymentId,"type","OTHER","amount","9.00","accountName","Walmart Cash","role","FUNDING")));
+        var input=read(fields);var payment=input.transaction().getPayments().getFirst();
+        assertEquals(PaymentType.OTHER,payment.getPaymentType());assertEquals("Walmart Cash",payment.getAccountName());assertEquals(new BigDecimal("9.00"),payment.getAmount());
+        assertFalse(input.transaction().getObservations().worksheet().uses().get(paymentId).checkoutDeduction());
+        assertTrue(input.transaction().getObservations().earnings().stream().noneMatch(e->e.provider().equals("Walmart Cash")));
+    }
+
     @Test void packageDetailsRemainSeparateFromPurchasedQuantityAndSurviveCorrectionAndSerialization()throws Exception {
         var fields=draft(UUID.randomUUID());var items=new ArrayList<Map<String,Object>>();
         @SuppressWarnings("unchecked") var line=new LinkedHashMap<>((Map<String,Object>)((List<?>)fields.get("items")).getFirst());

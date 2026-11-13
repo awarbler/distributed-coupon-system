@@ -7,17 +7,20 @@ import java.util.*;
 
 /** Bounded read-only search. Only already-recorded funds are spendable. */
 final class WeeklyDealPlanner {
-    record Candidate(String id,String name,String store,ShoppingPlan.Scenario scenario,String group,List<String> includes) {
-        Candidate(String id,String name,String store,ShoppingPlan.Scenario scenario,String group){this(id,name,store,scenario,group,List.of(id));}
+    record Candidate(String id,String name,String store,ShoppingPlan.Scenario scenario,String group,List<String> includes,String validationIssue) {
+        Candidate(String id,String name,String store,ShoppingPlan.Scenario scenario,String group,List<String> includes){this(id,name,store,scenario,group,includes,null);}
+        Candidate(String id,String name,String store,ShoppingPlan.Scenario scenario,String group,String validationIssue){this(id,name,store,scenario,group,List.of(id),validationIssue);}
+        Candidate(String id,String name,String store,ShoppingPlan.Scenario scenario,String group){this(id,name,store,scenario,group,List.of(id),null);}
         Candidate(String id,String name,String store,ShoppingPlan.Scenario scenario){this(id,name,store,scenario,id);}
         Candidate {group=group==null?id:group;}
     }
-    record RequiredItem(String candidateId,UUID lineId,int quantity){RequiredItem{if(quantity<1)throw new IllegalArgumentException("Must Buy quantity must be positive.");}}
+    record RequiredItem(String candidateId,UUID lineId,int quantity,String name){RequiredItem(String candidateId,UUID lineId,int quantity){this(candidateId,lineId,quantity,null);}RequiredItem{if(quantity<1)throw new IllegalArgumentException("Must Buy quantity must be positive.");}}
     record Reward(String id,String description,String type,String store,BigDecimal amount,LocalDate expires,
-            String registerRewardType,String originProduct,String originBrand,String originProgram,String originPromotion) {
-        Reward(String id,String description,String type,String store,BigDecimal amount,LocalDate expires){this(id,description,type,store,amount,expires,null,null,null,null,null);}
+            String registerRewardType,String originProduct,String originBrand,String originProgram,String originPromotion,coupons.rewards.PaymentEligibility.Rule eligibility) {
+        Reward(String id,String description,String type,String store,BigDecimal amount,LocalDate expires,String rrType,String product,String brand,String program,String promotion){this(id,description,type,store,amount,expires,rrType,product,brand,program,promotion,null);}
+        Reward(String id,String description,String type,String store,BigDecimal amount,LocalDate expires){this(id,description,type,store,amount,expires,null,null,null,null,null,type.equals("GIFT_CARD")&&Set.of("WALGREENS","WALMART","CVS").contains(retailer(store))?new coupons.rewards.PaymentEligibility.Rule(null,List.of(retailer(store)),List.of(),null,expires,null,true,amount):null);}
         private UUID sourceId(){try{return UUID.fromString(id);}catch(IllegalArgumentException ignored){return null;}}
-        ShoppingPlan.ScenarioPayment payment(){return new ShoppingPlan.ScenarioPayment(UUID.nameUUIDFromBytes(id.getBytes(java.nio.charset.StandardCharsets.UTF_8)),type,amount,description+" · source "+id+" · expires "+(expires==null?"unknown":expires),registerRewardType,sourceId(),originProduct,originBrand,originProgram,originPromotion);}
+        ShoppingPlan.ScenarioPayment payment(){return new ShoppingPlan.ScenarioPayment(UUID.nameUUIDFromBytes(id.getBytes(java.nio.charset.StandardCharsets.UTF_8)),type,amount,description+" · source "+id+" · expires "+(expires==null?"unknown":expires),registerRewardType,sourceId(),originProduct,originBrand,originProgram,originPromotion,eligibility);}
     }
     record Step(String id,String name,String store,ShoppingPlan.Scenario scenario,Map<String,Object> estimate,List<Reward> fundsRemaining,BigDecimal walgreensCashRemaining,List<String> candidateIds) {}
     record State(List<Step> steps,Set<String> plans,Set<String> used,BigDecimal wc,BigDecimal oop,BigDecimal earnings,Map<String,Reward> funds,BigDecimal wcSpent,Set<UUID> coupons) {}
@@ -26,8 +29,15 @@ final class WeeklyDealPlanner {
     record Options(boolean rolling,boolean useGiftCards,boolean giftCardFirst,Target target,List<coupons.promotions.ClippedCoupon> coupons) {Options(boolean rolling,boolean useGiftCards,boolean giftCardFirst,Target target){this(rolling,useGiftCards,giftCardFirst,target,null);}}
     record Target(ShoppingPlan.ScenarioPromotion promotion,String scope,Set<String> values,Map<String,String> categories,Set<String> excludedSkus,Set<String> excludedCategories,int usesRemaining) {Target(ShoppingPlan.ScenarioPromotion promotion,String scope,Set<String> values,Map<String,String> categories){this(promotion,scope,values,categories,Set.of(),Set.of(),1);}}
     static Map<String,Object> plan(List<Candidate> candidates,List<Reward> available,BigDecimal wc,BigDecimal budget,String mode,LocalDate day,List<RequiredItem> required,boolean includeOptional,Options options) {
+        if(mode==null||mode.isBlank()||mode.equals("AUTO")){
+            var alternatives=new ArrayList<Map<String,Object>>();
+            for(String strategy:List.of("LOWEST_OOP","EXPIRING_FIRST","WC_FIRST","REWARDS","MAX_REGISTER_REWARDS","MAX_REWARDS")){var report=plan(candidates,available,wc,budget,strategy,day,required,includeOptional,options);report.put("strategy",strategy);alternatives.add(report);}
+            alternatives.sort(Comparator.<Map<String,Object>,Boolean>comparing(r->!Boolean.TRUE.equals(r.get("requirementsMet"))).thenComparing(r->r.get("cash") instanceof BigDecimal n?n:new BigDecimal("1E30")).thenComparing(r->(r.get("earnings") instanceof BigDecimal n?n:BigDecimal.ZERO).negate()));
+            var result=new LinkedHashMap<>(alternatives.getFirst());result.put("alternatives",alternatives.stream().map(r->Map.of("strategy",r.get("strategy"),"cash",Objects.toString(r.get("cash"),"Unknown"),"earnings",Objects.toString(r.get("earnings"),"Unknown"))).toList());return result;
+        }
         if(budget.signum()<0||wc.signum()<0)throw new IllegalArgumentException("Budget and balance must be nonnegative.");
-        if(!Set.of("LOWEST_OOP","REWARDS","EXPIRING_FIRST","WC_FIRST").contains(mode))throw new IllegalArgumentException("Choose a planning mode.");
+        if(!Set.of("LOWEST_OOP","REWARDS","EXPIRING_FIRST","WC_FIRST","MAX_REGISTER_REWARDS","MAX_REWARDS","AUTO").contains(mode))throw new IllegalArgumentException("Choose a planning mode.");
+        var incomplete=candidates.stream().filter(c->c.scenario()==null).toList();
         var requiredIds=new HashSet<String>();var requiredRows=new ArrayList<Map<String,Object>>();var issues=new ArrayList<String>();
         var quantities=new LinkedHashMap<String,Map<UUID,Integer>>();
         for(var item:required){
@@ -35,20 +45,21 @@ final class WeeklyDealPlanner {
             requiredIds.add(item.candidateId());
             var source=candidates.stream().filter(c->c.id().equals(item.candidateId())).findFirst().orElse(null);
             var line=source==null||source.scenario()==null?null:source.scenario().items().stream().filter(l->l.id().equals(item.lineId())).findFirst().orElse(null);
-            requiredRows.add(Map.of("candidateId",item.candidateId(),"lineId",item.lineId(),"quantity",item.quantity(),"name",line==null?"Required product "+item.lineId():line.name()));
-            if(line==null)issues.add("Required product "+item.lineId()+" is unavailable or lacks recorded pricing. Edit the original deal; no substitute was selected.");
+            requiredRows.add(Map.of("candidateId",item.candidateId(),"lineId",item.lineId(),"quantity",item.quantity(),"name",line==null?(item.name()==null?"Required item in "+(source==null?"the original deal":source.name()):item.name()):line.name()));
+            if(line==null)issues.add((item.name()==null?"Required item in "+(source==null?"the original deal":source.name()):item.name())+" needs review: "+(source!=null&&source.validationIssue()!=null?source.validationIssue():"its product reference, source promotion or pricing is unverified")+". Edit the original deal; no substitute was selected.");
+            else if(priceLabel(line.name()))issues.add("The product name in "+source.name()+" is a price label, not an identified product. Correct its name and qualifying products in the original deal before planning.");
         }
         var prepared=new ArrayList<Candidate>();var requiredGroups=new HashMap<String,String>();
         for(var candidate:candidates){
             var chosen=quantities.get(candidate.id());
-            if(chosen==null){if(includeOptional&&candidate.scenario()!=null)prepared.add(candidate);continue;}
+            if(chosen==null){if(includeOptional&&candidate.scenario()!=null&&candidate.scenario().items().stream().noneMatch(l->priceLabel(l.name())))prepared.add(candidate);continue;}
             if(candidate.scenario()==null)continue;
             var previous=requiredGroups.putIfAbsent(candidate.group(),candidate.id());if(previous!=null&&!previous.equals(candidate.id()))issues.add("Must Buy selections belong to mutually exclusive alternatives: "+previous+" and "+candidate.id()+".");
             var source=candidate.scenario();boolean changed=source.items().size()!=chosen.size()||source.items().stream().anyMatch(l->!Objects.equals(chosen.get(l.id()),l.quantity()));
             if(changed&&source.taxRate()==null&&source.tax().signum()>0)issues.add("Confirm tax for the changed quantities in "+candidate.name()+". Its fixed tax was recorded for a different basket.");
-            var lines=source.items().stream().filter(l->chosen.containsKey(l.id())).map(l->{var rule=l.priceRule();if(rule!=null&&!rule.lineIds().isEmpty())rule=new ShoppingPlan.PriceRule(rule.type(),rule.bundlePrice(),rule.lineIds().stream().filter(chosen::containsKey).toList());return new ShoppingPlan.Line(l.id(),l.name(),l.sku(),l.regular(),l.sale(),chosen.get(l.id()),l.memberRewardRate(),rule);}).toList();
+            var lines=source.items().stream().filter(l->chosen.containsKey(l.id())).map(l->{var rule=l.priceRule();if(rule!=null&&!rule.lineIds().isEmpty())rule=new ShoppingPlan.PriceRule(rule.type(),rule.bundlePrice(),rule.lineIds().stream().filter(chosen::containsKey).toList(),rule.buyQuantity(),rule.freeQuantity());return new ShoppingPlan.Line(l.id(),l.name(),l.sku(),l.regular(),l.sale(),chosen.get(l.id()),l.memberRewardRate(),rule);}).toList();
             if(lines.isEmpty())continue;
-            var coupons=source.coupons().stream().filter(c->c.wholeReceipt()||c.lineIds().stream().anyMatch(chosen::containsKey)).map(c->new ShoppingPlan.ScenarioCoupon(c.id(),c.description(),c.amount(),c.requiredQuantity(),c.lineIds().stream().filter(chosen::containsKey).toList(),c.savedCouponId(),c.kind(),c.wholeReceipt())).toList();
+            var coupons=source.coupons().stream().filter(c->c.wholeReceipt()||c.lineIds().stream().anyMatch(chosen::containsKey)).map(c->new ShoppingPlan.ScenarioCoupon(c.id(),c.description(),c.amount(),c.requiredQuantity(),c.lineIds().stream().filter(chosen::containsKey).toList(),c.savedCouponId(),c.kind(),c.wholeReceipt(),c.pendingVerification())).toList();
             var promotions=source.promotions().stream().filter(c->c.wholeReceipt()||c.lineIds().stream().anyMatch(chosen::containsKey)).map(c->new ShoppingPlan.ScenarioPromotion(c.id(),c.description(),c.rewardType(),c.rewardAmount(),c.requiredQuantity(),c.requiredSpend(),c.spendBasis(),c.allowsWalgreensCash(),c.lineIds().stream().filter(chosen::containsKey).toList(),c.wholeReceipt(),c.allowsWalmartCash(),c.restrictSameRegisterReward(),c.prohibitedRegisterRewardProgram(),c.originProduct(),c.originBrand(),c.originProgram(),c.originPromotion(),c.paymentRulesReviewed(),c.giftCardRule(),c.rollingAllowed(),c.earnedRegisterRewardType(),c.allowsRegisterRewards(),c.allowsEcb())).toList();
             var scenario=new ShoppingPlan.Scenario(lines,coupons,promotions,source.tax(),BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO,null,source.paymentMethod(),source.fundingNotes(),source.taxRate(),List.of(),source.source(),source.walgreensCashIncrement(),source.walgreensCashLimit());
             prepared.add(new Candidate(candidate.id(),candidate.name(),candidate.store(),scenario,candidate.group()));
@@ -63,12 +74,15 @@ final class WeeklyDealPlanner {
             int c=Long.compare(requiredIds.stream().filter(b.plans()::contains).count(),requiredIds.stream().filter(a.plans()::contains).count());if(c!=0)return c;
             c=Boolean.compare(targetMet(b,options),targetMet(a,options));if(c!=0)return c;
             c=Boolean.compare(b.oop().compareTo(budget)<=0,a.oop().compareTo(budget)<=0);if(c!=0)return c;
+            if(mode.equals("MAX_REWARDS")){c=b.earnings().compareTo(a.earnings());if(c!=0)return c;}
             if(options.giftCardFirst()){c=a.oop().compareTo(b.oop());if(c!=0)return c;c=giftSpent(b).compareTo(giftSpent(a));if(c!=0)return c;}
             if(mode.equals("EXPIRING_FIRST"))for(var reward:rewards)if(reward.expires()!=null){c=Boolean.compare(b.used().contains(reward.id()),a.used().contains(reward.id()));if(c!=0)return c;}
+            if(mode.equals("MAX_REGISTER_REWARDS"))for(var reward:rewards)if(reward.type().equals("REGISTER_REWARD")&&reward.expires()!=null){c=Boolean.compare(b.used().contains(reward.id()),a.used().contains(reward.id()));if(c!=0)return c;}
             if(mode.equals("WC_FIRST")){c=b.wcSpent().compareTo(a.wcSpent());if(c!=0)return c;}
             c=a.oop().compareTo(b.oop());if(c!=0)return c;
             if(options.giftCardFirst()){c=giftSpent(b).compareTo(giftSpent(a));if(c!=0)return c;}
             if(mode.equals("REWARDS")){c=b.earnings().compareTo(a.earnings());if(c!=0)return c;}
+            if(mode.equals("MAX_REGISTER_REWARDS")){c=expectedRegisterRewards(b).compareTo(expectedRegisterRewards(a));if(c!=0)return c;}
             for(var reward:rewards){c=Boolean.compare(b.used().contains(reward.id()),a.used().contains(reward.id()));if(c!=0)return c;}
             c=Integer.compare(b.steps().size(),a.steps().size());if(c!=0)return c;
             c=a.steps().stream().map(Step::id).toList().toString().compareTo(b.steps().stream().map(Step::id).toList().toString());return c!=0?c:new TreeMap<>(a.funds()).toString().compareTo(new TreeMap<>(b.funds()).toString());
@@ -113,7 +127,7 @@ final class WeeklyDealPlanner {
                             if(++evaluations>25000)break search;
                             var scenario=funded(candidate.scenario(),chosen);var calculated=scenario.estimate(candidate.store());
                             if(!valid(calculated,mandatory)||targeted&&!promotionMet(calculated,options.target().promotion().id()))continue;
-                            var oop=state.oop().add(amount(calculated,"calculatedOop"));if(oop.compareTo(budget)>0){budgetBlocked=true;if(!mandatory)continue;}
+                            var oop=state.oop().add(checkoutCents(amount(calculated,"calculatedOop")));if(oop.compareTo(budget)>0){budgetBlocked=true;if(!mandatory)continue;}
                             var remaining=new LinkedHashMap<>(state.funds());var ids=new HashSet<>(state.used());
                             for(var payment:chosen)for(var reward:List.copyOf(remaining.values()))if(payment.id().equals(reward.payment().id())){
                                 ids.add(reward.id());BigDecimal left=reward.amount().subtract(payment.amount());if(left.signum()==0||!partial(reward))remaining.remove(reward.id());else remaining.put(reward.id(),withAmount(reward,left));
@@ -140,10 +154,12 @@ final class WeeklyDealPlanner {
         }
         all.removeIf(state->!state.plans().containsAll(requiredIds));all.sort(rank);var result=new LinkedHashMap<String,Object>();var best=all.isEmpty()?initial:all.getFirst();
         boolean requirementsMet=best.plans().containsAll(requiredIds),boosterMet=targetMet(best,options);
-        var problems=new ArrayList<String>();if(!requirementsMet)problems.add("No complete verified payment combination was found for every Must Buy selection within the bounded search. Required items were not removed.");
+        var problems=new ArrayList<String>();
+        for(var candidate:incomplete)if(candidate.validationIssue()!=null)problems.add(candidate.name()+": "+candidate.validationIssue());if(!requirementsMet)problems.add("No complete verified payment combination was found for every Must Buy selection within the bounded search. Required items were not removed.");
         if(!boosterMet)problems.add("The selected Spend Booster could not be satisfied with the recorded products, payment rules and budget. No booster reward is claimed.");
         result.put("requiredItems",requiredRows);result.put("requirementsMet",requirementsMet);result.put("boosterMet",boosterMet);result.put("affordable",requirementsMet&&best.oop().compareTo(budget)<=0);result.put("additionalCashNeeded",requirementsMet?best.oop().subtract(budget).max(BigDecimal.ZERO):null);result.put("issues",problems);
-        result.put("emptyReason",budgetBlocked?"BUDGET":"ELIGIBILITY");result.put("reviews",List.copyOf(reviews.values()));result.put("steps",best.steps());result.put("cash",requirementsMet?best.oop():null);result.put("earnings",best.earnings());result.put("remaining",budget.subtract(best.oop()).max(BigDecimal.ZERO));result.put("rewardsUsed",best.used());result.put("fundsRemaining",best.funds().values());result.put("walgreensCashRemaining",best.wc());
+        var rrUsed=rewards.stream().filter(r->r.type().equals("REGISTER_REWARD")&&best.used().contains(r.id())).map(Reward::amount).reduce(BigDecimal.ZERO,BigDecimal::add);var rrEarned=expectedRegisterRewards(best);
+        result.put("emptyReason",budgetBlocked?"BUDGET":"ELIGIBILITY");result.put("reviews",List.copyOf(reviews.values()));result.put("steps",best.steps());result.put("cash",requirementsMet?best.oop():null);result.put("earnings",best.earnings());result.put("remaining",budget.subtract(best.oop()).max(BigDecimal.ZERO));result.put("rewardsUsed",best.used());result.put("registerRewardsUsedValue",rrUsed);result.put("expectedRegisterRewards",rrEarned);result.put("netRegisterRewardChange",rrEarned.subtract(rrUsed));result.put("fundsRemaining",best.funds().values());result.put("walgreensCashRemaining",best.wc());
         result.put("notice","Suggested combination from a bounded search using entered offer rules. "+(options.rolling()?"Only rewards explicitly recorded as available for later transactions are rolled; expected rewards never fund their originating transaction.":"Existing funds only; newly earned rewards are not rolled automatically.")+" Unknown origins and balances are excluded when eligibility depends on them. Saved coupons use the existing SKU/date/store matcher; unverified or redeemed linked coupons are excluded. Search is bounded; a global optimum is not guaranteed.");return result;
     }
     static String retailer(String store){
@@ -151,15 +167,19 @@ final class WeeklyDealPlanner {
         for(String name:List.of("walgreens","walmart","cvs"))if(value.equals(name)||value.startsWith(name+" ")||value.startsWith(name+"#"))return name.toUpperCase(Locale.ROOT);
         return value.toUpperCase(Locale.ROOT);
     }
+    private static boolean priceLabel(String name){return name!=null&&name.matches("(?is)^(?:regular|sale)\\s*(?:price)?\\s*:?\\s*\\$.*");}
+    private static BigDecimal checkoutCents(BigDecimal value){var rounded=value.setScale(2,java.math.RoundingMode.HALF_UP);return rounded.compareTo(value)==0?value:rounded;}
     private static UUID stable(String value){return UUID.nameUUIDFromBytes(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
     private static Comparator<Reward> rewardOrder(){return Comparator.comparing(Reward::expires,Comparator.nullsLast(Comparator.naturalOrder())).thenComparing(Reward::id);}
     private static boolean partial(Reward r){return Set.of("GIFT_CARD","WALMART_CASH").contains(r.type());}
-    private static Reward withAmount(Reward r,BigDecimal amount){return new Reward(r.id(),r.description(),r.type(),r.store(),amount,r.expires(),r.registerRewardType(),r.originProduct(),r.originBrand(),r.originProgram(),r.originPromotion());}
+    private static Reward withAmount(Reward r,BigDecimal amount){return new Reward(r.id(),r.description(),r.type(),r.store(),amount,r.expires(),r.registerRewardType(),r.originProduct(),r.originBrand(),r.originProgram(),r.originPromotion(),r.eligibility());}
     private static boolean eligibleStore(Reward reward,String store){
+        if(reward.type().equals("GIFT_CARD"))return coupons.rewards.PaymentEligibility.check(store,reward.type(),reward.eligibility(),reward.amount(),reward.eligibility()==null?null:reward.eligibility().evaluatedOn()).equals("Met");
         if(!retailer(reward.store()).equals(retailer(store)))return false;
         return switch(retailer(store)){case "WALGREENS"->Set.of("REGISTER_REWARD","GIFT_CARD").contains(reward.type());case "CVS"->Set.of("ECB","GIFT_CARD").contains(reward.type());case "WALMART"->Set.of("WALMART_CASH","GIFT_CARD").contains(reward.type());default->false;};
     }
     private static BigDecimal giftSpent(State state){return state.steps().stream().flatMap(s->s.scenario().payments().stream()).filter(p->p.type().equals("GIFT_CARD")).map(ShoppingPlan.ScenarioPayment::amount).reduce(BigDecimal.ZERO,BigDecimal::add);}
+    private static BigDecimal expectedRegisterRewards(State state){return state.steps().stream().map(s->amount(s.estimate(),"expectedRegisterRewards")).reduce(BigDecimal.ZERO,BigDecimal::add);}
     @SuppressWarnings("unchecked") private static boolean promotionMet(Map<String,Object> report,UUID id){return ((List<Map<String,Object>>)report.get("promotions")).stream().anyMatch(row->id.equals(row.get("id"))&&Boolean.TRUE.equals(row.get("eligible")));}
     private static long targetUses(State state,Options options){return options.target()==null?0:state.steps().stream().filter(step->promotionMet(step.estimate(),options.target().promotion().id())).count();}
     private static boolean targetMet(State state,Options options){return options.target()==null||state.steps().stream().anyMatch(step->promotionMet(step.estimate(),options.target().promotion().id()));}
@@ -217,7 +237,7 @@ final class WeeklyDealPlanner {
         var lines=new ArrayList<>(x.items());lines.addAll(y.items());if(lines.stream().map(ShoppingPlan.Line::id).distinct().count()!=lines.size())return null;
         var coupons=new ArrayList<ShoppingPlan.ScenarioCoupon>();var promotions=new ArrayList<ShoppingPlan.ScenarioPromotion>();var couponSources=new HashSet<UUID>();var ids=new HashSet<UUID>();
         for(var scenario:List.of(x,y)){
-            for(var coupon:scenario.coupons()){if(coupon.savedCouponId()!=null&&!couponSources.add(coupon.savedCouponId()))continue;if(!ids.add(coupon.id()))return null;coupons.add(new ShoppingPlan.ScenarioCoupon(coupon.id(),coupon.description(),coupon.amount(),coupon.requiredQuantity(),coupon.wholeReceipt()?scenario.items().stream().map(ShoppingPlan.Line::id).toList():coupon.lineIds(),coupon.savedCouponId(),coupon.kind(),false));}
+            for(var coupon:scenario.coupons()){if(coupon.savedCouponId()!=null&&!couponSources.add(coupon.savedCouponId()))continue;if(!ids.add(coupon.id()))return null;coupons.add(new ShoppingPlan.ScenarioCoupon(coupon.id(),coupon.description(),coupon.amount(),coupon.requiredQuantity(),coupon.wholeReceipt()?scenario.items().stream().map(ShoppingPlan.Line::id).toList():coupon.lineIds(),coupon.savedCouponId(),coupon.kind(),false,coupon.pendingVerification()));}
             for(var promotion:scenario.promotions()){if(!ids.add(promotion.id()))return null;promotions.add(copyPromotion(promotion,promotion.wholeReceipt()?scenario.items().stream().map(ShoppingPlan.Line::id).toList():promotion.lineIds(),false));}
         }
         var includes=new ArrayList<>(a.includes());includes.addAll(b.includes());

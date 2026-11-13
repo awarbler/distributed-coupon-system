@@ -15,7 +15,7 @@ final class LocalDealReader {
         var images=new ArrayList<String>();if(source.contentBase64()!=null)images.add(source.contentBase64());for(var s:source.earlier())if(s.contentBase64()!=null)images.add(s.contentBase64());
         var user=new LinkedHashMap<String,Object>();user.put("role","user");user.put("content",text==null||text.isBlank()?"Extract this deal from the companion images.":text);if(!images.isEmpty())user.put("images",images);
         var body=Map.of("model",MODEL,"stream",false,"think",false,"keep_alive","15m","options",Map.of("temperature",0,"num_ctx",16384,"num_predict",6000),"format",schema(),"messages",List.of(Map.of("role","system","content",PROMPT),user));
-        var request=HttpRequest.newBuilder(ENDPOINT).timeout(Duration.ofMinutes(4)).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(Json.encode(body))).build();
+        var request=HttpRequest.newBuilder(ENDPOINT).timeout(Duration.ofSeconds(60)).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(Json.encode(body))).build();
         try(var client=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()){
             var response=client.send(request,HttpResponse.BodyHandlers.ofString());
             if(response.statusCode()!=200)throw new IllegalArgumentException("The local deal model is not ready. Start ./start-local-reader.sh. Your source stays attached.");

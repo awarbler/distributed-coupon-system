@@ -112,7 +112,7 @@ public final class RewardInstrumentRepository {
         boolean complete=f.containsKey("historyComplete")?Boolean.TRUE.equals(f.get("historyComplete")):Boolean.TRUE.equals(old.get("historyComplete"));
         try(var p=c.prepareStatement("UPDATE reward_instruments SET provider=?,nickname=?,last_four=?,opening=?,opening_date=?,history_complete=?,revision=revision+1,reason=?,recorded_by=?,recorded_at=?,kind=?,status=? WHERE id=?")){
             p.setString(1,provider);p.setString(2,nickname);p.setString(3,last);p.setBigDecimal(4,opening);p.setObject(5,day);p.setBoolean(6,complete);p.setString(7,text(f,"reason",true));p.setString(8,actor);p.setTimestamp(9,Timestamp.from(Instant.now()));p.setString(10,kind);p.setString(11,status);p.setObject(12,id);p.executeUpdate();}
-        history(c,id);return view(c,id);
+        paymentRules(c,id,f);history(c,id);return view(c,id);
     });}
     public Map<String,Object> event(UUID id,long expected,Map<String,Object> f,String actor){return PostgresRepositorySupport.transaction(db,c->{
         PostgresReceiptState.lock(c);var old=view(c,id);check(old,expected);if(!"ACTIVE".equals(old.get("status")))throw new IllegalArgumentException("Reactivate this instrument before recording new activity.");String kind=text(f,"kind",true);
@@ -135,6 +135,16 @@ public final class RewardInstrumentRepository {
     });}
     /** Receipt assignments and their append-only redemption history commit together. */
     static void syncReceipt(Connection c, ReceiptRecord before, ReceiptRecord after, String actor)throws SQLException {
+        String retailer=after.metadata()==null?null:after.metadata().retailer();String store=coupons.rewards.PaymentEligibility.store(retailer);
+        if(after.status()==ReceiptStatus.ACTIVE&&Set.of("WALGREENS","CVS","WALMART").contains(store)){
+            for(var payment:after.transaction().getPayments()){
+                boolean unchanged=before!=null&&before.metadata()!=null&&store.equals(coupons.rewards.PaymentEligibility.store(before.metadata().retailer()))&&before.transaction().getPayments().stream().anyMatch(old->old.getPaymentId().equals(payment.getPaymentId())&&old.getPaymentType()==payment.getPaymentType()&&java.util.Objects.equals(old.getAccountName(),payment.getAccountName())&&old.getAmount().compareTo(payment.getAmount())>=0);
+                if(unchanged)continue;
+                String type=payment.getPaymentType()==coupons.receipts.PaymentType.WALGREENS_CASH?"WALGREENS_CASH":payment.getPaymentType()==coupons.receipts.PaymentType.REGISTER_REWARD?"REGISTER_REWARD":"Walmart Cash".equals(payment.getAccountName())?"WALMART_CASH":"ECB".equals(payment.getAccountName())?"ECB":"CASH";
+                if(coupons.rewards.PaymentEligibility.check(retailer,type,null,payment.getAmount(),null).equals("Not Met"))throw new IllegalArgumentException("Payment reward belongs to a different retailer.");
+            }
+            if(!store.equals("WALGREENS"))for(var use:after.transaction().getRegisterRewardRedemptions())if(before==null||before.transaction().getRegisterRewardRedemptions().stream().noneMatch(old->old.getRedemptionId().equals(use.getRedemptionId())&&old.getRedeemedAmount().compareTo(use.getRedeemedAmount())>=0))throw new IllegalArgumentException("Register Rewards cannot fund this retailer.");
+        }
         record Linked(UUID event, UUID card, BigDecimal amount) {}
         var linked=new LinkedHashMap<UUID,Linked>();
         try(var p=c.prepareStatement("SELECT e.id,e.instrument_id,e.source_event,e.amount FROM reward_instrument_events e JOIN reward_instruments i ON i.id=e.instrument_id WHERE e.source_receipt=? AND e.kind='REDEMPTION' AND i.kind='GIFT_CARD' AND NOT EXISTS(SELECT 1 FROM reward_instrument_events n WHERE n.supersedes=e.id)")){
@@ -152,7 +162,16 @@ public final class RewardInstrumentRepository {
             boolean used=after.status()==ReceiptStatus.ACTIVE&&payment!=null&&card!=null;
             if(card==null&&old==null)continue;
             UUID target=card==null?old.card():card;
-            try(var p=c.prepareStatement("SELECT kind,unit,status FROM reward_instruments WHERE id=?")){p.setObject(1,target);try(var r=p.executeQuery()){if(!r.next()||!r.getString(1).equals("GIFT_CARD")||!r.getString(2).equals("USD"))throw new IllegalArgumentException("Choose an existing USD gift card.");if(used&&r.getString(3).equals("ARCHIVED")&&(old==null||!old.card().equals(target)||payment.getAmount().compareTo(old.amount())>0))throw new IllegalArgumentException("Archived cards cannot fund new purchases.");}}
+            try(var p=c.prepareStatement("SELECT kind,unit,status FROM reward_instruments WHERE id=? FOR UPDATE")){p.setObject(1,target);try(var r=p.executeQuery()){if(!r.next()||!r.getString(1).equals("GIFT_CARD")||!r.getString(2).equals("USD"))throw new IllegalArgumentException("Choose an existing USD gift card.");if(used&&r.getString(3).equals("ARCHIVED")&&(old==null||!old.card().equals(target)||payment.getAmount().compareTo(old.amount())>0))throw new IllegalArgumentException("Archived cards cannot fund new purchases.");}}
+            if(used&&(old==null||!old.card().equals(target)||payment.getAmount().compareTo(old.amount())>0)){
+                var instrument=view(c,target,before);var date=after.transaction().getObservations().purchaseDate();var rule=coupons.rewards.PaymentEligibility.fromInstrument(instrument,date);
+                if(old!=null&&old.card().equals(target)&&rule.available()!=null)rule=new coupons.rewards.PaymentEligibility.Rule(rule.instrumentId(),rule.acceptedRetailers(),rule.excludedRetailers(),rule.network(),rule.expiresOn(),rule.evaluatedOn(),rule.verified(),rule.available().add(old.amount()));
+                // An actual receipt is evidence that the selected card was accepted
+                // at that checkout. Retailer-acceptance rules remain relevant to
+                // planning, but must not prevent recording a completed purchase.
+                if(rule.available()==null)throw new IllegalArgumentException("Gift-card balance needs review before recording this redemption.");
+                if(payment.getAmount().compareTo(rule.available())>0)throw new IllegalArgumentException("Gift-card payment exceeds the recorded available balance.");
+            }
             addEvent(c,target,UUID.randomUUID(),"REDEMPTION",used?payment.getAmount():BigDecimal.ZERO,after.transaction().getObservations().purchaseDate(),used?"Gift card used on receipt "+(after.metadata()==null?after.transactionId():after.metadata().receiptNumber()):"Gift-card use released by receipt update",actor,old==null?null:old.event(),null,null,after.transactionId(),paymentId,after.revision());
             bump(c,target);if(old!=null&&!old.card().equals(target))bump(c,old.card());
         }
@@ -163,18 +182,31 @@ public final class RewardInstrumentRepository {
         UUID replacement=uuid(f,"replacementId",false);if(replacement!=null){if(!kind.equals("GIFT_CARD")||text(f,"evidenceReference",true).isBlank())throw new IllegalArgumentException("Replacement evidence required");var old=view(c,replacement);if(!old.get("kind").equals("GIFT_CARD"))throw new IllegalArgumentException("Replacement must reference a card");}
         try(var p=c.prepareStatement("INSERT INTO reward_instruments(id,kind,provider,nickname,last_four,unit,opening,opening_date,history_complete,revision,replacement_id,evidence_reference,reason,recorded_by,recorded_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)")){
             p.setObject(1,id);p.setString(2,kind);p.setString(3,text(f,"provider",true));p.setString(4,text(f,"nickname",false));p.setString(5,last);p.setString(6,unit);p.setBigDecimal(7,decimal(f,"opening",false));p.setObject(8,date(f,"date"));p.setBoolean(9,Boolean.TRUE.equals(f.get("historyComplete")));p.setObject(10,replacement);p.setString(11,text(f,"evidenceReference",false));p.setString(12,text(f,"reason",true));p.setString(13,actor);p.setTimestamp(14,Timestamp.from(Instant.now()));p.executeUpdate();}
-        history(c,id);
+        paymentRules(c,id,f);history(c,id);
     }
     private static void addEvent(Connection c,UUID instrument,UUID id,String kind,BigDecimal amount,LocalDate date,String reason,String actor,UUID supersedes,UUID related,UUID exchange,UUID sourceReceipt,UUID sourceEvent,Long sourceRevision)throws SQLException{
         try(var p=c.prepareStatement("INSERT INTO reward_instrument_events VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")){
             p.setObject(1,id);p.setObject(2,instrument);p.setString(3,kind);p.setBigDecimal(4,amount);p.setObject(5,date);p.setString(6,reason);p.setString(7,actor);p.setTimestamp(8,Timestamp.from(Instant.now()));p.setObject(9,supersedes);p.setObject(10,related);p.setObject(11,exchange);p.setObject(12,sourceReceipt);p.setObject(13,sourceEvent);p.setObject(14,sourceRevision);p.executeUpdate();}
     }
+    private static void paymentRules(Connection c,UUID id,Map<String,Object> f)throws SQLException{
+        var changes=new LinkedHashMap<String,Object>();
+        for(var pair:Map.of("paymentNetwork","payment_network","acceptedRetailers","accepted_retailers","excludedRetailers","excluded_retailers","expiresOn","expires_on","eligibilityVerified","eligibility_verified","paymentTerms","payment_terms").entrySet())if(f.containsKey(pair.getKey()))changes.put(pair.getValue(),f.get(pair.getKey()));
+        if(changes.isEmpty())return;
+        String sql="UPDATE reward_instruments SET "+String.join(",",changes.keySet().stream().map(k->k+"=?").toList())+" WHERE id=?";
+        try(var p=c.prepareStatement(sql)){int i=1;for(var e:changes.entrySet()){
+            Object value=e.getValue();if(e.getKey().endsWith("retailers")){var values=coupons.rewards.PaymentEligibility.strings(value);if(values.size()>25)throw new IllegalArgumentException("Record up to 25 accepted/excluded retailers.");p.setArray(i++,c.createArrayOf("text",values.toArray()));}
+            else if(e.getKey().equals("expires_on"))p.setObject(i++,value==null||value.toString().isBlank()?null:LocalDate.parse(value.toString()));
+            else if(e.getKey().equals("eligibility_verified"))p.setBoolean(i++,Boolean.TRUE.equals(value));else p.setString(i++,value==null?null:value.toString());
+        }p.setObject(i,id);p.executeUpdate();}
+    }
     private static void bump(Connection c,UUID id)throws SQLException{try(var p=c.prepareStatement("UPDATE reward_instruments SET revision=revision+1 WHERE id=?")){p.setObject(1,id);p.executeUpdate();}history(c,id);}
     private static void history(Connection c,UUID id)throws SQLException{try(var p=c.prepareStatement("INSERT INTO reward_instrument_history SELECT * FROM reward_instruments WHERE id=?")){p.setObject(1,id);p.executeUpdate();}}
-    private static Map<String,Object> view(Connection c,UUID id)throws SQLException{
+    private static Map<String,Object> view(Connection c,UUID id)throws SQLException{return view(c,id,null);}
+    private static Map<String,Object> view(Connection c,UUID id,ReceiptRecord baseline)throws SQLException{
         var result=new LinkedHashMap<String,Object>();LocalDate openingDate;boolean complete;BigDecimal opening;
         try(var p=c.prepareStatement("SELECT * FROM reward_instruments WHERE id=?")){p.setObject(1,id);try(var r=p.executeQuery()){if(!r.next())throw new NoSuchElementException();
             for(String key:List.of("id","kind","provider","nickname","unit","revision","reason","status"))result.put(key,r.getObject(key));result.put("lastFour",r.getString("last_four"));opening=r.getBigDecimal("opening");openingDate=r.getObject("opening_date",LocalDate.class);complete=r.getBoolean("history_complete");result.put("opening",opening);result.put("openingDate",openingDate);result.put("historyComplete",complete);result.put("replacementId",r.getObject("replacement_id"));result.put("evidenceReference",r.getString("evidence_reference"));}}
+        try(var p=c.prepareStatement("SELECT payment_network,accepted_retailers,excluded_retailers,expires_on,eligibility_verified,payment_terms FROM reward_instruments WHERE id=?")){p.setObject(1,id);try(var r=p.executeQuery()){r.next();result.put("paymentNetwork",r.getString(1));result.put("acceptedRetailers",List.of((String[])r.getArray(2).getArray()));result.put("excludedRetailers",List.of((String[])r.getArray(3).getArray()));result.put("expiresOn",r.getObject(4,LocalDate.class));result.put("eligibilityVerified",r.getBoolean(5));result.put("paymentTerms",r.getString(6));}}
         var events=new ArrayList<Map<String,Object>>();var replaced=new HashSet<UUID>();
         try(var p=c.prepareStatement("SELECT * FROM reward_instrument_events WHERE instrument_id=? ORDER BY recorded_at,id")){p.setObject(1,id);try(var r=p.executeQuery()){while(r.next()){
             var event=new LinkedHashMap<String,Object>();for(String key:List.of("id","kind","amount","reason"))event.put(key,r.getObject(key));event.put("date",r.getObject("event_date",LocalDate.class));event.put("supersedes",r.getObject("supersedes"));event.put("relatedInstrument",r.getObject("related_instrument"));event.put("exchangeId",r.getObject("exchange_id"));event.put("sourceReceiptId",r.getObject("source_receipt"));event.put("sourceEventId",r.getObject("source_event"));event.put("sourceRevision",r.getObject("source_revision"));event.put("recordedBy",r.getString("recorded_by"));event.put("recordedAt",r.getTimestamp("recorded_at").toInstant());events.add(event);if(r.getObject("supersedes")!=null)replaced.add((UUID)r.getObject("supersedes"));}}}
@@ -184,6 +216,9 @@ public final class RewardInstrumentRepository {
         for(var event:events){boolean active=!replaced.contains((UUID)event.get("id"));event.put("active",active);if(!active)continue;
             boolean sourceChanged=false;
             if(event.get("sourceReceiptId")!=null){try(var p=c.prepareStatement("SELECT revision,status FROM receipt_current WHERE transaction_id=?")){p.setObject(1,event.get("sourceReceiptId"));try(var r=p.executeQuery()){sourceChanged=!r.next()||r.getLong(1)!=((Number)event.get("sourceRevision")).longValue()||!r.getString(2).equals("ACTIVE");}}}
+            // During the atomic receipt update, its new revision is already written. Verify the
+            // superseded event against the locked before-snapshot rather than flagging our own write.
+            if(baseline!=null&&baseline.transactionId().equals(event.get("sourceReceiptId")))sourceChanged=baseline.revision()!=((Number)event.get("sourceRevision")).longValue()||baseline.status()!=ReceiptStatus.ACTIVE;
             if(event.get("kind").equals("REDEMPTION")&&((BigDecimal)event.get("amount")).signum()==0)sourceChanged=false;
             event.put("sourceChanged",sourceChanged);if(sourceChanged)calculated=null;
             String kind=event.get("kind").toString();BigDecimal amount=(BigDecimal)event.get("amount");LocalDate day=(LocalDate)event.get("date");
